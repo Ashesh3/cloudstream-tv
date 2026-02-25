@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { FocusProvider, useDpad } from "@/lib/navigation";
@@ -24,6 +24,12 @@ function FolderViewInner() {
   const [items, setItems] = useState<BrowseItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-focus container so D-pad works immediately
+  useEffect(() => {
+    if (!loading) containerRef.current?.focus();
+  }, [loading]);
 
   // D-pad with back navigation
   useDpad({
@@ -105,7 +111,9 @@ function FolderViewInner() {
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: -40 }}
       transition={{ duration: 0.3, ease: "easeOut" }}
-      className="min-h-screen bg-tv-bg text-tv-text"
+      ref={containerRef}
+      tabIndex={-1}
+      className="min-h-screen bg-tv-bg text-tv-text outline-none"
     >
       {/* Breadcrumb */}
       <Breadcrumb

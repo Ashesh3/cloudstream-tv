@@ -146,6 +146,12 @@ function TVHomeInner() {
   /* ---- Settings overlay ---- */
   const [showSettings, setShowSettings] = useState(false);
   const [settingsCode, setSettingsCode] = useState<string | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-focus container so D-pad works immediately without mouse interaction
+  useEffect(() => {
+    containerRef.current?.focus();
+  }, [viewState]);
 
   const openSettings = useCallback(() => {
     // Create a fresh pairing code so the user can manage connections
@@ -159,7 +165,7 @@ function TVHomeInner() {
 
   /* ---- Render ---- */
   return (
-    <div className="min-h-screen bg-tv-bg text-tv-text">
+    <div ref={containerRef} tabIndex={-1} className="min-h-screen bg-tv-bg text-tv-text outline-none">
       {/* Title bar */}
       <header className="px-tv-padding pt-8 pb-4 flex items-center justify-between">
         <h1 className="text-tv-xl font-bold">TV Video</h1>
