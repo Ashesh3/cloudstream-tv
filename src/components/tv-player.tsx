@@ -222,6 +222,22 @@ export function TVPlayer({
     }
   }, [isPlaying, showControls]);
 
+  /* ---- Seek to position (click on seek bar) ---- */
+  const seekToPosition = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      const player = playerRef.current;
+      if (!player) return;
+      const bar = e.currentTarget;
+      const rect = bar.getBoundingClientRect();
+      const fraction = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const dur = player.duration() ?? 0;
+      player.currentTime(fraction * dur);
+      showControls();
+    },
+    [showControls]
+  );
+
   /* ---- Computed values ---- */
   const progressPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
   const bufferedPercent = duration > 0 ? (bufferedEnd / duration) * 100 : 0;
@@ -236,15 +252,12 @@ export function TVPlayer({
         className={`absolute inset-0 transition-opacity duration-300 ${
           controlsVisible ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
-        onClick={showControls}
+        onMouseMove={showControls}
       >
         {/* Top: Back button */}
-        <div className="absolute top-8 left-8">
+        <div className="absolute top-8 left-8 z-10">
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleBack();
-            }}
+            onClick={handleBack}
             className="bg-white/10 backdrop-blur rounded-full p-4 hover:bg-white/20 transition-colors"
           >
             <svg
@@ -266,10 +279,7 @@ export function TVPlayer({
         {/* Center: Play / Pause */}
         <div className="absolute inset-0 flex items-center justify-center">
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              togglePlay();
-            }}
+            onClick={togglePlay}
             className="bg-white/10 backdrop-blur rounded-full p-6 hover:bg-white/20 transition-colors"
           >
             {isPlaying ? (
@@ -295,15 +305,19 @@ export function TVPlayer({
         {/* Bottom: Seek bar and time */}
         <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent px-8 pb-8 pt-16">
           {/* Seek bar */}
-          <div className="relative w-full h-2 rounded-full bg-white/20 cursor-pointer group">
+          <div
+            className="relative w-full h-5 rounded-full cursor-pointer group"
+            onClick={seekToPosition}
+          >
+            <div className="absolute inset-y-[9px] inset-x-0 h-2 rounded-full bg-white/20" />
             {/* Buffered range */}
             <div
-              className="absolute inset-y-0 left-0 rounded-full bg-white/30"
+              className="absolute inset-y-[9px] left-0 h-2 rounded-full bg-white/30"
               style={{ width: `${Math.min(bufferedPercent, 100)}%` }}
             />
             {/* Progress */}
             <div
-              className="absolute inset-y-0 left-0 rounded-full bg-tv-accent"
+              className="absolute inset-y-[9px] left-0 h-2 rounded-full bg-tv-accent"
               style={{ width: `${Math.min(progressPercent, 100)}%` }}
             />
             {/* Thumb */}
