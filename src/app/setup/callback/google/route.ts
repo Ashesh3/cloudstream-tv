@@ -9,28 +9,68 @@ export async function GET(request: NextRequest) {
   const { searchParams } = request.nextUrl;
   const code = searchParams.get("code");
   const state = searchParams.get("state");
-
   const oauthError = searchParams.get("error");
 
+  // Debug: log everything
+  const debug: Record<string, unknown> = {
+    step: "init",
+    hasCode: !!code,
+    hasState: !!state,
+    state,
+    oauthError,
+    allParams: Object.fromEntries(searchParams.entries()),
+    appUrl,
+    hasGoogleClientId: !!process.env.GOOGLE_CLIENT_ID,
+    hasGoogleClientSecret: !!process.env.GOOGLE_CLIENT_SECRET,
+    hasKvUrl: !!process.env.KV_REST_API_URL,
+    hasKvToken: !!process.env.KV_REST_API_TOKEN,
+  };
+
   if (!code || !state) {
-    const errorMsg = oauthError || "missing_params";
-    return NextResponse.redirect(
-      `${appUrl}/setup?error=${encodeURIComponent(errorMsg)}`
-    );
+    debug.step = "missing_params";
+    debug.error = oauthError || "code or state missing";
+    return NextResponse.json(debug, { status: 400 });
   }
 
-  const pairingSession = await getPairingSession(state);
+  // Step 2: Look up pairing session
+  let pairingSession;
+  try {
+    pairingSession = await getPairingSession(state);
+    debug.step = "pairing_lookup";
+    debug.pairingFound = !!pairingSession;
+    debug.pairingSessionId = pairingSession?.sessionId;
+  } catch (err) {
+    debug.step = "pairing_lookup_failed";
+    debug.error = err instanceof Error ? err.message : String(err);
+    debug.stack = err instanceof Error ? err.stack : undefined;
+    return NextResponse.json(debug, { status: 500 });
+  }
 
   if (!pairingSession) {
-    return NextResponse.redirect(
-      `${appUrl}/setup?error=session_expired`
-    );
+    debug.step = "pairing_not_found";
+    return NextResponse.json(debug, { status: 404 });
   }
 
+  // Step 3: Exchange code for tokens
+  let tokens;
   try {
     const redirectUri = `${appUrl}/setup/callback/google`;
-    const tokens = await exchangeGoogleCode(code, redirectUri);
+    debug.redirectUri = redirectUri;
+    debug.step = "exchanging_code";
+    tokens = await exchangeGoogleCode(code, redirectUri);
+    debug.step = "code_exchanged";
+    debug.email = tokens.email;
+    debug.hasAccessToken = !!tokens.accessToken;
+    debug.hasRefreshToken = !!tokens.refreshToken;
+  } catch (err) {
+    debug.step = "code_exchange_failed";
+    debug.error = err instanceof Error ? err.message : String(err);
+    debug.stack = err instanceof Error ? err.stack : undefined;
+    return NextResponse.json(debug, { status: 500 });
+  }
 
+  // Step 4: Save connection
+  try {
     const connectionId = uuidv4();
     const connection: CloudConnection = {
       id: connectionId,
@@ -42,15 +82,18 @@ export async function GET(request: NextRequest) {
       folders: [],
     };
 
+    debug.step = "saving_connection";
     await saveConnection(pairingSession.sessionId, connection);
+    debug.step = "connection_saved";
 
+    // Success — redirect
     return NextResponse.redirect(
       `${appUrl}/setup?paired=${state}&connectionId=${connectionId}&provider=google`
     );
-  } catch (error) {
-    console.error("Google OAuth callback error:", error);
-    return NextResponse.redirect(
-      `${appUrl}/setup?error=oauth_failed`
-    );
+  } catch (err) {
+    debug.step = "save_failed";
+    debug.error = err instanceof Error ? err.message : String(err);
+    debug.stack = err instanceof Error ? err.stack : undefined;
+    return NextResponse.json(debug, { status: 500 });
   }
 }
