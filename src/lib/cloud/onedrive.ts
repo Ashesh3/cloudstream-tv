@@ -108,6 +108,16 @@ export async function listOneDriveFiles(
 
   const items: BrowseItem[] = [];
 
+  // Separate folders and video items so we can fetch thumbnails in parallel
+  const videoItems: Array<{
+    id: string;
+    name: string;
+    mimeType: string;
+    size: number;
+    createdDateTime: string;
+    lastModifiedDateTime: string;
+  }> = [];
+
   for (const item of data.value) {
     if (item.folder) {
       items.push({
@@ -119,21 +129,37 @@ export async function listOneDriveFiles(
         parentId: folderId,
       });
     } else if (item.file?.mimeType?.startsWith("video/")) {
-      const thumbnailUrl = await fetchThumbnailUrl(accessToken, item.id);
-      items.push({
-        type: "video",
+      videoItems.push({
         id: item.id,
         name: item.name,
         mimeType: item.file.mimeType,
         size: item.size ?? 0,
-        thumbnailUrl,
-        provider: "onedrive",
-        connectionId: connection.id,
-        folderId,
-        createdAt: item.createdDateTime ?? "",
-        modifiedAt: item.lastModifiedDateTime ?? "",
+        createdDateTime: item.createdDateTime ?? "",
+        lastModifiedDateTime: item.lastModifiedDateTime ?? "",
       });
     }
+  }
+
+  // Fetch all video thumbnails in parallel
+  const thumbnailUrls = await Promise.all(
+    videoItems.map((v) => fetchThumbnailUrl(accessToken, v.id))
+  );
+
+  for (let i = 0; i < videoItems.length; i++) {
+    const v = videoItems[i];
+    items.push({
+      type: "video",
+      id: v.id,
+      name: v.name,
+      mimeType: v.mimeType,
+      size: v.size,
+      thumbnailUrl: thumbnailUrls[i],
+      provider: "onedrive",
+      connectionId: connection.id,
+      folderId,
+      createdAt: v.createdDateTime,
+      modifiedAt: v.lastModifiedDateTime,
+    });
   }
 
   return items;

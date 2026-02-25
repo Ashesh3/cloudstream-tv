@@ -1,16 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getConnections, saveConnection } from "@/lib/kv";
+import { getConnections, saveConnection, getSessionIdFromRequest } from "@/lib/kv";
 import type { CloudFolder } from "@/types";
 
 export async function POST(request: NextRequest) {
   try {
+    const sessionIdFromReq = getSessionIdFromRequest(request);
     const body = (await request.json()) as {
       sessionId?: string;
       connectionId?: string;
       folders?: Array<{ id: string; name: string }>;
     };
 
-    const { sessionId, connectionId, folders } = body;
+    const { connectionId, folders } = body;
+    // Allow body.sessionId as legacy fallback
+    const sessionId = sessionIdFromReq ?? body.sessionId ?? null;
 
     if (!sessionId || !connectionId || !folders) {
       return NextResponse.json(

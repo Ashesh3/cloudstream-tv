@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { GOOGLE_OAUTH, ONEDRIVE_OAUTH } from "@/lib/constants";
+import { GOOGLE_OAUTH, ONEDRIVE_OAUTH, PAIRING_CODE_LENGTH } from "@/lib/constants";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -372,7 +372,7 @@ function SetupPageContent() {
                 value={pairingCode}
                 onChange={(e) => setPairingCode(e.target.value.toUpperCase())}
                 placeholder="ABC123"
-                maxLength={6}
+                maxLength={PAIRING_CODE_LENGTH}
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg text-center text-2xl font-mono tracking-widest text-gray-900 placeholder:text-gray-400 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
               <button

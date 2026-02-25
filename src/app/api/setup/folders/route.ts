@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getConnections } from "@/lib/kv";
+import { getConnections, getSessionIdFromRequest } from "@/lib/kv";
 import { listGoogleDriveFolders, listOneDriveFolders } from "@/lib/cloud";
 
 export async function GET(request: NextRequest) {
   try {
+    const sessionId = getSessionIdFromRequest(request);
     const { searchParams } = request.nextUrl;
-    const sessionId = searchParams.get("sessionId");
     const connectionId = searchParams.get("connectionId");
     const folderId = searchParams.get("folderId") ?? "root";
 

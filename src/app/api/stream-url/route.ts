@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getConnections } from "@/lib/kv";
+import { getConnections, getSessionIdFromRequest } from "@/lib/kv";
 import {
   getGoogleDriveStreamUrl,
   getOneDriveStreamUrl,
@@ -7,11 +7,11 @@ import {
 
 export async function GET(request: NextRequest) {
   try {
+    const sessionId = getSessionIdFromRequest(request);
     const { searchParams } = request.nextUrl;
     const fileId = searchParams.get("fileId");
     const provider = searchParams.get("provider");
     const connectionId = searchParams.get("connectionId");
-    const sessionId = searchParams.get("sessionId");
 
     if (!fileId || !provider || !connectionId || !sessionId) {
       return NextResponse.json(

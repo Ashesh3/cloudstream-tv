@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getWatchHistory, saveWatchHistory } from "@/lib/kv";
+import { getWatchHistory, saveWatchHistory, getSessionIdFromRequest } from "@/lib/kv";
 import type { WatchHistory } from "@/types";
 
 export async function GET(request: NextRequest) {
   try {
+    const sessionId = getSessionIdFromRequest(request);
     const { searchParams } = request.nextUrl;
-    const sessionId = searchParams.get("sessionId");
     const fileId = searchParams.get("fileId");
 
     if (!sessionId || !fileId) {
@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    const sessionId = getSessionIdFromRequest(request);
     const body = (await request.json()) as {
       sessionId?: string;
       fileId?: string;
@@ -37,10 +38,12 @@ export async function POST(request: NextRequest) {
       duration?: number;
     };
 
-    const { sessionId, fileId, provider, position, duration } = body;
+    const { fileId, provider, position, duration } = body;
+    // Allow body.sessionId as legacy fallback
+    const resolvedSessionId = sessionId ?? body.sessionId ?? null;
 
     if (
-      !sessionId ||
+      !resolvedSessionId ||
       !fileId ||
       !provider ||
       position === undefined ||
@@ -70,7 +73,7 @@ export async function POST(request: NextRequest) {
       lastWatched: new Date().toISOString(),
     };
 
-    await saveWatchHistory(sessionId, history);
+    await saveWatchHistory(resolvedSessionId, history);
 
     return NextResponse.json({ ok: true });
   } catch (error) {

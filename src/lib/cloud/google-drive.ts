@@ -119,6 +119,22 @@ export async function listGoogleDriveFiles(
 /**
  * Get a direct download/stream URL for a Google Drive file.
  * Uses the alt=media endpoint with an access token.
+ *
+ * NOTE (V1 trade-off): The access token is included as a query parameter in
+ * the returned URL. This is the standard Google Drive API pattern for direct
+ * media access -- there is no pre-signed URL mechanism like S3. A server-side
+ * streaming proxy would avoid exposing the token but would hit Vercel
+ * serverless timeout/size limits on large video files.
+ *
+ * Mitigations that make this acceptable for V1:
+ *   - The token is short-lived (1 hour) and refreshed on every request.
+ *   - The token has read-only scope (drive.readonly).
+ *   - The URL is only returned to the authenticated TV session, never shared.
+ *   - OneDrive already uses a pre-authenticated CDN URL that does not expose
+ *     our token, so this limitation is Google-specific.
+ *
+ * Future improvement: implement a Service Worker or streaming proxy that
+ * attaches the Authorization header without embedding the token in the URL.
  */
 export async function getGoogleDriveStreamUrl(
   sessionId: string,

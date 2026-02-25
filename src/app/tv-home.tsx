@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
+import { QRCode } from "react-qrcode-logo";
 import {
   FocusProvider,
   useDpad,
@@ -10,6 +11,16 @@ import {
 import { ContentRow } from "@/components";
 import { POLL_INTERVAL_MS } from "@/lib/constants";
 import type { BrowseItem, CloudProvider } from "@/types";
+
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+/** Store sessionId in both localStorage and a cookie for API routes. */
+function persistSessionId(id: string) {
+  localStorage.setItem("tv-session-id", id);
+  document.cookie = `tv-session-id=${encodeURIComponent(id)}; path=/; max-age=${60 * 60 * 24 * 365}; SameSite=Lax`;
+}
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -45,6 +56,8 @@ function TVHomeInner() {
   useEffect(() => {
     const stored = localStorage.getItem("tv-session-id");
     if (stored) {
+      // Ensure the cookie stays in sync with localStorage
+      persistSessionId(stored);
       setSessionId(stored);
     } else {
       // Create a pairing session
@@ -69,7 +82,7 @@ function TVHomeInner() {
         .then((res) => res.json())
         .then((data) => {
           if (data.paired && data.sessionId) {
-            localStorage.setItem("tv-session-id", data.sessionId);
+            persistSessionId(data.sessionId);
             setSessionId(data.sessionId);
             setPairingCode(null);
           }
@@ -91,7 +104,7 @@ function TVHomeInner() {
     if (!sessionId) return;
     setViewState("loading");
 
-    fetch(`/api/browse?sessionId=${encodeURIComponent(sessionId)}`)
+    fetch("/api/browse")
       .then((res) => res.json())
       .then((data) => {
         const groups: FolderGroup[] = data.folders ?? [];
@@ -105,12 +118,12 @@ function TVHomeInner() {
 
   /* ---- Navigation callbacks ---- */
   const onVideoSelect = useCallback(
-    (videoId: string, provider: CloudProvider, connectionId: string) => {
+    (videoId: string, provider: CloudProvider, connectionId: string, mimeType: string) => {
       if (!sessionId) return;
       const params = new URLSearchParams({
         provider,
         connectionId,
-        sessionId,
+        mimeType,
       });
       router.push(`/play/${encodeURIComponent(videoId)}?${params}`);
     },
@@ -123,7 +136,6 @@ function TVHomeInner() {
       const params = new URLSearchParams({
         provider,
         connectionId,
-        sessionId,
         name: folderId,
       });
       router.push(`/folder/${encodeURIComponent(folderId)}?${params}`);
@@ -151,12 +163,23 @@ function TVHomeInner() {
             style={{ minHeight: "calc(100vh - 120px)" }}
           >
             <p className="text-tv-sm text-tv-text-dim mb-4">
-              Open the setup page on your phone or computer and enter this code:
+              Scan the QR code or enter this code on your phone:
             </p>
             <div className="text-tv-2xl font-mono font-bold tracking-[0.3em] text-tv-accent">
               {pairingCode}
             </div>
-            <div className="mt-8 flex items-center gap-3 text-tv-text-dim">
+            <div className="mt-6 rounded-xl overflow-hidden bg-white p-2">
+              <QRCode
+                value={`${window.location.origin}/setup?code=${encodeURIComponent(pairingCode)}`}
+                size={200}
+                qrStyle="dots"
+                eyeRadius={8}
+                bgColor="#FFFFFF"
+                fgColor="#000000"
+                quietZone={8}
+              />
+            </div>
+            <div className="mt-6 flex items-center gap-3 text-tv-text-dim">
               <span className="relative flex h-3 w-3">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-tv-accent opacity-75" />
                 <span className="relative inline-flex rounded-full h-3 w-3 bg-tv-accent" />

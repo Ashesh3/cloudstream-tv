@@ -1,11 +1,44 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { VideoCard } from "./video-card";
 import { FolderCard } from "./folder-card";
 import type { BrowseItem, CloudProvider, WatchHistory } from "@/types";
 
-const COLUMNS = 5;
+/**
+ * Tailwind breakpoints used by the grid classes:
+ *   grid-cols-2  (default, < 768px)
+ *   md:grid-cols-3  (>= 768px)
+ *   lg:grid-cols-4  (>= 1024px)
+ *   xl:grid-cols-5  (>= 1280px)
+ *
+ * Returns the number of columns currently active so D-pad row/col
+ * calculations stay in sync with the CSS grid.
+ */
+function useColumns(): number {
+  const [columns, setColumns] = useState(5); // SSR default (TV is typically xl)
+
+  useEffect(() => {
+    function compute() {
+      if (window.matchMedia("(min-width: 1280px)").matches) return 5;
+      if (window.matchMedia("(min-width: 1024px)").matches) return 4;
+      if (window.matchMedia("(min-width: 768px)").matches) return 3;
+      return 2;
+    }
+
+    setColumns(compute());
+
+    function handleResize() {
+      setColumns(compute());
+    }
+
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  return columns;
+}
 
 interface ContentGridProps {
   items: BrowseItem[];
@@ -13,7 +46,8 @@ interface ContentGridProps {
   onVideoSelect: (
     videoId: string,
     provider: CloudProvider,
-    connectionId: string
+    connectionId: string,
+    mimeType: string
   ) => void;
   onFolderSelect: (
     folderId: string,
@@ -40,12 +74,13 @@ export function ContentGrid({
   onFolderSelect,
 }: ContentGridProps) {
   const sorted = sortItems(items);
+  const columns = useColumns();
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-card-gap px-tv-padding py-4">
       {sorted.map((item, index) => {
-        const row = Math.floor(index / COLUMNS) + 1; // row 0 reserved for breadcrumb
-        const col = index % COLUMNS;
+        const row = Math.floor(index / columns) + 1; // row 0 reserved for breadcrumb
+        const col = index % columns;
         const focusId = `grid-r${row}-c${col}`;
 
         return (
@@ -77,7 +112,7 @@ export function ContentGrid({
                 row={row}
                 col={col}
                 onSelect={() =>
-                  onVideoSelect(item.id, item.provider, item.connectionId)
+                  onVideoSelect(item.id, item.provider, item.connectionId, item.mimeType)
                 }
               />
             )}

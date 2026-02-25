@@ -13,7 +13,8 @@ interface ContentRowProps {
   onVideoSelect: (
     videoId: string,
     provider: CloudProvider,
-    connectionId: string
+    connectionId: string,
+    mimeType: string
   ) => void;
   onFolderSelect: (
     folderId: string,
@@ -81,7 +82,7 @@ export function ContentRow({
               row={rowIndex}
               col={colIndex}
               onSelect={() =>
-                onVideoSelect(item.id, item.provider, item.connectionId)
+                onVideoSelect(item.id, item.provider, item.connectionId, item.mimeType)
               }
             />
           );

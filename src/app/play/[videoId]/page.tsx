@@ -13,7 +13,7 @@ export default function PlayPage() {
   const videoId = params.videoId as string;
   const provider = (searchParams.get("provider") ?? "google") as CloudProvider;
   const connectionId = searchParams.get("connectionId") ?? "";
-  const sessionId = searchParams.get("sessionId") ?? "";
+  const mimeType = searchParams.get("mimeType") ?? "video/mp4";
 
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [initialPosition, setInitialPosition] = useState(0);
@@ -22,7 +22,7 @@ export default function PlayPage() {
 
   /* ---- Fetch stream URL and watch history in parallel ---- */
   useEffect(() => {
-    if (!videoId || !sessionId || !connectionId) return;
+    if (!videoId || !connectionId) return;
 
     setLoading(true);
     setError(null);
@@ -31,11 +31,9 @@ export default function PlayPage() {
       fileId: videoId,
       provider,
       connectionId,
-      sessionId,
     });
 
     const historyParams = new URLSearchParams({
-      sessionId,
       fileId: videoId,
     });
 
@@ -63,18 +61,17 @@ export default function PlayPage() {
       .finally(() => {
         setLoading(false);
       });
-  }, [videoId, provider, connectionId, sessionId]);
+  }, [videoId, provider, connectionId]);
 
   /* ---- Progress save callback ---- */
   const handleProgress = useCallback(
     (position: number, duration: number) => {
-      if (!sessionId || !videoId) return;
+      if (!videoId) return;
 
       fetch("/api/watch-history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionId,
           fileId: videoId,
           provider,
           position,
@@ -84,7 +81,7 @@ export default function PlayPage() {
         // Silently fail progress saves
       });
     },
-    [sessionId, videoId, provider]
+    [videoId, provider]
   );
 
   /* ---- Loading state ---- */
@@ -125,6 +122,7 @@ export default function PlayPage() {
   return (
     <TVPlayer
       src={streamUrl}
+      mimeType={mimeType}
       initialPosition={initialPosition}
       onBack={() => router.back()}
       onProgress={handleProgress}

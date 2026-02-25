@@ -10,4 +10,4 @@ export {
   deletePairingSession,
 } from "./storage";
 
-export { getSessionId, validateSession } from "./session";
+export { getSessionId, getSessionIdFromRequest, validateSession } from "./session";

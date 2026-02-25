@@ -33,6 +33,7 @@ function formatTime(seconds: number): string {
 
 interface TVPlayerProps {
   src: string;
+  mimeType?: string;
   initialPosition?: number;
   onBack: () => void;
   onProgress?: (position: number, duration: number) => void;
@@ -44,6 +45,7 @@ interface TVPlayerProps {
 
 export function TVPlayer({
   src,
+  mimeType = "video/mp4",
   initialPosition = 0,
   onBack,
   onProgress,
@@ -127,7 +129,7 @@ export function TVPlayer({
       preload: "metadata" as const,
       fluid: false,
       responsive: false,
-      sources: [{ src, type: "video/mp4" }],
+      sources: [{ src, type: mimeType }],
     });
 
     playerRef.current = player;

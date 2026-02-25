@@ -19,7 +19,6 @@ function FolderViewInner() {
   const folderId = params.folderId as string;
   const provider = searchParams.get("provider") ?? "";
   const connectionId = searchParams.get("connectionId") ?? "";
-  const sessionId = searchParams.get("sessionId") ?? "";
   const folderName = searchParams.get("name") ?? folderId;
 
   const [items, setItems] = useState<BrowseItem[]>([]);
@@ -33,12 +32,12 @@ function FolderViewInner() {
 
   /* ---- Fetch folder contents ---- */
   useEffect(() => {
-    if (!sessionId || !connectionId || !folderId) return;
+    if (!connectionId || !folderId) return;
 
     setLoading(true);
     setError(null);
 
-    const qs = new URLSearchParams({ sessionId, connectionId, folderId });
+    const qs = new URLSearchParams({ connectionId, folderId });
     fetch(`/api/browse?${qs}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load folder contents");
@@ -55,19 +54,19 @@ function FolderViewInner() {
       .finally(() => {
         setLoading(false);
       });
-  }, [sessionId, connectionId, folderId]);
+  }, [connectionId, folderId]);
 
   /* ---- Navigation callbacks ---- */
   const onVideoSelect = useCallback(
-    (videoId: string, videoProvider: CloudProvider, videoConnectionId: string) => {
+    (videoId: string, videoProvider: CloudProvider, videoConnectionId: string, mimeType: string) => {
       const qs = new URLSearchParams({
         provider: videoProvider,
         connectionId: videoConnectionId,
-        sessionId,
+        mimeType,
       });
       router.push(`/play/${encodeURIComponent(videoId)}?${qs}`);
     },
-    [router, sessionId]
+    [router]
   );
 
   const onFolderSelect = useCallback(
@@ -79,12 +78,11 @@ function FolderViewInner() {
       const qs = new URLSearchParams({
         provider: folderProvider,
         connectionId: folderConnectionId,
-        sessionId,
         name: subFolderId,
       });
       router.push(`/folder/${encodeURIComponent(subFolderId)}?${qs}`);
     },
-    [router, sessionId]
+    [router]
   );
 
   /* ---- Breadcrumb ---- */
