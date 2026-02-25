@@ -35,6 +35,7 @@ export function VideoCard({
     <div
       ref={ref}
       data-focused={isFocused}
+      onClick={onSelect}
       className={`tv-card relative w-[300px] h-[170px] flex-shrink-0 rounded-card overflow-hidden cursor-pointer
         ${isFocused ? "scale-[var(--scale-focus)] shadow-tv-focus ring-2 ring-tv-focus z-10" : "scale-100 shadow-tv-card"}
         transition-all duration-focus ease-out`}
@@ -45,7 +46,7 @@ export function VideoCard({
           src={video.thumbnailUrl}
           alt={stripExtension(video.name)}
           loading="lazy"
-          className="absolute inset-0 w-full h-full object-cover"
+          className="absolute inset-0 w-full h-full object-contain bg-black"
         />
       ) : (
         <div className="absolute inset-0 w-full h-full bg-tv-card flex items-center justify-center">

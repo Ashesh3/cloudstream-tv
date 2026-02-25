@@ -24,6 +24,7 @@ export function FolderCard({
     <div
       ref={ref}
       data-focused={isFocused}
+      onClick={onSelect}
       className={`tv-card relative w-[300px] h-[170px] flex-shrink-0 rounded-card overflow-hidden cursor-pointer
         bg-gradient-to-b from-tv-card to-tv-surface
         flex flex-col items-center justify-center gap-2
