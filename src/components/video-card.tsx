@@ -36,7 +36,7 @@ export function VideoCard({
       ref={ref}
       data-focused={isFocused}
       onClick={onSelect}
-      className={`tv-card relative w-[300px] h-[170px] flex-shrink-0 rounded-card overflow-hidden cursor-pointer
+      className={`tv-card relative w-full aspect-video rounded-card overflow-hidden cursor-pointer
         ${isFocused ? "scale-[var(--scale-focus)] shadow-tv-focus ring-2 ring-tv-focus z-10" : "scale-100 shadow-tv-card"}
         transition-all duration-focus ease-out`}
     >

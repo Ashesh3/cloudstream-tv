@@ -25,7 +25,7 @@ export function FolderCard({
       ref={ref}
       data-focused={isFocused}
       onClick={onSelect}
-      className={`tv-card relative w-[300px] h-[170px] flex-shrink-0 rounded-card overflow-hidden cursor-pointer
+      className={`tv-card relative w-full aspect-video rounded-card overflow-hidden cursor-pointer
         bg-gradient-to-b from-tv-card to-tv-surface
         flex flex-col items-center justify-center gap-2
         ${isFocused ? "scale-[var(--scale-focus)] shadow-tv-focus ring-2 ring-tv-focus z-10" : "scale-100 shadow-tv-card"}

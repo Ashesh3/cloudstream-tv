@@ -25,11 +25,9 @@ interface ContentRowProps {
 
 function sortItems(items: BrowseItem[]): BrowseItem[] {
   return [...items].sort((a, b) => {
-    // Folders first
     if (a.type !== b.type) {
       return a.type === "folder" ? -1 : 1;
     }
-    // Alphabetical within each type
     return a.name.localeCompare(b.name);
   });
 }
@@ -43,6 +41,7 @@ export function ContentRow({
   onFolderSelect,
 }: ContentRowProps) {
   const sorted = sortItems(items);
+  const COLUMNS = 5;
 
   return (
     <motion.div
@@ -50,12 +49,12 @@ export function ContentRow({
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: rowIndex * 0.1, duration: 0.4, ease: "easeOut" }}
     >
-      {/* Row title */}
       <h2 className="text-tv-lg font-semibold px-tv-padding mb-2">{title}</h2>
 
-      {/* Scrollable row */}
-      <div className="tv-scroll-row pb-4">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-card-gap px-tv-padding pb-4">
         {sorted.map((item, colIndex) => {
+          const row = rowIndex * 100 + Math.floor(colIndex / COLUMNS);
+          const col = colIndex % COLUMNS;
           const focusId = `row${rowIndex}-col${colIndex}`;
 
           if (item.type === "folder") {
@@ -64,8 +63,8 @@ export function ContentRow({
                 key={`folder-${item.id}`}
                 folder={item}
                 focusId={focusId}
-                row={rowIndex}
-                col={colIndex}
+                row={row}
+                col={col}
                 onSelect={() =>
                   onFolderSelect(item.id, item.provider, item.connectionId)
                 }
@@ -79,8 +78,8 @@ export function ContentRow({
               video={item}
               watchHistory={watchHistories?.get(item.id) ?? null}
               focusId={focusId}
-              row={rowIndex}
-              col={colIndex}
+              row={row}
+              col={col}
               onSelect={() =>
                 onVideoSelect(item.id, item.provider, item.connectionId, item.mimeType)
               }

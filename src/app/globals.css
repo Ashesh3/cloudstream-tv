@@ -53,7 +53,8 @@
    ============================================================ */
 
 html {
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   background-color: var(--color-tv-bg);
 }
 
