@@ -1,26 +1,137 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ============================================================
+   TV Video UI — Tailwind v4 Theme & Global Styles
+   ============================================================ */
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* --- Colors ------------------------------------------------ */
+  --color-tv-bg: #0a0a0f;
+  --color-tv-surface: #14141f;
+  --color-tv-card: #1a1a2e;
+  --color-tv-border: #2a2a3e;
+  --color-tv-focus: #4f8fff;
+  --color-tv-focus-glow: rgba(79, 143, 255, 0.4);
+  --color-tv-text: #e8e8f0;
+  --color-tv-text-dim: #8888a0;
+  --color-tv-accent: #4f8fff;
+  --color-tv-progress: #4f8fff;
+  --color-tv-warning: #ff6b4f;
+
+  /* --- Spacing ----------------------------------------------- */
+  --spacing-card-gap: 1.5rem;
+  --spacing-row-gap: 2.5rem;
+  --spacing-tv-padding: 3rem;
+
+  /* --- Font sizes (TV-optimized, large) ---------------------- */
+  --font-size-tv-xs: 1rem;
+  --font-size-tv-sm: 1.25rem;
+  --font-size-tv-base: 1.5rem;
+  --font-size-tv-lg: 2rem;
+  --font-size-tv-xl: 2.5rem;
+  --font-size-tv-2xl: 3.5rem;
+
+  /* --- Border radius ----------------------------------------- */
+  --radius-card: 0.75rem;
+
+  /* --- Transition durations ---------------------------------- */
+  --duration-focus: 200ms;
+
+  /* --- Scale ------------------------------------------------- */
+  --scale-focus: 1.08;
+
+  /* --- Shadows ----------------------------------------------- */
+  --shadow-tv-focus: 0 0 0 3px rgba(79, 143, 255, 0.4), 0 0 20px rgba(79, 143, 255, 0.25);
+  --shadow-tv-card: 0 4px 12px rgba(0, 0, 0, 0.4);
+
+  /* --- Font family ------------------------------------------- */
+  --font-sans: var(--font-inter);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ============================================================
+   Base element styles
+   ============================================================ */
+
+html {
+  overflow: hidden;
+  background-color: var(--color-tv-bg);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: var(--color-tv-bg);
+  color: var(--color-tv-text);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+/* Hide scrollbars globally */
+* {
+  scrollbar-width: none;           /* Firefox */
+  -ms-overflow-style: none;        /* IE/Edge */
+}
+*::-webkit-scrollbar {
+  display: none;                   /* Chrome, Safari, Opera */
+}
+
+/* Remove browser focus outlines — focus handled visually by D-pad system */
+*:focus {
+  outline: none;
+}
+*:focus-visible {
+  outline: none;
+}
+
+/* ============================================================
+   Utility classes
+   ============================================================ */
+
+/* GPU-accelerated card base */
+.tv-card {
+  will-change: transform;
+  transform: translateZ(0);
+  transition: transform var(--duration-focus) ease-out,
+              box-shadow var(--duration-focus) ease-out;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-tv-card);
+}
+
+.tv-card[data-focused="true"] {
+  transform: scale(var(--scale-focus));
+  box-shadow: var(--shadow-tv-focus);
+}
+
+/* Horizontal scroll row with snap */
+.tv-scroll-row {
+  display: flex;
+  gap: var(--spacing-card-gap);
+  overflow-x: auto;
+  scroll-behavior: smooth;
+  scroll-snap-type: x mandatory;
+  padding: 0 var(--spacing-tv-padding);
+}
+
+.tv-scroll-row > * {
+  scroll-snap-align: start;
+  flex-shrink: 0;
+}
+
+/* ============================================================
+   Reduced-motion support
+   ============================================================ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .tv-card {
+    will-change: auto;
+    transition: none;
+  }
 }
