@@ -108,13 +108,27 @@ export function FocusProvider({ children }: { children: ReactNode }) {
         case "left":
           candidates = items
             .filter((item) => item.row === current.row && item.col < current.col)
-            .sort((a, b) => b.col - a.col); // closest col first (highest col that is still lower)
+            .sort((a, b) => b.col - a.col);
+          // Wrap to end of previous row
+          if (candidates.length === 0) {
+            const prevRowItems = items
+              .filter((item) => item.row < current.row)
+              .sort((a, b) => b.row - a.row || b.col - a.col);
+            if (prevRowItems.length > 0) candidates = [prevRowItems[0]];
+          }
           break;
 
         case "right":
           candidates = items
             .filter((item) => item.row === current.row && item.col > current.col)
-            .sort((a, b) => a.col - b.col); // closest col first (lowest col that is still higher)
+            .sort((a, b) => a.col - b.col);
+          // Wrap to start of next row
+          if (candidates.length === 0) {
+            const nextRowItems = items
+              .filter((item) => item.row > current.row)
+              .sort((a, b) => a.row - b.row || a.col - b.col);
+            if (nextRowItems.length > 0) candidates = [nextRowItems[0]];
+          }
           break;
 
         case "up":
