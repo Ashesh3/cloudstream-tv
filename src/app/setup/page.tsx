@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { GOOGLE_OAUTH, ONEDRIVE_OAUTH } from "@/lib/constants";
 
@@ -224,7 +224,7 @@ function FolderPicker({
 /*  Main Setup Page                                                    */
 /* ------------------------------------------------------------------ */
 
-export default function SetupPage() {
+function SetupPageContent() {
   const searchParams = useSearchParams();
 
   const [pairingCode, setPairingCode] = useState(
@@ -486,5 +486,19 @@ export default function SetupPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function SetupPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        </div>
+      }
+    >
+      <SetupPageContent />
+    </Suspense>
   );
 }
