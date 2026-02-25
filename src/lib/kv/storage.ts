@@ -1,7 +1,12 @@
-import { kv } from "@vercel/kv";
+import { Redis } from "@upstash/redis";
 import { v4 as uuidv4 } from "uuid";
 import { KV_KEYS, PAIRING_CODE_EXPIRY_MS } from "../constants";
 import type { CloudConnection, WatchHistory, PairingSession } from "@/types";
+
+const redis = new Redis({
+  url: process.env.KV_REST_API_URL!,
+  token: process.env.KV_REST_API_TOKEN!,
+});
 
 /**
  * Get all cloud connections for a session.
@@ -10,13 +15,12 @@ export async function getConnections(
   sessionId: string
 ): Promise<CloudConnection[]> {
   const key = KV_KEYS.connections(sessionId);
-  const connections = await kv.get<CloudConnection[]>(key);
+  const connections = await redis.get<CloudConnection[]>(key);
   return connections ?? [];
 }
 
 /**
  * Save (upsert) a cloud connection for a session.
- * If a connection with the same id exists, it is replaced; otherwise it is appended.
  */
 export async function saveConnection(
   sessionId: string,
@@ -30,7 +34,7 @@ export async function saveConnection(
   } else {
     existing.push(connection);
   }
-  await kv.set(key, existing);
+  await redis.set(key, existing);
 }
 
 /**
@@ -43,7 +47,7 @@ export async function removeConnection(
   const key = KV_KEYS.connections(sessionId);
   const existing = await getConnections(sessionId);
   const filtered = existing.filter((c) => c.id !== connectionId);
-  await kv.set(key, filtered);
+  await redis.set(key, filtered);
 }
 
 /**
@@ -61,7 +65,7 @@ export async function updateTokens(
   if (connection) {
     connection.accessToken = accessToken;
     connection.tokenExpiry = tokenExpiry;
-    await kv.set(key, existing);
+    await redis.set(key, existing);
   }
 }
 
@@ -73,7 +77,7 @@ export async function getWatchHistory(
   fileId: string
 ): Promise<WatchHistory | null> {
   const key = KV_KEYS.watchHistory(sessionId, fileId);
-  return kv.get<WatchHistory>(key);
+  return redis.get<WatchHistory>(key);
 }
 
 /**
@@ -84,7 +88,7 @@ export async function saveWatchHistory(
   history: WatchHistory
 ): Promise<void> {
   const key = KV_KEYS.watchHistory(sessionId, history.fileId);
-  await kv.set(key, history);
+  await redis.set(key, history);
 }
 
 /**
@@ -101,7 +105,6 @@ function generatePairingCode(): string {
 
 /**
  * Create a new pairing session with a generated code and session id.
- * Stored in KV with an expiry matching PAIRING_CODE_EXPIRY_MS.
  */
 export async function createPairingSession(): Promise<PairingSession> {
   const code = generatePairingCode();
@@ -116,7 +119,7 @@ export async function createPairingSession(): Promise<PairingSession> {
 
   const key = KV_KEYS.pairing(code);
   const expirySeconds = Math.ceil(PAIRING_CODE_EXPIRY_MS / 1000);
-  await kv.set(key, session, { ex: expirySeconds });
+  await redis.set(key, session, { ex: expirySeconds });
 
   return session;
 }
@@ -128,11 +131,11 @@ export async function getPairingSession(
   code: string
 ): Promise<PairingSession | null> {
   const key = KV_KEYS.pairing(code);
-  const session = await kv.get<PairingSession>(key);
+  const session = await redis.get<PairingSession>(key);
 
   if (!session) return null;
   if (Date.now() > session.expiresAt) {
-    await kv.del(key);
+    await redis.del(key);
     return null;
   }
 
@@ -144,5 +147,5 @@ export async function getPairingSession(
  */
 export async function deletePairingSession(code: string): Promise<void> {
   const key = KV_KEYS.pairing(code);
-  await kv.del(key);
+  await redis.del(key);
 }

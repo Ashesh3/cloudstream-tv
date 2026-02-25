@@ -10,9 +10,16 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get("code");
   const state = searchParams.get("state");
 
+  // Azure may return an error instead of a code
+  const azureError = searchParams.get("error");
+  const azureErrorDesc = searchParams.get("error_description");
+
   if (!code || !state) {
+    const errorMsg = azureError
+      ? `${azureError}: ${azureErrorDesc || "Unknown error"}`
+      : "missing_params";
     return NextResponse.redirect(
-      `${appUrl}/setup?error=missing_params`
+      `${appUrl}/setup?error=${encodeURIComponent(errorMsg)}`
     );
   }
 

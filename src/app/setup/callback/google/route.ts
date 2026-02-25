@@ -10,9 +10,12 @@ export async function GET(request: NextRequest) {
   const code = searchParams.get("code");
   const state = searchParams.get("state");
 
+  const oauthError = searchParams.get("error");
+
   if (!code || !state) {
+    const errorMsg = oauthError || "missing_params";
     return NextResponse.redirect(
-      `${appUrl}/setup?error=missing_params`
+      `${appUrl}/setup?error=${encodeURIComponent(errorMsg)}`
     );
   }
 
