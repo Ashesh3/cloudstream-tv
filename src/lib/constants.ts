@@ -1,5 +1,5 @@
 export const PAIRING_CODE_LENGTH = 6;
-export const PAIRING_CODE_EXPIRY_MS = 10 * 60 * 1000; // 10 minutes
+export const PAIRING_CODE_EXPIRY_MS = 30 * 60 * 1000; // 30 minutes
 export const POLL_INTERVAL_MS = 3000;
 export const WATCH_HISTORY_SAVE_INTERVAL_MS = 30_000; // 30 seconds
 export const CONTROLS_AUTO_HIDE_MS = 5000;
