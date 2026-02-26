@@ -2,7 +2,12 @@
 
 A Next.js web app for smart TVs that connects to Google Drive and OneDrive, displays videos in a Netflix-style dark cinematic UI optimized for TV remote control navigation, and streams video directly from cloud CDNs with zero-buffer playback.
 
-<!-- TODO: Add screenshot -->
+<img width="1326" height="707" alt="image" src="https://github.com/user-attachments/assets/7bd4c378-eca9-4885-a145-43eb54cb6bfe" />
+<img width="1157" height="673" alt="image" src="https://github.com/user-attachments/assets/0e9fe562-6fef-41cd-b48c-1015ad043899" />
+<img width="595" height="487" alt="image" src="https://github.com/user-attachments/assets/beca2bf5-a220-4b00-9048-1c299cf4dea1" />
+<img width="1166" height="667" alt="image" src="https://github.com/user-attachments/assets/4b141d49-d6a2-45d5-bae9-d783af70d897" />
+
+
 
 ## Features
 
