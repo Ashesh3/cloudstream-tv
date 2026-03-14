@@ -6,8 +6,8 @@ export const CONTROLS_AUTO_HIDE_MS = 5000;
 export const SEEK_STEP_SECONDS = 10;
 export const SEEK_LONG_STEP_SECONDS = 30;
 export const BUFFER_AHEAD_SECONDS = 120;
-export const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".m4v"];
-export const VIDEO_MIME_PREFIXES = ["video/mp4", "video/webm", "video/quicktime"];
+export const VIDEO_EXTENSIONS = [".mp4", ".webm", ".mov", ".m4v", ".mkv"];
+export const VIDEO_MIME_PREFIXES = ["video/mp4", "video/webm", "video/quicktime", "video/x-matroska"];
 
 export const KV_KEYS = {
   connections: (sessionId: string) => `connections:${sessionId}`,

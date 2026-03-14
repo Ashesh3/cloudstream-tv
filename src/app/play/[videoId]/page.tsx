@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { TVPlayer } from "@/components/tv-player";
+import { useTransmux } from "@/lib/use-transmux";
 import type { CloudProvider, WatchHistory } from "@/types";
 
 export default function PlayPage() {
@@ -19,6 +20,15 @@ export default function PlayPage() {
   const [initialPosition, setInitialPosition] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const {
+    status: transmuxStatus,
+    progress: transmuxProgress,
+    blobUrl: playableUrl,
+    error: transmuxError,
+    transmux,
+    cleanup,
+  } = useTransmux();
 
   /* ---- Fetch stream URL and watch history in parallel ---- */
   useEffect(() => {
@@ -63,6 +73,19 @@ export default function PlayPage() {
       });
   }, [videoId, provider, connectionId]);
 
+  /* ---- Transmux if needed once stream URL is available ---- */
+  useEffect(() => {
+    if (!streamUrl || transmuxStatus !== "idle") return;
+    transmux(streamUrl, mimeType).catch(() => {
+      // error is captured in transmuxError state
+    });
+  }, [streamUrl, mimeType, transmux, transmuxStatus]);
+
+  /* ---- Cleanup blob URL on unmount ---- */
+  useEffect(() => {
+    return () => cleanup();
+  }, [cleanup]);
+
   /* ---- Progress save callback ---- */
   const handleProgress = useCallback(
     (position: number, duration: number) => {
@@ -84,20 +107,35 @@ export default function PlayPage() {
     [videoId, provider]
   );
 
-  /* ---- Loading state ---- */
-  if (loading) {
+  /* ---- Loading / Transmuxing state ---- */
+  if (loading || transmuxStatus === "loading" || transmuxStatus === "transmuxing" || transmuxStatus === "idle") {
+    const isTransmuxing = transmuxStatus === "transmuxing";
+    const progressPercent = Math.round(transmuxProgress * 100);
+
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center z-50">
         <div className="flex flex-col items-center gap-4">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-tv-accent" />
-          <p className="text-tv-sm text-tv-text-dim">Loading video...</p>
+          <p className="text-tv-sm text-tv-text-dim">
+            {isTransmuxing
+              ? `Converting video... ${progressPercent}%`
+              : "Loading video..."}
+          </p>
+          {isTransmuxing && (
+            <div className="w-64 h-2 bg-white/20 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-tv-accent rounded-full transition-all duration-300"
+                style={{ width: `${progressPercent}%` }}
+              />
+            </div>
+          )}
         </div>
       </div>
     );
   }
 
   /* ---- Error state ---- */
-  if (error || !streamUrl) {
+  if (error || transmuxError || !playableUrl) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center z-50">
         <div className="text-center">
@@ -105,7 +143,7 @@ export default function PlayPage() {
             Unable to play video
           </p>
           <p className="text-tv-sm text-tv-text-dim mb-6">
-            {error ?? "Stream URL not available"}
+            {error ?? transmuxError ?? "Stream URL not available"}
           </p>
           <button
             onClick={() => router.back()}
@@ -121,8 +159,8 @@ export default function PlayPage() {
   /* ---- Player ---- */
   return (
     <TVPlayer
-      src={streamUrl}
-      mimeType={mimeType}
+      src={playableUrl}
+      mimeType="video/mp4"
       initialPosition={initialPosition}
       onBack={() => router.back()}
       onProgress={handleProgress}
