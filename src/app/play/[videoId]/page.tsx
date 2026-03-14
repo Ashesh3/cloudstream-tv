@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { MediaBunnyPlayer } from "@/components/mediabunny-player";
+import { TVPlayer } from "@/components/tv-player";
 import type { CloudProvider, WatchHistory } from "@/types";
 
 export default function PlayPage() {
@@ -13,11 +14,13 @@ export default function PlayPage() {
   const videoId = params.videoId as string;
   const provider = (searchParams.get("provider") ?? "google") as CloudProvider;
   const connectionId = searchParams.get("connectionId") ?? "";
+  const mimeType = searchParams.get("mimeType") ?? "video/mp4";
 
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [initialPosition, setInitialPosition] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [useFallback, setUseFallback] = useState(false);
 
   /* ---- Fetch stream URL and watch history in parallel ---- */
   useEffect(() => {
@@ -76,14 +79,16 @@ export default function PlayPage() {
           position,
           duration,
         }),
-      }).catch(() => {
-        // Silently fail progress saves
-      });
+      }).catch(() => {});
     },
     [videoId, provider]
   );
 
-  /* ---- Loading state ---- */
+  /* ---- MediaBunny failed, fall back to native Video.js ---- */
+  const handleMediaBunnyError = useCallback(() => {
+    setUseFallback(true);
+  }, []);
+
   if (loading) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center z-50">
@@ -95,14 +100,11 @@ export default function PlayPage() {
     );
   }
 
-  /* ---- Error state ---- */
   if (error || !streamUrl) {
     return (
       <div className="fixed inset-0 bg-black flex items-center justify-center z-50">
         <div className="text-center">
-          <p className="text-tv-lg text-tv-warning mb-2">
-            Unable to play video
-          </p>
+          <p className="text-tv-lg text-tv-warning mb-2">Unable to play video</p>
           <p className="text-tv-sm text-tv-text-dim mb-6">
             {error ?? "Stream URL not available"}
           </p>
@@ -117,13 +119,27 @@ export default function PlayPage() {
     );
   }
 
-  /* ---- Player ---- */
+  /* ---- Fallback: native Video.js player ---- */
+  if (useFallback) {
+    return (
+      <TVPlayer
+        src={streamUrl}
+        mimeType={mimeType}
+        initialPosition={initialPosition}
+        onBack={() => router.back()}
+        onProgress={handleProgress}
+      />
+    );
+  }
+
+  /* ---- Primary: MediaBunny player ---- */
   return (
     <MediaBunnyPlayer
       src={streamUrl}
       initialPosition={initialPosition}
       onBack={() => router.back()}
       onProgress={handleProgress}
+      onError={handleMediaBunnyError}
     />
   );
 }

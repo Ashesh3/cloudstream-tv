@@ -16,6 +16,7 @@ interface MediaBunnyPlayerProps {
   initialPosition?: number;
   onBack: () => void;
   onProgress?: (position: number, duration: number) => void;
+  onError?: () => void;
 }
 
 type MediaBunnyModule = typeof import("mediabunny");
@@ -46,6 +47,7 @@ export function MediaBunnyPlayer({
   initialPosition = 0,
   onBack,
   onProgress,
+  onError,
 }: MediaBunnyPlayerProps) {
   /* ---- UI state (React-rendered) ---- */
   const [controlsVisible, setControlsVisible] = useState(true);
@@ -98,6 +100,8 @@ export function MediaBunnyPlayer({
   onProgressRef.current = onProgress;
   const onBackRef = useRef(onBack);
   onBackRef.current = onBack;
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
 
   /* ---- getPlaybackTime: master clock using AudioContext ---- */
   const getPlaybackTime = useCallback(() => {
@@ -478,9 +482,33 @@ export function MediaBunnyPlayer({
         if (disposed) return;
 
         if (!videoTrack) {
+          // No video track — fall back to native player
+          if (onErrorRef.current) {
+            onErrorRef.current();
+            return;
+          }
           setError("No video track found in this file");
           setLoading(false);
           return;
+        }
+
+        // Check if WebCodecs can decode this video codec
+        if (videoTrack.codec === null || !(await videoTrack.canDecode())) {
+          // Codec not supported by WebCodecs — fall back to native <video> player
+          // (TV browsers often have hardware decoders for HEVC/etc. that WebCodecs can't access)
+          if (onErrorRef.current) {
+            onErrorRef.current();
+            return;
+          }
+          setError("This video codec is not supported by the browser's WebCodecs API");
+          setLoading(false);
+          return;
+        }
+
+        // Check audio track decodability (audio-only failure is non-fatal, just skip audio)
+        let usableAudioTrack = audioTrack;
+        if (audioTrack && (audioTrack.codec === null || !(await audioTrack.canDecode()))) {
+          usableAudioTrack = null;
         }
 
         totalDurationRef.current = totalDuration;
@@ -504,9 +532,9 @@ export function MediaBunnyPlayer({
         canvasSinkRef.current = canvasSink;
 
         // Create audio buffer sink and audio context
-        if (audioTrack) {
+        if (usableAudioTrack) {
           const audioContext = new AudioContext({
-            sampleRate: audioTrack.sampleRate,
+            sampleRate: usableAudioTrack.sampleRate,
           });
           audioContextRef.current = audioContext;
 
@@ -515,7 +543,7 @@ export function MediaBunnyPlayer({
           gainNode.connect(audioContext.destination);
           gainNodeRef.current = gainNode;
 
-          const audioBufferSink = new mb.AudioBufferSink(audioTrack);
+          const audioBufferSink = new mb.AudioBufferSink(usableAudioTrack);
           audioBufferSinkRef.current = audioBufferSink;
         } else {
           // No audio track; create a basic AudioContext for timing
@@ -564,6 +592,11 @@ export function MediaBunnyPlayer({
         }
       } catch (err) {
         if (!disposed) {
+          // Try falling back to native player
+          if (onErrorRef.current) {
+            onErrorRef.current();
+            return;
+          }
           setError(
             err instanceof Error ? err.message : "Failed to initialize player"
           );
