@@ -1,29 +1,6 @@
-import { ONEDRIVE_OAUTH, VIDEO_EXTENSIONS } from "../constants";
+import { ONEDRIVE_OAUTH } from "../constants";
 import { updateTokens } from "../kv/storage";
 import type { CloudConnection, BrowseItem } from "@/types";
-
-function isVideoFile(mimeType: string | undefined, name: string): boolean {
-  if (mimeType?.startsWith("video/")) return true;
-  if (mimeType === "application/x-matroska") return true;
-  const ext = name.toLowerCase().slice(name.lastIndexOf("."));
-  return VIDEO_EXTENSIONS.includes(ext);
-}
-
-function resolveVideoMimeType(mimeType: string | undefined, name: string): string {
-  if (mimeType?.startsWith("video/")) return mimeType;
-  const ext = name.toLowerCase().slice(name.lastIndexOf("."));
-  const map: Record<string, string> = {
-    ".mp4": "video/mp4",
-    ".webm": "video/webm",
-    ".mov": "video/quicktime",
-    ".m4v": "video/mp4",
-    ".mkv": "video/x-matroska",
-    ".avi": "video/x-msvideo",
-    ".ts": "video/mp2t",
-    ".flv": "video/x-flv",
-  };
-  return map[ext] || "video/mp4";
-}
 
 /**
  * Refresh the OneDrive access token if it is expired or about to expire.
@@ -151,11 +128,11 @@ export async function listOneDriveFiles(
         connectionId: connection.id,
         parentId: folderId,
       });
-    } else if (isVideoFile(item.file?.mimeType, item.name)) {
+    } else if (item.file?.mimeType?.startsWith("video/")) {
       videoItems.push({
         id: item.id,
         name: item.name,
-        mimeType: resolveVideoMimeType(item.file?.mimeType, item.name),
+        mimeType: item.file.mimeType,
         size: item.size ?? 0,
         createdDateTime: item.createdDateTime ?? "",
         lastModifiedDateTime: item.lastModifiedDateTime ?? "",
