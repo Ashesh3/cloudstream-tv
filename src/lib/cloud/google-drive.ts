@@ -1,29 +1,6 @@
-import { GOOGLE_OAUTH, VIDEO_EXTENSIONS } from "../constants";
+import { GOOGLE_OAUTH } from "../constants";
 import { updateTokens } from "../kv/storage";
 import type { CloudConnection, BrowseItem } from "@/types";
-
-function isVideoFile(mimeType: string, name: string): boolean {
-  if (mimeType.startsWith("video/")) return true;
-  if (mimeType === "application/x-matroska") return true;
-  const ext = name.toLowerCase().slice(name.lastIndexOf("."));
-  return VIDEO_EXTENSIONS.includes(ext);
-}
-
-function resolveVideoMimeType(mimeType: string, name: string): string {
-  if (mimeType.startsWith("video/")) return mimeType;
-  const ext = name.toLowerCase().slice(name.lastIndexOf("."));
-  const map: Record<string, string> = {
-    ".mp4": "video/mp4",
-    ".webm": "video/webm",
-    ".mov": "video/quicktime",
-    ".m4v": "video/mp4",
-    ".mkv": "video/x-matroska",
-    ".avi": "video/x-msvideo",
-    ".ts": "video/mp2t",
-    ".flv": "video/x-flv",
-  };
-  return map[ext] || "video/mp4";
-}
 
 /**
  * Refresh the Google access token if it is expired or about to expire.
@@ -119,12 +96,12 @@ export async function listGoogleDriveFiles(
         connectionId: connection.id,
         parentId: folderId,
       });
-    } else if (isVideoFile(file.mimeType, file.name)) {
+    } else if (file.mimeType.startsWith("video/")) {
       items.push({
         type: "video",
         id: file.id,
         name: file.name,
-        mimeType: resolveVideoMimeType(file.mimeType, file.name),
+        mimeType: file.mimeType,
         size: file.size ? parseInt(file.size, 10) : 0,
         thumbnailUrl: file.thumbnailLink ?? null,
         provider: "google",
