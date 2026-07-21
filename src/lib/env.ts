@@ -4,8 +4,11 @@ export function validateEnv() {
     "GOOGLE_CLIENT_SECRET",
     "ONEDRIVE_CLIENT_ID",
     "ONEDRIVE_CLIENT_SECRET",
-    "KV_REST_API_URL",
-    "KV_REST_API_TOKEN",
+    // Storage is Vercel Blob. On Vercel, auth is secretless via
+    // VERCEL_OIDC_TOKEN + BLOB_STORE_ID (both auto-injected); locally a
+    // BLOB_READ_WRITE_TOKEN is used instead. BLOB_STORE_ID is the one
+    // consistently present, so we surface it as the storage requirement.
+    "BLOB_STORE_ID",
     "NEXT_PUBLIC_APP_URL",
   ];
 

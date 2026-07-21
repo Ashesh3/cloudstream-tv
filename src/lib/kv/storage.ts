@@ -1,12 +1,61 @@
-import { Redis } from "@upstash/redis";
+import { put, get, del } from "@vercel/blob";
 import { v4 as uuidv4 } from "uuid";
 import { KV_KEYS, PAIRING_CODE_EXPIRY_MS } from "../constants";
 import type { CloudConnection, WatchHistory, PairingSession } from "@/types";
 
-const redis = new Redis({
-  url: process.env.KV_REST_API_URL!,
-  token: process.env.KV_REST_API_TOKEN!,
-});
+/**
+ * Storage layer backed by Vercel Blob.
+ *
+ * Auth resolves automatically:
+ *   - On Vercel (prod/preview): secretless via VERCEL_OIDC_TOKEN + BLOB_STORE_ID.
+ *   - Locally / migration: BLOB_READ_WRITE_TOKEN.
+ *
+ * All blobs are `private` (they hold OAuth tokens) and are read with
+ * `useCache: false` so a read always reflects the most recent write
+ * (read-after-write consistency, which token refresh relies on).
+ *
+ * There is no native TTL in Blob. The only TTL user (pairing sessions) is
+ * handled at the application level via an `expiresAt` check in
+ * getPairingSession(), so behaviour is unchanged.
+ */
+
+/**
+ * Map a logical KV key (e.g. "watch-history:sid:fileId") to a Blob pathname.
+ * Each colon-separated segment is encoded and joined with "/", producing a
+ * stable, collision-free, human-readable path like
+ * "kv/watch-history/<sid>/<fileId>.json".
+ */
+function keyToPath(key: string): string {
+  return "kv/" + key.split(":").map(encodeURIComponent).join("/") + ".json";
+}
+
+async function kvGet<T>(key: string): Promise<T | null> {
+  try {
+    const res = await get(keyToPath(key), { access: "private", useCache: false });
+    if (!res || res.statusCode !== 200) return null;
+    const text = await new Response(res.stream).text();
+    return JSON.parse(text) as T;
+  } catch {
+    // Not found (or unreadable) behaves like a missing key.
+    return null;
+  }
+}
+
+async function kvSet(key: string, value: unknown): Promise<void> {
+  await put(keyToPath(key), JSON.stringify(value), {
+    access: "private",
+    allowOverwrite: true,
+    contentType: "application/json",
+    // Minimum allowed is 60s; irrelevant to correctness because every read
+    // uses `useCache: false` and hits origin directly.
+    cacheControlMaxAge: 60,
+  });
+}
+
+async function kvDel(key: string): Promise<void> {
+  // del() is idempotent — deleting a missing pathname is a no-op.
+  await del(keyToPath(key));
+}
 
 /**
  * Get all cloud connections for a session.
@@ -14,8 +63,9 @@ const redis = new Redis({
 export async function getConnections(
   sessionId: string
 ): Promise<CloudConnection[]> {
-  const key = KV_KEYS.connections(sessionId);
-  const connections = await redis.get<CloudConnection[]>(key);
+  const connections = await kvGet<CloudConnection[]>(
+    KV_KEYS.connections(sessionId)
+  );
   return connections ?? [];
 }
 
@@ -26,7 +76,6 @@ export async function saveConnection(
   sessionId: string,
   connection: CloudConnection
 ): Promise<void> {
-  const key = KV_KEYS.connections(sessionId);
   const existing = await getConnections(sessionId);
   const index = existing.findIndex((c) => c.id === connection.id);
   if (index >= 0) {
@@ -34,7 +83,7 @@ export async function saveConnection(
   } else {
     existing.push(connection);
   }
-  await redis.set(key, existing);
+  await kvSet(KV_KEYS.connections(sessionId), existing);
 }
 
 /**
@@ -44,10 +93,9 @@ export async function removeConnection(
   sessionId: string,
   connectionId: string
 ): Promise<void> {
-  const key = KV_KEYS.connections(sessionId);
   const existing = await getConnections(sessionId);
   const filtered = existing.filter((c) => c.id !== connectionId);
-  await redis.set(key, filtered);
+  await kvSet(KV_KEYS.connections(sessionId), filtered);
 }
 
 /**
@@ -59,13 +107,12 @@ export async function updateTokens(
   accessToken: string,
   tokenExpiry: number
 ): Promise<void> {
-  const key = KV_KEYS.connections(sessionId);
   const existing = await getConnections(sessionId);
   const connection = existing.find((c) => c.id === connectionId);
   if (connection) {
     connection.accessToken = accessToken;
     connection.tokenExpiry = tokenExpiry;
-    await redis.set(key, existing);
+    await kvSet(KV_KEYS.connections(sessionId), existing);
   }
 }
 
@@ -76,8 +123,7 @@ export async function getWatchHistory(
   sessionId: string,
   fileId: string
 ): Promise<WatchHistory | null> {
-  const key = KV_KEYS.watchHistory(sessionId, fileId);
-  return redis.get<WatchHistory>(key);
+  return kvGet<WatchHistory>(KV_KEYS.watchHistory(sessionId, fileId));
 }
 
 /**
@@ -87,8 +133,7 @@ export async function saveWatchHistory(
   sessionId: string,
   history: WatchHistory
 ): Promise<void> {
-  const key = KV_KEYS.watchHistory(sessionId, history.fileId);
-  await redis.set(key, history);
+  await kvSet(KV_KEYS.watchHistory(sessionId, history.fileId), history);
 }
 
 /**
@@ -117,25 +162,24 @@ export async function createPairingSession(): Promise<PairingSession> {
     expiresAt: now + PAIRING_CODE_EXPIRY_MS,
   };
 
-  const key = KV_KEYS.pairing(code);
-  const expirySeconds = Math.ceil(PAIRING_CODE_EXPIRY_MS / 1000);
-  await redis.set(key, session, { ex: expirySeconds });
+  await kvSet(KV_KEYS.pairing(code), session);
 
   return session;
 }
 
 /**
  * Get a pairing session by code. Returns null if not found or expired.
+ * Expiry is enforced here (Blob has no native TTL): an expired session is
+ * deleted and treated as absent.
  */
 export async function getPairingSession(
   code: string
 ): Promise<PairingSession | null> {
-  const key = KV_KEYS.pairing(code);
-  const session = await redis.get<PairingSession>(key);
+  const session = await kvGet<PairingSession>(KV_KEYS.pairing(code));
 
   if (!session) return null;
   if (Date.now() > session.expiresAt) {
-    await redis.del(key);
+    await kvDel(KV_KEYS.pairing(code));
     return null;
   }
 
@@ -146,6 +190,5 @@ export async function getPairingSession(
  * Delete a pairing session by code.
  */
 export async function deletePairingSession(code: string): Promise<void> {
-  const key = KV_KEYS.pairing(code);
-  await redis.del(key);
+  await kvDel(KV_KEYS.pairing(code));
 }
