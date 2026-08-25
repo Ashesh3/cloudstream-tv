@@ -396,6 +396,24 @@ describe("Firestore client authentication boundary", () => {
     expect(captured?.credentials).toBeUndefined();
   });
 
+  it("uses Vercel OIDC workload identity in staging previews when configured", () => {
+    let captured: FirestoreClientSettings | undefined;
+    createFirestoreClient(
+      {
+        environment: "staging",
+        projectId: "cloudframe-dev",
+        workloadIdentityProvider: "projects/123/locations/global/workloadIdentityPools/vercel/providers/vercel",
+        serviceAccountEmail: "cloudframe@cloudframe-dev.iam.gserviceaccount.com"
+      },
+      {
+        createClient(settings) { captured = settings; return {}; },
+        getVercelOidcToken: async () => "preview-oidc-token"
+      }
+    );
+    expect(captured?.credentials).toMatchObject({ type: "external_account" });
+    expect(captured?.credentials).not.toHaveProperty("private_key");
+  });
+
   it("rejects long-lived explicit credentials in production", () => {
     expect(() =>
       createFirestoreClient(

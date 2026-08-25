@@ -5,6 +5,7 @@
   "type": "module",
   "exports": "./src/index.ts",
   "dependencies": {
+    "@cloudframe/providers": "*",
     "@cloudframe/shared": "*",
     "workflow": "^4.8.5"
   }

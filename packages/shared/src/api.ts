@@ -77,18 +77,35 @@ export interface AssignedRootDto {
   createdAt: string;
 }
 
-export interface MediaNodeDto
-  extends Omit<
-    MediaNode,
-    | "capturedAt"
-    | "createdAtProvider"
-    | "modifiedAtProvider"
-    | "indexedAt"
-  > {
+export interface MediaNodeDto {
+  id: string;
+  sourceId: string;
+  provider: MediaNode["provider"];
+  parentNodeId: string | null;
+  name: string;
+  normalizedName: string;
+  kind: MediaNode["kind"];
+  mimeType: string | null;
+  size: number | null;
+  width: number | null;
+  height: number | null;
   capturedAt: string | null;
   createdAtProvider: string | null;
   modifiedAtProvider: string | null;
-  indexedAt: string;
+  thumbnailRevision: string | null;
+  hasPreview: boolean;
+  folderCoverNodeIds: string[];
+  childFolderCount: number;
+  childMediaCount: number;
+  available: boolean;
+}
+
+export interface WatchHistoryDto {
+  nodeId: string;
+  positionSeconds: number;
+  durationSeconds: number;
+  completed: boolean;
+  updatedAt: string;
 }
 
 export interface BootstrapResponse {
@@ -128,6 +145,27 @@ export interface BrowseFolderResponse {
   parent: MediaNodeDto | null;
   breadcrumbs: MediaNodeDto[];
   children: MediaNodeDto[];
+  nextCursor?: string | null;
+}
+
+export interface ThumbnailUrlItem {
+  nodeId: string;
+  status: "ready" | "unavailable";
+  url?: string;
+  expiresAt?: string;
+  revision?: string | null;
+}
+
+export interface TvRootCardDto {
+  id: string;
+  sourceId: string;
+  displayName: string;
+  provider: Source["provider"];
+  accountLabel: string;
+  nodeId: string;
+  folderCoverNodeIds: string[];
+  childFolderCount: number;
+  childMediaCount: number;
 }
 
 export interface MediaUrlResponse {
@@ -227,17 +265,35 @@ export function encodeAssignedRootDto(value: AssignedRoot): AssignedRootDto {
 
 export function encodeMediaNodeDto(value: MediaNode): MediaNodeDto {
   return {
-    ...value,
+    id: value.id,
+    sourceId: value.sourceId,
+    provider: value.provider,
+    parentNodeId: value.parentNodeId,
+    name: value.name,
+    normalizedName: value.normalizedName,
+    kind: value.kind,
+    mimeType: value.mimeType,
+    size: value.size,
+    width: value.width,
+    height: value.height,
     capturedAt: nullableIso(value.capturedAt),
     createdAtProvider: nullableIso(value.createdAtProvider),
     modifiedAtProvider: nullableIso(value.modifiedAtProvider),
-    indexedAt: iso(value.indexedAt)
+    thumbnailRevision: value.thumbnailRevision,
+    hasPreview: value.hasPreview,
+    folderCoverNodeIds: [...value.folderCoverNodeIds],
+    childFolderCount: value.childFolderCount,
+    childMediaCount: value.childMediaCount,
+    available: value.available
   };
 }
 
 export function decodeMediaNodeDto(value: MediaNodeDto): MediaNode {
   return {
     ...value,
+    householdId: "",
+    providerNodeId: "",
+    ancestorNodeIds: [],
     capturedAt: value.capturedAt ? new Date(value.capturedAt) : null,
     createdAtProvider: value.createdAtProvider
       ? new Date(value.createdAtProvider)
@@ -245,7 +301,18 @@ export function decodeMediaNodeDto(value: MediaNodeDto): MediaNode {
     modifiedAtProvider: value.modifiedAtProvider
       ? new Date(value.modifiedAtProvider)
       : null,
-    indexedAt: new Date(value.indexedAt)
+    indexedAt: new Date(0)
+  };
+}
+
+
+export function encodeWatchHistoryDto(value: WatchHistory): WatchHistoryDto {
+  return {
+    nodeId: value.nodeId,
+    positionSeconds: value.positionSeconds,
+    durationSeconds: value.durationSeconds,
+    completed: value.completed,
+    updatedAt: iso(value.updatedAt)
   };
 }
 

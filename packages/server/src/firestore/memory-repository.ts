@@ -13,6 +13,7 @@ import type {
   SyncLeaseInput,
   WatchHistory
 } from "@cloudframe/shared";
+import { recomputeFolderMetadata, type IndexBatchCommitInput } from "@cloudframe/indexer";
 import {
   RepositoryError,
   validateDeviceApproval,
@@ -29,6 +30,7 @@ import type {
   ResolveDeviceRequestInput,
   UpdateDeviceInput
 } from "./repository";
+import type { DueSourceLeaseInput, ListWatchHistoryInput } from "./repository";
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -44,6 +46,7 @@ export class MemoryRepository implements AppRepository {
   private history = new Map<string, WatchHistory>();
   private rateLimits = new Map<string, number>();
   private oauthStates = new Map<string, OAuthState>();
+  private failIndexCommit = false;
 
   async getHousehold(id: string) { return this.get(this.households, id); }
   async putHousehold(value: Household) { this.set(this.households, value); }
@@ -116,12 +119,142 @@ export class MemoryRepository implements AppRepository {
   async putRoot(value: AssignedRoot) { this.set(this.roots, value); }
   async getRoot(id: string) { return this.get(this.roots, id); }
   async listRootsForSource(sourceId: string) { return this.filter(this.roots, value => value.sourceId === sourceId); }
+  async listRootsByIds(rootIds: string[]) { return rootIds.map(id => this.roots.get(id)).filter((value): value is AssignedRoot => Boolean(value)).map(copy); }
   async putNode(value: MediaNode) { this.set(this.nodes, value); }
   async getNode(id: string) { return this.get(this.nodes, id); }
   async getNodeByProviderId(sourceId: string, providerNodeId: string) { return this.find(this.nodes, value => value.sourceId === sourceId && value.providerNodeId === providerNodeId); }
   async listChildNodes(parentNodeId: string | null, sourceIds: string[]) { return this.filter(this.nodes, value => value.parentNodeId === parentNodeId && sourceIds.includes(value.sourceId)); }
+  async listNodesForSource(sourceId: string) { return this.filter(this.nodes, value => value.sourceId === sourceId); }
   async putWatchHistory(value: WatchHistory) { this.set(this.history, value); }
   async getWatchHistory(deviceId: string, nodeId: string) { return this.find(this.history, value => value.deviceId === deviceId && value.nodeId === nodeId); }
+  async listWatchHistory(input: ListWatchHistoryInput) { return this.filter(this.history, value => value.householdId === input.householdId && value.deviceId === input.deviceId); }
+
+  failNextIndexCommitForTest(): void { this.failIndexCommit = true; }
+
+  async commitIndexBatch(input: IndexBatchCommitInput): Promise<number> {
+    if (this.failIndexCommit) {
+      this.failIndexCommit = false;
+      throw new Error("Simulated index commit failure");
+    }
+    const source = this.sources.get(input.sourceId);
+    if (!source) throw new Error("Source not found");
+    if (
+      input.expectedLeaseOwner &&
+      (source.leaseOwner !== input.expectedLeaseOwner ||
+        !source.leaseExpiresAt ||
+        source.leaseExpiresAt <= input.committedAt)
+    ) {
+      throw new RepositoryError("SYNC_LEASE_STALE", "Sync lease is stale");
+    }
+    if (JSON.stringify(source.crawlCheckpoint) !== JSON.stringify(input.expectedPreviousCheckpoint ?? null)) {
+      throw new RepositoryError("SYNC_CHECKPOINT_STALE", "Sync checkpoint is stale");
+    }
+    const nextNodes = new Map(this.nodes);
+    for (const node of input.nodes) nextNodes.set(node.id, copy(node));
+    for (const id of input.removedNodeIds) {
+      const node = nextNodes.get(id);
+      if (node) nextNodes.set(id, copy({ ...node, available: false }));
+    }
+    const all = [...nextNodes.values()];
+    for (const id of new Set(input.affectedAncestorNodeIds)) {
+      const folder = nextNodes.get(id);
+      if (!folder || folder.kind !== "folder") continue;
+      const descendants = all.filter(node => node.id !== folder.id && (node.parentNodeId === folder.id || node.ancestorNodeIds.includes(folder.id)));
+      nextNodes.set(id, copy(recomputeFolderMetadata(folder, descendants)));
+    }
+    this.nodes = nextNodes;
+    this.sources.set(input.sourceId, copy({
+      ...source,
+      crawlCheckpoint: input.checkpoint,
+      syncGeneration: input.generation,
+      ...(input.deltaCursor === undefined ? {} : { deltaCursor: input.deltaCursor }),
+      status: input.completedAt ? "healthy" : "syncing",
+      lastSyncCompletedAt: input.completedAt,
+      lastSyncErrorCode: null,
+      ...(input.leaseExpiresAt ? { leaseExpiresAt: input.leaseExpiresAt } : {})
+    }));
+    return [...this.nodes.values()].filter(node => node.sourceId === input.sourceId).length;
+  }
+
+  async reconcileSourceGeneration(input: { sourceId: string; generation: string; cursor: string | null; limit: number; now: Date; leaseOwner: string }) {
+    const source = this.sources.get(input.sourceId);
+    if (
+      !source ||
+      source.leaseOwner !== input.leaseOwner ||
+      !source.leaseExpiresAt ||
+      source.leaseExpiresAt <= input.now ||
+      source.crawlCheckpoint?.generation !== input.generation
+    ) throw new RepositoryError("SYNC_LEASE_STALE", "Sync lease is stale");
+    const stale = [...this.nodes.values()]
+      .filter(node => node.sourceId === input.sourceId && node.available && node.syncGeneration !== input.generation)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const start = input.cursor ? Math.max(0, stale.findIndex(node => node.id === input.cursor) + 1) : 0;
+    const page = stale.slice(start, start + input.limit);
+    for (const node of page) this.nodes.set(node.id, copy({ ...node, available: false, indexedAt: input.now }));
+    const affectedIds = new Set(page.flatMap(node => [
+      ...node.ancestorNodeIds,
+      ...(node.parentNodeId ? [node.parentNodeId] : [])
+    ]));
+    const all = [...this.nodes.values()];
+    for (const id of affectedIds) {
+      const folder = this.nodes.get(id);
+      if (!folder || folder.kind !== "folder") continue;
+      const descendants = all.filter(node =>
+        node.id !== id &&
+        (node.parentNodeId === id || node.ancestorNodeIds.includes(id))
+      );
+      this.nodes.set(id, copy(recomputeFolderMetadata(folder, descendants)));
+    }
+    const nextCursor = start + page.length < stale.length ? page.at(-1)?.id ?? null : null;
+    this.sources.set(source.id, copy({ ...source, leaseExpiresAt: new Date(input.now.getTime() + 10 * 60 * 1000), crawlCheckpoint: { mode: "reconcile", providerPageCursor: null, processedNodeCount: start + page.length, generation: input.generation, reconciliationCursor: nextCursor } }));
+    return { nodes: page.map(copy), nextCursor };
+  }
+
+  async leaseDueSources(input: DueSourceLeaseInput): Promise<Source[]> {
+    const candidates = [...this.sources.values()]
+      .filter(source => source.householdId === input.householdId && source.status !== "disabled" && source.status !== "reauth-required")
+      .filter(source => !source.nextSyncAt || source.nextSyncAt <= input.now)
+      .sort((a, b) => (a.nextSyncAt?.getTime() ?? 0) - (b.nextSyncAt?.getTime() ?? 0))
+      .slice(0, Math.max(0, input.limit));
+    const leased: Source[] = [];
+    for (const source of candidates) {
+      const owner = `${input.owner}:${source.id}`;
+      if (await this.acquireSyncLease({ sourceId: source.id, owner, now: input.now, expiresAt: input.expiresAt })) {
+        leased.push(copy({ ...source, leaseOwner: owner, leaseExpiresAt: input.expiresAt }));
+      }
+    }
+    return leased;
+  }
+
+  async completeSyncRun(input: { sourceId: string; leaseOwner: string; completedAt: Date; nextSyncAt: Date }): Promise<void> {
+    const source = this.sources.get(input.sourceId);
+    if (
+      !source ||
+      source.leaseOwner !== input.leaseOwner ||
+      !source.leaseExpiresAt ||
+      source.leaseExpiresAt <= input.completedAt
+    ) {
+      throw new RepositoryError("SYNC_LEASE_STALE", "Sync lease is stale");
+    }
+    this.sources.set(source.id, copy({
+      ...source,
+      status: "healthy",
+      crawlCheckpoint: null,
+      activeWorkflowRunId: null,
+      lastSyncCompletedAt: input.completedAt,
+      nextSyncAt: input.nextSyncAt,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      lastSyncErrorCode: null
+    }));
+  }
+
+  async markSyncRunStarted(input: { sourceId: string; leaseOwner: string; runId: string; startedAt: Date }): Promise<boolean> {
+    const source = this.sources.get(input.sourceId);
+    if (!source || source.leaseOwner !== input.leaseOwner || !source.leaseExpiresAt || source.leaseExpiresAt <= input.startedAt) return false;
+    this.sources.set(source.id, copy({ ...source, status: "syncing", activeWorkflowRunId: input.runId, lastSyncStartedAt: input.startedAt, lastSyncErrorCode: null }));
+    return true;
+  }
 
   async approveDeviceRequest(input: ApproveDeviceRequestInput): Promise<void> {
     return this.approveDeviceRequestTransaction(input, false);

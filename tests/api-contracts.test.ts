@@ -80,6 +80,10 @@ describe("public API DTOs", () => {
       JSON.stringify([encodeMediaNodeDto(older), encodeMediaNodeDto(newer)])
     );
 
+    for (const forbidden of ["householdId", "providerNodeId", "ancestorNodeIds", "syncGeneration", "indexedAt"]) {
+      expect(JSON.stringify(wirePayload)).not.toContain(`"${forbidden}"`);
+    }
+
     expect(wirePayload[0].capturedAt).toBe("2024-01-01T00:00:00.000Z");
     const decoded = wirePayload.map(decodeMediaNodeDto);
     expect(decoded[0]?.capturedAt).toBeInstanceOf(Date);

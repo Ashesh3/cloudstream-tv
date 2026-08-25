@@ -91,6 +91,21 @@ export function createFirestoreClient<TClient = Firestore>(
     });
   }
 
+
+  if (config.workloadIdentityProvider && config.serviceAccountEmail) {
+    if (config.explicitCredentials) {
+      throw new Error("Staging Firestore cannot combine explicit credentials with workload identity");
+    }
+    return dependencies.createClient({
+      ...base,
+      credentials: buildWorkloadIdentityCredentials(
+        config.workloadIdentityProvider,
+        config.serviceAccountEmail,
+        dependencies.getVercelOidcToken
+      )
+    });
+  }
+
   if (config.explicitCredentials) {
     return dependencies.createClient({
       ...base,

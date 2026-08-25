@@ -78,6 +78,10 @@ export interface IndexCheckpoint {
   providerPageCursor: string | null;
   processedNodeCount: number;
   generation: string;
+  currentProviderFolderId?: string | null;
+  pendingProviderFolderIds?: string[];
+  reconciliationCursor?: string | null;
+  pageFingerprint?: string;
 }
 
 export type SourceStatus =
@@ -156,6 +160,7 @@ export interface MediaNode extends StoredEntity {
   childMediaCount: number;
   available: boolean;
   indexedAt: Date;
+  syncGeneration?: string;
 }
 
 export interface WatchHistory extends StoredEntity {

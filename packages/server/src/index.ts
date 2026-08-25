@@ -13,6 +13,9 @@ export * from "./services/device-auth";
 export * from "./services/device-enrollment";
 export * from "./services/sources";
 export * from "./services/oauth";
+export * from "./services/browse";
+export * from "./services/media-urls";
+export * from "./services/indexing";
 export type {
   ProviderAdapter,
   ProviderCredentials,

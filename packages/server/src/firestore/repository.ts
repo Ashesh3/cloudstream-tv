@@ -14,6 +14,7 @@ import type {
   WatchHistory
 } from "@cloudframe/shared";
 import type { Firestore, Query, Transaction, WriteBatch } from "@google-cloud/firestore";
+import { recomputeFolderMetadata, type IndexBatchCommitInput } from "@cloudframe/indexer";
 
 export interface RateLimitConsumeInput {
   bucket: string;
@@ -70,6 +71,19 @@ export interface UpdateDeviceInput {
   >;
 }
 
+export interface ListWatchHistoryInput {
+  householdId: string;
+  deviceId: string;
+}
+
+export interface DueSourceLeaseInput {
+  householdId: string;
+  owner: string;
+  now: Date;
+  expiresAt: Date;
+  limit: number;
+}
+
 export interface ConsumeOAuthStateInput {
   stateHash: string;
   householdId: string;
@@ -84,7 +98,9 @@ export type RepositoryErrorCode =
   | "DEVICE_REQUEST_NOT_PENDING"
   | "DEVICE_APPROVAL_CONFLICT"
   | "ROOT_ASSIGNMENT_INVALID"
-  | "DEVICE_NOT_FOUND";
+  | "DEVICE_NOT_FOUND"
+  | "SYNC_LEASE_STALE"
+  | "SYNC_CHECKPOINT_STALE";
 
 export class RepositoryError extends Error {
   constructor(readonly code: RepositoryErrorCode, message: string) {
@@ -134,12 +150,27 @@ export interface AppRepository {
   putRoot(root: AssignedRoot): Promise<void>;
   getRoot(id: string): Promise<AssignedRoot | null>;
   listRootsForSource(sourceId: string): Promise<AssignedRoot[]>;
+  listRootsByIds(rootIds: string[]): Promise<AssignedRoot[]>;
   putNode(node: MediaNode): Promise<void>;
   getNode(id: string): Promise<MediaNode | null>;
   getNodeByProviderId(sourceId: string, providerNodeId: string): Promise<MediaNode | null>;
   listChildNodes(parentNodeId: string | null, sourceIds: string[]): Promise<MediaNode[]>;
+  listNodesForSource(sourceId: string): Promise<MediaNode[]>;
+  commitIndexBatch(input: IndexBatchCommitInput): Promise<number>;
+  reconcileSourceGeneration(input: {
+    sourceId: string;
+    generation: string;
+    cursor: string | null;
+    limit: number;
+    now: Date;
+    leaseOwner: string;
+  }): Promise<{ nodes: MediaNode[]; nextCursor: string | null }>;
+  leaseDueSources(input: DueSourceLeaseInput): Promise<Source[]>;
+  completeSyncRun(input: { sourceId: string; leaseOwner: string; completedAt: Date; nextSyncAt: Date }): Promise<void>;
+  markSyncRunStarted(input: { sourceId: string; leaseOwner: string; runId: string; startedAt: Date }): Promise<boolean>;
   putWatchHistory(history: WatchHistory): Promise<void>;
   getWatchHistory(deviceId: string, nodeId: string): Promise<WatchHistory | null>;
+  listWatchHistory(input: ListWatchHistoryInput): Promise<WatchHistory[]>;
 }
 
 const COLLECTIONS = {
@@ -215,6 +246,10 @@ export class FirestoreRepository implements AppRepository {
   putRoot(value: AssignedRoot) { return this.put(COLLECTIONS.roots, value); }
   getRoot(id: string) { return this.getById<AssignedRoot>(COLLECTIONS.roots, id); }
   listRootsForSource(sourceId: string) { return this.getMany<AssignedRoot>(this.query(COLLECTIONS.roots, "sourceId", sourceId)); }
+  async listRootsByIds(rootIds: string[]) {
+    const roots = await Promise.all(rootIds.map(id => this.getRoot(id)));
+    return roots.filter((root): root is AssignedRoot => root !== null);
+  }
   putNode(value: MediaNode) { return this.put(COLLECTIONS.nodes, value); }
   getNode(id: string) { return this.getById<MediaNode>(COLLECTIONS.nodes, id); }
   getNodeByProviderId(sourceId: string, providerNodeId: string) {
@@ -224,14 +259,192 @@ export class FirestoreRepository implements AppRepository {
   getWatchHistory(deviceId: string, nodeId: string) {
     return this.getOne<WatchHistory>(this.firestore.collection(COLLECTIONS.watchHistory).where("deviceId", "==", deviceId).where("nodeId", "==", nodeId));
   }
+  listWatchHistory(input: ListWatchHistoryInput) {
+    return this.getMany<WatchHistory>(
+      this.firestore.collection(COLLECTIONS.watchHistory)
+        .where("householdId", "==", input.householdId)
+        .where("deviceId", "==", input.deviceId)
+    );
+  }
 
   async listChildNodes(parentNodeId: string | null, sourceIds: string[]): Promise<MediaNode[]> {
-    if (sourceIds.length === 0) return [];
-    let query: Query = this.firestore.collection(COLLECTIONS.nodes).where("parentNodeId", "==", parentNodeId);
-    query = sourceIds.length === 1
-      ? query.where("sourceId", "==", sourceIds[0])
-      : query.where("sourceId", "in", sourceIds);
-    return this.getMany<MediaNode>(query);
+    const chunks: string[][] = [];
+    for (let index = 0; index < sourceIds.length; index += 10) {
+      chunks.push(sourceIds.slice(index, index + 10));
+    }
+    const pages = await Promise.all(chunks.map(chunk => {
+      let query: Query = this.firestore.collection(COLLECTIONS.nodes).where("parentNodeId", "==", parentNodeId);
+      query = chunk.length === 1
+        ? query.where("sourceId", "==", chunk[0])
+        : query.where("sourceId", "in", chunk);
+      return this.getMany<MediaNode>(query);
+    }));
+    return pages.flat();
+  }
+
+  listNodesForSource(sourceId: string) {
+    return this.getMany<MediaNode>(this.query(COLLECTIONS.nodes, "sourceId", sourceId));
+  }
+
+  async commitIndexBatch(input: IndexBatchCommitInput): Promise<number> {
+    const sourceRef = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+    const existingNodes = await this.listNodesForSource(input.sourceId);
+    const byId = new Map(existingNodes.map(node => [node.id, node]));
+    for (const node of input.nodes) byId.set(node.id, node);
+    for (const id of input.removedNodeIds) {
+      const node = byId.get(id);
+      if (node) byId.set(id, { ...node, available: false, indexedAt: input.completedAt ?? node.indexedAt });
+    }
+    recomputeAffectedFolders(byId, input.affectedAncestorNodeIds);
+    const changedIds = new Set([
+      ...input.nodes.map(node => node.id),
+      ...input.removedNodeIds,
+      ...input.affectedAncestorNodeIds
+    ]);
+    const writes = [...changedIds]
+      .map(id => byId.get(id))
+      .filter((node): node is MediaNode => Boolean(node));
+    if (writes.length + 1 > 450) {
+      throw new Error("Index batch exceeds Firestore write bounds");
+    }
+    await this.firestore.runTransaction(async transaction => {
+      const snapshot = await transaction.get(sourceRef);
+      const current = snapshot.exists
+        ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data())
+        : null;
+      validateIndexCommit(current, input);
+      const liveNodes = new Map(existingNodes.map(node => [node.id, node]));
+      for (const node of input.nodes) liveNodes.set(node.id, node);
+      for (const id of input.removedNodeIds) {
+        const node = liveNodes.get(id);
+        if (node) liveNodes.set(id, { ...node, available: false });
+      }
+      recomputeAffectedFolders(liveNodes, input.affectedAncestorNodeIds);
+      for (const node of writes) {
+        transaction.set(
+          this.firestore.collection(COLLECTIONS.nodes).doc(node.id),
+          liveNodes.get(node.id) ?? node
+        );
+      }
+      transaction.update(sourceRef, sourcePatch(input));
+    });
+    return byId.size;
+  }
+
+  async reconcileSourceGeneration(input: {
+    sourceId: string; generation: string; cursor: string | null; limit: number; now: Date; leaseOwner: string;
+  }) {
+    const nodes = (await this.listNodesForSource(input.sourceId))
+      .filter(node => node.available && node.syncGeneration !== input.generation)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const start = input.cursor
+      ? Math.max(0, nodes.findIndex(node => node.id === input.cursor) + 1)
+      : 0;
+    const page = nodes.slice(start, start + input.limit);
+    const nextCursor = start + page.length < nodes.length ? page.at(-1)?.id ?? null : null;
+    const sourceRef = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+    await this.firestore.runTransaction(async transaction => {
+      const snapshot = await transaction.get(sourceRef);
+      const source = snapshot.exists
+        ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data())
+        : null;
+      if (
+        !source ||
+        source.leaseOwner !== input.leaseOwner ||
+        !source.leaseExpiresAt ||
+        source.leaseExpiresAt <= input.now ||
+        source.crawlCheckpoint?.generation !== input.generation
+      ) throw new RepositoryError("SYNC_LEASE_STALE", "Sync lease is stale");
+      page.forEach(node => transaction.update(this.firestore.collection(COLLECTIONS.nodes).doc(node.id), {
+        available: false,
+        indexedAt: input.now
+      }));
+      const affectedIds = new Set(page.flatMap(node => [
+        ...node.ancestorNodeIds,
+        ...(node.parentNodeId ? [node.parentNodeId] : [])
+      ]));
+      const remaining = nodes.map(node =>
+        page.some(stale => stale.id === node.id)
+          ? { ...node, available: false }
+          : node
+      );
+      for (const id of affectedIds) {
+        const folder = remaining.find(node => node.id === id);
+        if (!folder || folder.kind !== "folder") continue;
+        const descendants = remaining.filter(node =>
+          node.id !== id &&
+          (node.parentNodeId === id || node.ancestorNodeIds.includes(id))
+        );
+        transaction.set(
+          this.firestore.collection(COLLECTIONS.nodes).doc(id),
+          recomputeFolderMetadata(folder, descendants)
+        );
+      }
+      transaction.update(sourceRef, {
+        leaseExpiresAt: new Date(input.now.getTime() + 10 * 60 * 1000),
+        crawlCheckpoint: {
+          mode: "reconcile",
+          providerPageCursor: null,
+          processedNodeCount: start + page.length,
+          generation: input.generation,
+          reconciliationCursor: nextCursor
+        }
+      });
+    });
+    return { nodes: page, nextCursor };
+  }
+
+  async leaseDueSources(input: DueSourceLeaseInput): Promise<Source[]> {
+    const candidates = (await this.listSources(input.householdId))
+      .filter(source => source.status !== "disabled" && source.status !== "reauth-required")
+      .filter(source => !source.nextSyncAt || source.nextSyncAt <= input.now)
+      .sort((a, b) => (a.nextSyncAt?.getTime() ?? 0) - (b.nextSyncAt?.getTime() ?? 0))
+      .slice(0, Math.max(0, input.limit));
+    const leased: Source[] = [];
+    for (const source of candidates) {
+      const owner = `${input.owner}:${source.id}`;
+      if (await this.acquireSyncLease({ sourceId: source.id, owner, now: input.now, expiresAt: input.expiresAt })) {
+        leased.push({ ...source, leaseOwner: owner, leaseExpiresAt: input.expiresAt });
+      }
+    }
+    return leased;
+  }
+
+  async completeSyncRun(input: { sourceId: string; leaseOwner: string; completedAt: Date; nextSyncAt: Date }): Promise<void> {
+    const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+    await this.firestore.runTransaction(async transaction => {
+      const snapshot = await transaction.get(ref);
+      const source = snapshot.exists ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data()) : null;
+      if (
+        !source ||
+        source.leaseOwner !== input.leaseOwner ||
+        !source.leaseExpiresAt ||
+        source.leaseExpiresAt <= input.completedAt
+      ) {
+        throw new RepositoryError("SYNC_LEASE_STALE", "Sync lease is stale");
+      }
+      transaction.update(ref, {
+        status: "healthy",
+        crawlCheckpoint: null,
+        activeWorkflowRunId: null,
+        lastSyncCompletedAt: input.completedAt,
+        nextSyncAt: input.nextSyncAt,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        lastSyncErrorCode: null
+      });
+    });
+  }
+
+  async markSyncRunStarted(input: { sourceId: string; leaseOwner: string; runId: string; startedAt: Date }): Promise<boolean> {
+    const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+    return this.firestore.runTransaction(async transaction => {
+      const snapshot = await transaction.get(ref);
+      const source = snapshot.exists ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data()) : null;
+      if (!source || source.leaseOwner !== input.leaseOwner || !source.leaseExpiresAt || source.leaseExpiresAt <= input.startedAt) return false;
+      transaction.update(ref, { status: "syncing", activeWorkflowRunId: input.runId, lastSyncStartedAt: input.startedAt, lastSyncErrorCode: null });
+      return true;
+    });
   }
 
   async approveDeviceRequest(input: ApproveDeviceRequestInput): Promise<void> {
@@ -714,4 +927,53 @@ export function decodeFirestoreDocument<T>(
   data: Record<string, unknown> | undefined
 ): T {
   return decodeFirestoreValue({ ...data, id }) as T;
+}
+
+function sourcePatch(input: IndexBatchCommitInput): Partial<Source> {
+  return {
+    crawlCheckpoint: input.checkpoint,
+    syncGeneration: input.generation,
+    ...(input.deltaCursor === undefined ? {} : { deltaCursor: input.deltaCursor }),
+    status: input.completedAt ? "healthy" : "syncing",
+    lastSyncCompletedAt: input.completedAt,
+    lastSyncErrorCode: null,
+    ...(input.leaseExpiresAt ? { leaseExpiresAt: input.leaseExpiresAt } : {})
+  };
+}
+
+function validateIndexCommit(
+  source: Source | null,
+  input: IndexBatchCommitInput
+): void {
+  if (!source) throw new Error("Source not found");
+  if (
+    input.expectedLeaseOwner &&
+    (source.leaseOwner !== input.expectedLeaseOwner ||
+      !source.leaseExpiresAt ||
+      source.leaseExpiresAt <= input.committedAt)
+  ) {
+    throw new RepositoryError("SYNC_LEASE_STALE", "Sync lease is stale");
+  }
+  if (
+    JSON.stringify(source.crawlCheckpoint) !==
+    JSON.stringify(input.expectedPreviousCheckpoint ?? null)
+  ) {
+    throw new RepositoryError("SYNC_CHECKPOINT_STALE", "Sync checkpoint is stale");
+  }
+}
+
+function recomputeAffectedFolders(
+  nodes: Map<string, MediaNode>,
+  affectedIds: string[]
+): void {
+  const all = [...nodes.values()];
+  for (const id of new Set(affectedIds)) {
+    const folder = nodes.get(id);
+    if (!folder || folder.kind !== "folder") continue;
+    const descendants = all.filter(node =>
+      node.id !== folder.id &&
+      (node.parentNodeId === folder.id || node.ancestorNodeIds.includes(folder.id))
+    );
+    nodes.set(id, recomputeFolderMetadata(folder, descendants));
+  }
 }

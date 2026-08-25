@@ -1,11 +1,15 @@
 import type {
   ApproveDeviceRequestBody,
+  Device,
+  Household,
   UpdateDeviceBody
 } from "@cloudframe/shared";
 import {
   encodeBootstrapResponse,
   encodeDeviceDto,
-  encodeDeviceRequestDto
+  encodeDeviceRequestDto,
+  encodeMediaNodeDto,
+  encodeWatchHistoryDto
 } from "@cloudframe/shared";
 import { clearSessionCookie, createSessionCookie } from "../auth/cookies";
 import { verifyPassphrase } from "../auth/passphrase";
@@ -21,6 +25,9 @@ import {
 } from "../services/admin-auth";
 import { ensureHousehold } from "../services/bootstrap";
 import { authenticateDevice } from "../services/device-auth";
+import { BrowseServiceError } from "../services/browse";
+import { IndexingServiceError } from "../services/indexing";
+import { MediaUrlServiceError } from "../services/media-urls";
 import {
   approveRequest,
   requestFromToken,
@@ -58,6 +65,20 @@ export interface ApiAppDependencies {
   createId?: (prefix: string) => string;
   issueToken?: () => OpaqueToken;
   requestSubject?: RequestSubjectResolver;
+  browse?: {
+    home(device: Device, household: Household): Promise<unknown>;
+    folder(device: Device, household: Household, nodeId: string, page: { cursor: string | null; limit: number }): Promise<unknown>;
+    history(device: Device, household: Household): Promise<unknown>;
+    saveHistory(device: Device, household: Household, nodeId: string, value: { positionSeconds: number; durationSeconds: number; completed: boolean }): Promise<unknown>;
+  };
+  mediaUrls?: {
+    media(device: Device, household: Household, nodeId: string): Promise<{ url: string; expiresAt: Date; revision: string | null; responseHeaders: HeadersInit }>;
+    thumbnails(device: Device, household: Household, nodeIds: string[], maxDimension: number): Promise<{ items: unknown[]; responseHeaders: HeadersInit }>;
+  };
+  indexing?: {
+    startDueSources(authorization: string | null, limit?: number): Promise<unknown>;
+    startSource(sourceId: string, mode: "initial" | "delta" | "reconcile"): Promise<unknown>;
+  };
 }
 
 const DEFAULT_RATE_LIMITS: Record<string, RateLimitPolicy> = {
@@ -65,7 +86,9 @@ const DEFAULT_RATE_LIMITS: Record<string, RateLimitPolicy> = {
   "device-request-create": { limit: 6, windowSeconds: 60 * 60 },
   "device-request-status": { limit: 120, windowSeconds: 10 * 60 },
   "admin-mutation": { limit: 120, windowSeconds: 60 },
-  "tv-mutation": { limit: 120, windowSeconds: 60 }
+  "tv-mutation": { limit: 120, windowSeconds: 60 },
+  "url-vending": { limit: 120, windowSeconds: 60 },
+  "manual-sync": { limit: 6, windowSeconds: 60 }
 };
 
 export function createApiApp(input: ApiAppDependencies) {
@@ -81,9 +104,7 @@ export function createApiApp(input: ApiAppDependencies) {
     try {
       return await routeRequest(request, dependencies);
     } catch (error) {
-      const safe = error instanceof HttpError
-        ? error
-        : new HttpError(500, "INTERNAL_ERROR", "An unexpected error occurred.");
+      const safe = normalizeHttpError(error);
       const headers = new Headers(safe.responseHeaders);
       if (safe.retryAfterSeconds !== undefined) {
         headers.set("retry-after", String(safe.retryAfterSeconds));
@@ -153,7 +174,137 @@ async function routeRequest(
     requireMethod(request, "POST");
     return heartbeat(request, dependencies, now);
   }
+  if (path === "/api/tv/home") {
+    requireMethod(request, "GET");
+    return tvHome(request, dependencies, now);
+  }
+  const folderMatch = /^\/api\/tv\/folders\/([^/]+)$/.exec(path);
+  if (folderMatch) {
+    requireMethod(request, "GET");
+    return tvFolder(request, dependencies, now, decodeURIComponent(folderMatch[1]!));
+  }
+  if (path === "/api/tv/thumbnail-urls") {
+    requireMethod(request, "POST");
+    return thumbnailUrls(request, dependencies, now);
+  }
+  if (path === "/api/tv/media-url") {
+    requireMethod(request, "POST");
+    return mediaUrl(request, dependencies, now);
+  }
+  if (path === "/api/tv/watch-history") {
+    requireMethod(request, "GET");
+    return watchHistory(request, dependencies, now);
+  }
+  const historyMatch = /^\/api\/tv\/watch-history\/([^/]+)$/.exec(path);
+  if (historyMatch) {
+    requireMethod(request, "PUT");
+    return saveWatchHistory(request, dependencies, now, decodeURIComponent(historyMatch[1]!));
+  }
+  if (path === "/api/internal/sync-due-sources") {
+    requireMethod(request, "GET");
+    if (!dependencies.indexing) throw unavailableService();
+    return ok(await dependencies.indexing.startDueSources(request.headers.get("authorization")));
+  }
+  const sourceSyncMatch = /^\/api\/admin\/sources\/([^/]+)\/sync$/.exec(path);
+  if (sourceSyncMatch) {
+    requireMethod(request, "POST");
+    return manualSourceSync(request, dependencies, now, decodeURIComponent(sourceSyncMatch[1]!));
+  }
   throw new HttpError(404, "NOT_FOUND", "The requested endpoint does not exist.");
+}
+
+async function manualSourceSync(request: Request, dependencies: ApiAppDependencies, now: Date, sourceId: string) {
+  if (!dependencies.indexing) throw unavailableService();
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
+  await enforceRateLimit(dependencies, "manual-sync", authenticated.session.id, now);
+  return ok(await dependencies.indexing.startSource(sourceId, "delta"), {
+    headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken)
+  });
+}
+
+async function tvHome(request: Request, dependencies: ApiAppDependencies, now: Date) {
+  if (!dependencies.browse) throw unavailableService();
+  const authenticated = await authenticateDevice(request, dependencies, now);
+  return ok(await dependencies.browse.home(authenticated.device, authenticated.household), { headers: authenticated.responseHeaders });
+}
+
+async function tvFolder(request: Request, dependencies: ApiAppDependencies, now: Date, nodeId: string) {
+  if (!dependencies.browse) throw unavailableService();
+  const authenticated = await authenticateDevice(request, dependencies, now);
+  const url = new URL(request.url);
+  const limit = Number(url.searchParams.get("limit") ?? "50");
+  const result = await dependencies.browse.folder(authenticated.device, authenticated.household, nodeId, { cursor: url.searchParams.get("cursor"), limit });
+  const domain = result as { parent: import("@cloudframe/shared").MediaNode; breadcrumbs: import("@cloudframe/shared").MediaNode[]; children: import("@cloudframe/shared").MediaNode[]; nextCursor: string | null };
+  return ok({ parent: encodeMediaNodeDto(domain.parent), breadcrumbs: domain.breadcrumbs.map(encodeMediaNodeDto), children: domain.children.map(encodeMediaNodeDto), nextCursor: domain.nextCursor }, { headers: authenticated.responseHeaders });
+}
+
+async function thumbnailUrls(request: Request, dependencies: ApiAppDependencies, now: Date) {
+  if (!dependencies.mediaUrls) throw unavailableService();
+  const authenticated = await authenticateDevice(request, dependencies, now);
+  await enforceRateLimit(dependencies, "url-vending", authenticated.session.id, now);
+  const body = await readJsonObject(request);
+  if (!Array.isArray(body.nodeIds) || !body.nodeIds.every(value => typeof value === "string")) {
+    throw new HttpError(400, "INVALID_THUMBNAIL_REQUEST", "Thumbnail request is invalid.");
+  }
+  const maxDimension = body.maxDimension ?? 720;
+  if (typeof maxDimension !== "number" || !Number.isInteger(maxDimension)) {
+    throw new HttpError(400, "INVALID_THUMBNAIL_REQUEST", "Thumbnail request is invalid.");
+  }
+  const result = await dependencies.mediaUrls.thumbnails(authenticated.device, authenticated.household, body.nodeIds as string[], maxDimension);
+  return ok({ items: serializeTemporaryItems(result.items) }, { headers: mergeHeaders(authenticated.responseHeaders, result.responseHeaders) });
+}
+
+async function mediaUrl(request: Request, dependencies: ApiAppDependencies, now: Date) {
+  if (!dependencies.mediaUrls) throw unavailableService();
+  const authenticated = await authenticateDevice(request, dependencies, now);
+  await enforceRateLimit(dependencies, "url-vending", authenticated.session.id, now);
+  const body = await readJsonObject(request);
+  if (typeof body.nodeId !== "string") throw new HttpError(400, "INVALID_MEDIA_REQUEST", "Media request is invalid.");
+  const result = await dependencies.mediaUrls.media(authenticated.device, authenticated.household, body.nodeId);
+  return ok({ url: result.url, expiresAt: result.expiresAt.toISOString(), revision: result.revision }, { headers: mergeHeaders(authenticated.responseHeaders, result.responseHeaders) });
+}
+
+async function watchHistory(request: Request, dependencies: ApiAppDependencies, now: Date) {
+  if (!dependencies.browse) throw unavailableService();
+  const authenticated = await authenticateDevice(request, dependencies, now);
+  const history = await dependencies.browse.history(authenticated.device, authenticated.household) as import("@cloudframe/shared").WatchHistory[];
+  return ok({ history: history.map(encodeWatchHistoryDto) }, { headers: authenticated.responseHeaders });
+}
+
+async function saveWatchHistory(request: Request, dependencies: ApiAppDependencies, now: Date, nodeId: string) {
+  if (!dependencies.browse) throw unavailableService();
+  const authenticated = await authenticateDevice(request, dependencies, now);
+  await enforceRateLimit(dependencies, "tv-mutation", authenticated.session.id, now);
+  const body = await readJsonObject(request);
+  if (
+    typeof body.positionSeconds !== "number" ||
+    !Number.isFinite(body.positionSeconds) ||
+    typeof body.durationSeconds !== "number" ||
+    !Number.isFinite(body.durationSeconds) ||
+    typeof body.completed !== "boolean"
+  ) {
+    throw new HttpError(400, "INVALID_HISTORY", "Watch history is invalid.");
+  }
+  const history = await dependencies.browse.saveHistory(authenticated.device, authenticated.household, nodeId, {
+    positionSeconds: body.positionSeconds,
+    durationSeconds: body.durationSeconds,
+    completed: body.completed
+  }) as import("@cloudframe/shared").WatchHistory;
+  return ok({ history: encodeWatchHistoryDto(history) }, { headers: authenticated.responseHeaders });
+}
+
+function unavailableService() { return new HttpError(503, "SERVICE_UNAVAILABLE", "The service is unavailable."); }
+
+function mergeHeaders(first: HeadersInit, second: HeadersInit): Headers {
+  const result = new Headers(first); new Headers(second).forEach((value, key) => result.set(key, value)); return result;
+}
+
+function serializeTemporaryItems(items: unknown[]): unknown[] {
+  return items.map(item => {
+    if (!item || typeof item !== "object" || !("expiresAt" in item) || !(item.expiresAt instanceof Date)) return item;
+    return { ...item, expiresAt: item.expiresAt.toISOString() };
+  });
 }
 
 async function bootstrap(
@@ -590,4 +741,33 @@ function requireOneMethod(request: Request, methods: string[]): void {
       { allow: methods.join(", ") }
     );
   }
+}
+
+function normalizeHttpError(error: unknown): HttpError {
+  if (error instanceof HttpError) return error;
+  if (error instanceof BrowseServiceError) {
+    const status = error.code === "DEVICE_UNAUTHORIZED"
+      ? 401
+      : error.code === "INVALID_CURSOR" ||
+          error.code === "INVALID_PAGE_SIZE" ||
+          error.code === "INVALID_HISTORY"
+        ? 400
+        : 404;
+    return new HttpError(status, error.code, error.message);
+  }
+  if (error instanceof MediaUrlServiceError) {
+    return new HttpError(
+      error.code === "THUMBNAIL_BATCH_TOO_LARGE" ? 400 : 404,
+      error.code,
+      error.message
+    );
+  }
+  if (error instanceof IndexingServiceError) {
+    return new HttpError(
+      error.code === "CRON_UNAUTHORIZED" ? 401 : error.code === "INDEXING_UNAVAILABLE" ? 503 : 404,
+      error.code,
+      error.message
+    );
+  }
+  return new HttpError(500, "INTERNAL_ERROR", "An unexpected error occurred.");
 }
