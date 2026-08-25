@@ -9,6 +9,7 @@ import { hashOpaqueToken } from "../auth/tokens";
 import type { ApiAppDependencies } from "../http/app";
 import { HttpError } from "../http/errors";
 import { SESSION_LIFETIME_MS } from "./admin-auth";
+import { RepositoryError } from "../firestore/repository";
 
 export const DEVICE_REQUEST_LIFETIME_MS = 30 * 60 * 1000;
 
@@ -112,8 +113,28 @@ export async function approveRequest(
       rootIds,
       approvedAt: now
     });
-  } catch {
-    throw new HttpError(409, "DEVICE_REQUEST_RESOLVED", "Device request is already resolved.");
+  } catch (error) {
+    if (error instanceof RepositoryError) {
+      if (error.code === "ROOT_ASSIGNMENT_INVALID") {
+        throw new HttpError(
+          409,
+          "INVALID_ROOT_ASSIGNMENT",
+          "The root assignment changed before approval completed."
+        );
+      }
+      if (
+        error.code === "DEVICE_REQUEST_NOT_FOUND" ||
+        error.code === "DEVICE_REQUEST_NOT_PENDING" ||
+        error.code === "DEVICE_APPROVAL_CONFLICT"
+      ) {
+        throw new HttpError(
+          409,
+          "DEVICE_REQUEST_RESOLVED",
+          "Device request is already resolved."
+        );
+      }
+    }
+    throw error;
   }
   return device;
 }

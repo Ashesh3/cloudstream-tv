@@ -90,6 +90,72 @@ describe("device enrollment policy", () => {
     expect(JSON.stringify(body)).not.toContain("requestSecretHash");
   });
 
+  it("clears an invalid device cookie when bootstrap falls back to unenrolled", async () => {
+    const { app } = await createTestApi();
+
+    const response = await app(
+      jsonRequest("/api/bootstrap", "GET", undefined, {
+        cookie: cookieHeader(["device_session", "invalid-device-token"])
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: { enrollment: { state: "unenrolled" } }
+    });
+    expect(
+      setCookies(response).some(value =>
+        /device_session=;.*Max-Age=0/.test(value)
+      )
+    ).toBe(true);
+  });
+
+  it("preserves device-cookie clearing when bootstrap falls back to request status", async () => {
+    const { app } = await createTestApi();
+    const created = await app(
+      jsonRequest("/api/device-requests", "POST", { name: "Living Room" })
+    );
+    const requestRaw = cookieValue(created, "device_request")!;
+
+    const response = await app(
+      jsonRequest("/api/bootstrap", "GET", undefined, {
+        cookie: cookieHeader(
+          ["device_session", "invalid-device-token"],
+          ["device_request", requestRaw]
+        )
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: { enrollment: { state: "pending" } }
+    });
+    expect(
+      setCookies(response).some(value =>
+        /device_session=;.*Max-Age=0/.test(value)
+      )
+    ).toBe(true);
+  });
+
+  it("does not hide unexpected device-auth repository failures during bootstrap", async () => {
+    const { app, repository } = await createTestApi();
+    repository.authenticateDeviceSession = async () => {
+      throw new Error("firestore unavailable");
+    };
+
+    const response = await app(
+      jsonRequest("/api/bootstrap", "GET", undefined, {
+        cookie: cookieHeader(["device_session", "device-token"])
+      })
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      code: "INTERNAL_ERROR",
+      message: "An unexpected error occurred."
+    });
+  });
+
   it("atomically approves and promotes the request secret into a permanent device cookie", async () => {
     const { app, repository, householdId, origin } = await createTestApi();
     const root = makeRoot(householdId);
@@ -239,6 +305,63 @@ describe("device enrollment policy", () => {
     expect(setCookies(status).some(value => /device_request=;.*Max-Age=0/.test(value))).toBe(true);
   });
 
+  it("distinguishes missing denial requests from unexpected repository failures", async () => {
+    const missing = await createTestApi();
+    const missingAdmin = await login(missing.app);
+    const missingResponse = await missing.app(
+      jsonRequest(
+        "/api/admin/requests/missing/deny",
+        "POST",
+        {},
+        adminMutationHeaders(missing.origin, missingAdmin)
+      )
+    );
+    expect(missingResponse.status).toBe(404);
+
+    const failed = await createTestApi();
+    const failedAdmin = await login(failed.app);
+    failed.repository.denyDeviceRequest = async () => {
+      throw new Error("firestore unavailable");
+    };
+    const failedResponse = await failed.app(
+      jsonRequest(
+        "/api/admin/requests/request-1/deny",
+        "POST",
+        {},
+        adminMutationHeaders(failed.origin, failedAdmin)
+      )
+    );
+    expect(failedResponse.status).toBe(500);
+    await expect(failedResponse.json()).resolves.toMatchObject({
+      code: "INTERNAL_ERROR"
+    });
+  });
+
+  it("does not disguise an unexpected approval repository failure as a conflict", async () => {
+    const { app, repository, householdId, origin } = await createTestApi();
+    const root = makeRoot(householdId);
+    await repository.putRoot(root);
+    const request = await createPendingRequest(app, repository, householdId);
+    const admin = await login(app);
+    repository.approveDeviceRequestWithRoots = async () => {
+      throw new Error("firestore unavailable");
+    };
+
+    const response = await app(
+      jsonRequest(
+        `/api/admin/requests/${request.id}/approve`,
+        "POST",
+        { name: "TV", rootIds: [root.id] },
+        adminMutationHeaders(origin, admin)
+      )
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "INTERNAL_ERROR"
+    });
+  });
+
   it("expires pending requests at the 30-minute boundary", async () => {
     const base = new Date("2026-08-26T12:00:00.000Z");
     const first = await createTestApi({ now: base });
@@ -305,6 +428,38 @@ describe("device enrollment policy", () => {
       code: "DEVICE_UNAUTHORIZED"
     });
     expect(setCookies(heartbeat).some(value => /device_session=;.*Max-Age=0/.test(value))).toBe(true);
+  });
+
+  it("maps only a known missing device to 404 during revocation", async () => {
+    const missing = await createTestApi();
+    const missingAdmin = await login(missing.app);
+    const missingResponse = await missing.app(
+      jsonRequest(
+        "/api/admin/devices/missing",
+        "DELETE",
+        {},
+        adminMutationHeaders(missing.origin, missingAdmin)
+      )
+    );
+    expect(missingResponse.status).toBe(404);
+
+    const failed = await createTestApi();
+    const failedAdmin = await login(failed.app);
+    failed.repository.revokeDevice = async () => {
+      throw new Error("firestore unavailable");
+    };
+    const failedResponse = await failed.app(
+      jsonRequest(
+        "/api/admin/devices/device-1",
+        "DELETE",
+        {},
+        adminMutationHeaders(failed.origin, failedAdmin)
+      )
+    );
+    expect(failedResponse.status).toBe(500);
+    await expect(failedResponse.json()).resolves.toMatchObject({
+      code: "INTERNAL_ERROR"
+    });
   });
 
   it("renews a valid device session only inside the final 30 days", async () => {

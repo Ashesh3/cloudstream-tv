@@ -222,6 +222,86 @@ describe("HTTP bootstrap and admin authentication", () => {
     });
   });
 
+  it("does not let spoofed x-forwarded-for values evade a fixed client identity", async () => {
+    const { app } = await createTestApi({
+      rateLimits: { "admin-login": { limit: 1, windowSeconds: 60 } },
+      requestSubject: () => "trusted-platform-client"
+    });
+
+    const first = await app(
+      jsonRequest(
+        "/api/admin/login",
+        "POST",
+        { passphrase: "wrong" },
+        { "x-forwarded-for": "198.51.100.10" }
+      )
+    );
+    const second = await app(
+      jsonRequest(
+        "/api/admin/login",
+        "POST",
+        { passphrase: "wrong" },
+        { "x-forwarded-for": "203.0.113.99" }
+      )
+    );
+
+    expect(first.status).toBe(401);
+    expect(second.status).toBe(429);
+  });
+
+  it("distinguishes platform-owned Vercel client identities", async () => {
+    const { app } = await createTestApi({
+      rateLimits: { "admin-login": { limit: 1, windowSeconds: 60 } }
+    });
+
+    const first = await app(
+      jsonRequest(
+        "/api/admin/login",
+        "POST",
+        { passphrase: "wrong" },
+        { "x-vercel-forwarded-for": "198.51.100.10, 10.0.0.1" }
+      )
+    );
+    const second = await app(
+      jsonRequest(
+        "/api/admin/login",
+        "POST",
+        { passphrase: "wrong" },
+        { "x-vercel-forwarded-for": "203.0.113.99" }
+      )
+    );
+
+    expect(first.status).toBe(401);
+    expect(second.status).toBe(401);
+  });
+
+  it("supports an injected local client-identity boundary", async () => {
+    const { app } = await createTestApi({
+      rateLimits: { "admin-login": { limit: 1, windowSeconds: 60 } },
+      requestSubject: request => request.headers.get("x-test-client") ?? "unknown"
+    });
+
+    const first = await app(
+      jsonRequest(
+        "/api/admin/login",
+        "POST",
+        { passphrase: "wrong" },
+        { "x-test-client": "client-a" }
+      )
+    );
+    const second = await app(
+      jsonRequest(
+        "/api/admin/login",
+        "POST",
+        { passphrase: "wrong" },
+        { "x-test-client": "client-b" }
+      )
+    );
+
+    expect(first.status).toBe(401);
+    expect(second.status).toBe(401);
+  });
+
   it("uses consistent safe errors for unknown endpoints and wrong methods", async () => {
     const { app } = await createTestApi();
     const missing = await app(jsonRequest("/api/does-not-exist", "GET"));

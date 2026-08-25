@@ -69,6 +69,20 @@ export interface UpdateDeviceInput {
   >;
 }
 
+export type RepositoryErrorCode =
+  | "DEVICE_REQUEST_NOT_FOUND"
+  | "DEVICE_REQUEST_NOT_PENDING"
+  | "DEVICE_APPROVAL_CONFLICT"
+  | "ROOT_ASSIGNMENT_INVALID"
+  | "DEVICE_NOT_FOUND";
+
+export class RepositoryError extends Error {
+  constructor(readonly code: RepositoryErrorCode, message: string) {
+    super(message);
+    this.name = "RepositoryError";
+  }
+}
+
 export interface AppRepository {
   getHousehold(id: string): Promise<Household | null>;
   putHousehold(household: Household): Promise<void>;
@@ -218,11 +232,34 @@ export class FirestoreRepository implements AppRepository {
             requestSnapshot.data()
           )
         : undefined;
-      if (!request || request.status !== "pending") throw new Error("Device request is not pending");
+      if (!request) {
+        throw new RepositoryError(
+          "DEVICE_REQUEST_NOT_FOUND",
+          "Device request not found"
+        );
+      }
+      if (request.status !== "pending") {
+        throw new RepositoryError(
+          "DEVICE_REQUEST_NOT_PENDING",
+          "Device request is not pending"
+        );
+      }
       validateDeviceApproval(request, input);
-      if (deviceSnapshot.exists) throw new Error("Device already exists");
-      if (sessionSnapshot.exists) throw new Error("Device session already exists");
-      if (tokenClaimSnapshot.exists) throw new Error("Device session token already exists");
+      if (deviceSnapshot.exists) {
+        throw new RepositoryError("DEVICE_APPROVAL_CONFLICT", "Device already exists");
+      }
+      if (sessionSnapshot.exists) {
+        throw new RepositoryError(
+          "DEVICE_APPROVAL_CONFLICT",
+          "Device session already exists"
+        );
+      }
+      if (tokenClaimSnapshot.exists) {
+        throw new RepositoryError(
+          "DEVICE_APPROVAL_CONFLICT",
+          "Device session token already exists"
+        );
+      }
       if (validateRoots) {
         validateRootSnapshots(
           rootSnapshots,
@@ -262,9 +299,13 @@ export class FirestoreRepository implements AppRepository {
         transaction.get(deviceReference),
         ...rootReferences.map(reference => transaction.get(reference))
       ]);
-      if (!deviceSnapshot.exists) throw new Error("Device not found");
+      if (!deviceSnapshot.exists) {
+        throw new RepositoryError("DEVICE_NOT_FOUND", "Device not found");
+      }
       const device = decodeFirestoreDocument<Device>(deviceSnapshot.id, deviceSnapshot.data());
-      if (device.householdId !== input.householdId) throw new Error("Device not found");
+      if (device.householdId !== input.householdId) {
+        throw new RepositoryError("DEVICE_NOT_FOUND", "Device not found");
+      }
       validateRootSnapshots(rootSnapshots, input.householdId, input.rootIds);
       const updated: Device = {
         ...device,
@@ -387,7 +428,9 @@ export class FirestoreRepository implements AppRepository {
         transaction.get(deviceRef),
         transaction.get(this.firestore.collection(COLLECTIONS.deviceSessions).where("deviceId", "==", deviceId))
       ]);
-      if (!deviceSnapshot.exists) throw new Error("Device not found");
+      if (!deviceSnapshot.exists) {
+        throw new RepositoryError("DEVICE_NOT_FOUND", "Device not found");
+      }
       transaction.update(deviceRef, { enabled: false, revokedAt });
       sessionsSnapshot.docs.forEach(snapshot => transaction.update(snapshot.ref, { revokedAt }));
     });
@@ -454,10 +497,18 @@ export class FirestoreRepository implements AppRepository {
     return this.firestore.runTransaction(async transaction => {
       const reference = this.firestore.collection(COLLECTIONS.deviceRequests).doc(input.requestId);
       const snapshot = await transaction.get(reference);
-      if (!snapshot.exists) throw new Error("Device request not found");
+      if (!snapshot.exists) {
+        throw new RepositoryError(
+          "DEVICE_REQUEST_NOT_FOUND",
+          "Device request not found"
+        );
+      }
       const request = decodeFirestoreDocument<DeviceRequest>(snapshot.id, snapshot.data());
       if (request.householdId !== input.householdId || request.status !== "pending") {
-        throw new Error("Device request is not pending");
+        throw new RepositoryError(
+          "DEVICE_REQUEST_NOT_PENDING",
+          "Device request is not pending"
+        );
       }
       const updated: DeviceRequest = {
         ...request,
@@ -529,13 +580,24 @@ function validateRootSnapshots(
   rootIds: string[]
 ): void {
   if (rootIds.length === 0 || new Set(rootIds).size !== rootIds.length) {
-    throw new Error("Root assignment is invalid");
+    throw new RepositoryError(
+      "ROOT_ASSIGNMENT_INVALID",
+      "Root assignment is invalid"
+    );
   }
   for (const snapshot of snapshots) {
-    if (!snapshot.exists) throw new Error("Root assignment is invalid");
+    if (!snapshot.exists) {
+      throw new RepositoryError(
+        "ROOT_ASSIGNMENT_INVALID",
+        "Root assignment is invalid"
+      );
+    }
     const root = decodeFirestoreDocument<AssignedRoot>(snapshot.id, snapshot.data());
     if (root.householdId !== householdId || !root.enabled) {
-      throw new Error("Root assignment is invalid");
+      throw new RepositoryError(
+        "ROOT_ASSIGNMENT_INVALID",
+        "Root assignment is invalid"
+      );
     }
   }
 }

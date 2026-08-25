@@ -12,7 +12,11 @@ import type {
   SyncLeaseInput,
   WatchHistory
 } from "@cloudframe/shared";
-import { validateDeviceApproval, type AppRepository } from "./repository";
+import {
+  RepositoryError,
+  validateDeviceApproval,
+  type AppRepository
+} from "./repository";
 import type {
   AuthenticateAdminSessionInput,
   AuthenticateDeviceSessionInput,
@@ -110,12 +114,35 @@ export class MemoryRepository implements AppRepository {
     validateRoots: boolean
   ): Promise<void> {
     const request = this.deviceRequests.get(input.requestId);
-    if (!request || request.status !== "pending") throw new Error("Device request is not pending");
+    if (!request) {
+      throw new RepositoryError(
+        "DEVICE_REQUEST_NOT_FOUND",
+        "Device request not found"
+      );
+    }
+    if (request.status !== "pending") {
+      throw new RepositoryError(
+        "DEVICE_REQUEST_NOT_PENDING",
+        "Device request is not pending"
+      );
+    }
     validateDeviceApproval(request, input);
     if (validateRoots) this.validateRoots(input.device.householdId, input.rootIds);
-    if (this.devices.has(input.device.id)) throw new Error("Device already exists");
-    if (this.deviceSessions.has(input.session.id)) throw new Error("Device session already exists");
-    if ([...this.deviceSessions.values()].some(value => value.tokenHash === input.session.tokenHash)) throw new Error("Device session token already exists");
+    if (this.devices.has(input.device.id)) {
+      throw new RepositoryError("DEVICE_APPROVAL_CONFLICT", "Device already exists");
+    }
+    if (this.deviceSessions.has(input.session.id)) {
+      throw new RepositoryError(
+        "DEVICE_APPROVAL_CONFLICT",
+        "Device session already exists"
+      );
+    }
+    if ([...this.deviceSessions.values()].some(value => value.tokenHash === input.session.tokenHash)) {
+      throw new RepositoryError(
+        "DEVICE_APPROVAL_CONFLICT",
+        "Device session token already exists"
+      );
+    }
     this.deviceRequests.set(input.requestId, copy({ ...request, status: "approved", resolvedAt: input.approvedAt, approvedDeviceId: input.device.id }));
     this.devices.set(input.device.id, copy({ ...input.device, assignedRootIds: [...input.rootIds] }));
     this.deviceSessions.set(input.session.id, copy(input.session));
@@ -131,7 +158,9 @@ export class MemoryRepository implements AppRepository {
 
   async updateDeviceWithRoots(input: UpdateDeviceInput): Promise<Device> {
     const device = this.devices.get(input.deviceId);
-    if (!device || device.householdId !== input.householdId) throw new Error("Device not found");
+    if (!device || device.householdId !== input.householdId) {
+      throw new RepositoryError("DEVICE_NOT_FOUND", "Device not found");
+    }
     this.validateRoots(input.householdId, input.rootIds);
     const updated = copy({ ...device, ...input.patch, assignedRootIds: [...input.rootIds] });
     this.devices.set(device.id, updated);
@@ -152,7 +181,9 @@ export class MemoryRepository implements AppRepository {
 
   async revokeDevice(deviceId: string, revokedAt: Date): Promise<void> {
     const device = this.devices.get(deviceId);
-    if (!device) throw new Error("Device not found");
+    if (!device) {
+      throw new RepositoryError("DEVICE_NOT_FOUND", "Device not found");
+    }
     this.devices.set(deviceId, copy({ ...device, enabled: false, revokedAt }));
     for (const [id, session] of this.deviceSessions) {
       if (session.deviceId === deviceId) this.deviceSessions.set(id, copy({ ...session, revokedAt }));
@@ -188,17 +219,38 @@ export class MemoryRepository implements AppRepository {
 
   private resolveRequest(input: ResolveDeviceRequestInput, status: "denied" | "expired"): DeviceRequest {
     const request = this.deviceRequests.get(input.requestId);
-    if (!request || request.householdId !== input.householdId || request.status !== "pending") throw new Error("Device request is not pending");
+    if (!request || request.householdId !== input.householdId) {
+      throw new RepositoryError(
+        "DEVICE_REQUEST_NOT_FOUND",
+        "Device request not found"
+      );
+    }
+    if (request.status !== "pending") {
+      throw new RepositoryError(
+        "DEVICE_REQUEST_NOT_PENDING",
+        "Device request is not pending"
+      );
+    }
     const updated = copy({ ...request, status, resolvedAt: input.now });
     this.deviceRequests.set(request.id, updated);
     return copy(updated);
   }
 
   private validateRoots(householdId: string, rootIds: string[]): void {
-    if (rootIds.length === 0 || new Set(rootIds).size !== rootIds.length) throw new Error("Root assignment is invalid");
+    if (rootIds.length === 0 || new Set(rootIds).size !== rootIds.length) {
+      throw new RepositoryError(
+        "ROOT_ASSIGNMENT_INVALID",
+        "Root assignment is invalid"
+      );
+    }
     for (const id of rootIds) {
       const root = this.roots.get(id);
-      if (!root || root.householdId !== householdId || !root.enabled) throw new Error("Root assignment is invalid");
+      if (!root || root.householdId !== householdId || !root.enabled) {
+        throw new RepositoryError(
+          "ROOT_ASSIGNMENT_INVALID",
+          "Root assignment is invalid"
+        );
+      }
     }
   }
 

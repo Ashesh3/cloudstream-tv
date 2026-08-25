@@ -31,7 +31,23 @@ export function parseCookies(request: Request): Record<string, string> {
   return result;
 }
 
-export function requestSubject(request: Request): string {
-  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
-  return forwarded || request.headers.get("x-real-ip") || "unknown";
+export type RequestSubjectResolver = (request: Request) => string;
+
+export const requestSubject: RequestSubjectResolver = request => {
+  const forwarded = firstForwardedAddress(
+    request.headers.get("x-vercel-forwarded-for")
+  );
+  return forwarded || "unknown";
+};
+
+function firstForwardedAddress(value: string | null): string | null {
+  const address = value?.split(",")[0]?.trim();
+  if (
+    !address ||
+    address.length > 64 ||
+    [...address].some(character => character.charCodeAt(0) <= 32)
+  ) {
+    return null;
+  }
+  return address;
 }

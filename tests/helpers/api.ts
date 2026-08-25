@@ -28,6 +28,7 @@ export interface TestApiOptions {
   initialPassphrase?: string;
   storedPassphrase?: string;
   rateLimits?: Partial<Record<string, RateLimitPolicy>>;
+  requestSubject?: (request: Request) => string;
 }
 
 export async function createTestApi(
@@ -83,7 +84,8 @@ export async function createTestApi(
         raw,
         hash: hashOpaqueToken(raw)
       };
-    }
+    },
+    requestSubject: options.requestSubject
   };
 
   return {

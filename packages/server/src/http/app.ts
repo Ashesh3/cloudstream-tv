@@ -10,7 +10,10 @@ import {
 import { clearSessionCookie, createSessionCookie } from "../auth/cookies";
 import { verifyPassphrase } from "../auth/passphrase";
 import { issueOpaqueToken, type OpaqueToken } from "../auth/tokens";
-import type { AppRepository } from "../firestore/repository";
+import {
+  RepositoryError,
+  type AppRepository
+} from "../firestore/repository";
 import {
   authenticateAdmin,
   createAdminSession,
@@ -26,7 +29,12 @@ import {
   validateName
 } from "../services/device-enrollment";
 import { HttpError } from "./errors";
-import { parseCookies, readJsonObject, requestSubject } from "./request";
+import {
+  parseCookies,
+  readJsonObject,
+  requestSubject,
+  type RequestSubjectResolver
+} from "./request";
 import { errorResponse, ok } from "./response";
 
 export interface RateLimitPolicy {
@@ -49,6 +57,7 @@ export interface ApiAppDependencies {
   now?: () => Date;
   createId?: (prefix: string) => string;
   issueToken?: () => OpaqueToken;
+  requestSubject?: RequestSubjectResolver;
 }
 
 const DEFAULT_RATE_LIMITS: Record<string, RateLimitPolicy> = {
@@ -64,7 +73,8 @@ export function createApiApp(input: ApiAppDependencies) {
     ...input,
     now: input.now ?? (() => new Date()),
     createId: input.createId ?? (prefix => `${prefix}-${crypto.randomUUID()}`),
-    issueToken: input.issueToken ?? issueOpaqueToken
+    issueToken: input.issueToken ?? issueOpaqueToken,
+    requestSubject: input.requestSubject ?? requestSubject
   };
 
   return async (request: Request): Promise<Response> => {
@@ -153,6 +163,7 @@ async function bootstrap(
 ): Promise<Response> {
   const household = await ensureHousehold(dependencies, now);
   const rawDevice = parseCookies(request).device_session;
+  const fallbackHeaders = new Headers();
   if (rawDevice) {
     try {
       const authenticated = await authenticateDevice(request, dependencies, now);
@@ -166,13 +177,20 @@ async function bootstrap(
         }),
         { headers: authenticated.responseHeaders }
       );
-    } catch {
-      // Continue to request-cookie and unenrolled states. Bootstrap is public.
+    } catch (error) {
+      if (
+        !(error instanceof HttpError) ||
+        error.code !== "DEVICE_UNAUTHORIZED"
+      ) {
+        throw error;
+      }
+      appendHeaders(fallbackHeaders, error.responseHeaders);
     }
   }
   const rawRequest = parseCookies(request).device_request;
   if (rawRequest) {
-    return enrollmentStatus(rawRequest, dependencies, now);
+    const response = await enrollmentStatus(rawRequest, dependencies, now);
+    return mergeResponseHeaders(response, fallbackHeaders);
   }
   return ok(
     encodeBootstrapResponse({
@@ -181,7 +199,8 @@ async function bootstrap(
           ? "unenrolled"
           : "requests-disabled"
       }
-    })
+    }),
+    { headers: fallbackHeaders }
   );
 }
 
@@ -190,7 +209,12 @@ async function adminLogin(
   dependencies: ApiAppDependencies,
   now: Date
 ): Promise<Response> {
-  await enforceRateLimit(request, dependencies, "admin-login", requestSubject(request), now);
+  await enforceRateLimit(
+    dependencies,
+    "admin-login",
+    dependencies.requestSubject!(request),
+    now
+  );
   const body = await readJsonObject(request);
   const passphrase = body.passphrase;
   if (typeof passphrase !== "string") {
@@ -222,7 +246,6 @@ async function adminLogout(
   const authenticated = await authenticateAdmin(request, dependencies, now);
   verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
   await enforceRateLimit(
-    request,
     dependencies,
     "admin-mutation",
     authenticated.session.id,
@@ -244,10 +267,9 @@ async function createDeviceRequest(
   now: Date
 ): Promise<Response> {
   await enforceRateLimit(
-    request,
     dependencies,
     "device-request-create",
-    requestSubject(request),
+    dependencies.requestSubject!(request),
     now
   );
   const body = await readJsonObject(request);
@@ -284,10 +306,9 @@ async function deviceRequestStatus(
 ): Promise<Response> {
   const raw = parseCookies(request).device_request;
   await enforceRateLimit(
-    request,
     dependencies,
     "device-request-status",
-    raw ? requestHash(raw) : requestSubject(request),
+    raw ? requestHash(raw) : dependencies.requestSubject!(request),
     now
   );
   if (!raw) {
@@ -385,7 +406,7 @@ async function resolveDeviceRequest(
 ): Promise<Response> {
   const authenticated = await authenticateAdmin(request, dependencies, now);
   verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
-  await enforceRateLimit(request, dependencies, "admin-mutation", authenticated.session.id, now);
+  await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
   const body = await readJsonObject(request);
   if (action === "approve") {
     const device = await approveRequest(
@@ -409,8 +430,24 @@ async function resolveDeviceRequest(
       { request: encodeDeviceRequestDto(denied) },
       { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) }
     );
-  } catch {
-    throw new HttpError(409, "DEVICE_REQUEST_RESOLVED", "Device request is already resolved.");
+  } catch (error) {
+    if (error instanceof RepositoryError) {
+      if (error.code === "DEVICE_REQUEST_NOT_FOUND") {
+        throw new HttpError(
+          404,
+          "DEVICE_REQUEST_NOT_FOUND",
+          "Device request not found."
+        );
+      }
+      if (error.code === "DEVICE_REQUEST_NOT_PENDING") {
+        throw new HttpError(
+          409,
+          "DEVICE_REQUEST_RESOLVED",
+          "Device request is already resolved."
+        );
+      }
+    }
+    throw error;
   }
 }
 
@@ -445,12 +482,18 @@ async function adminDevice(
     );
   }
   verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
-  await enforceRateLimit(request, dependencies, "admin-mutation", authenticated.session.id, now);
+  await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
   if (request.method === "DELETE") {
     try {
       await dependencies.repository.revokeDevice(deviceId, now);
-    } catch {
-      throw new HttpError(404, "DEVICE_NOT_FOUND", "Device not found.");
+    } catch (error) {
+      if (
+        error instanceof RepositoryError &&
+        error.code === "DEVICE_NOT_FOUND"
+      ) {
+        throw new HttpError(404, "DEVICE_NOT_FOUND", "Device not found.");
+      }
+      throw error;
     }
     return ok(
       { revoked: true },
@@ -475,7 +518,7 @@ async function heartbeat(
   now: Date
 ): Promise<Response> {
   const authenticated = await authenticateDevice(request, dependencies, now);
-  await enforceRateLimit(request, dependencies, "tv-mutation", authenticated.session.id, now);
+  await enforceRateLimit(dependencies, "tv-mutation", authenticated.session.id, now);
   if (request.headers.get("content-length") !== "0") await readJsonObject(request);
   return ok(
     { device: encodeDeviceDto(authenticated.device), seenAt: now.toISOString() },
@@ -484,7 +527,6 @@ async function heartbeat(
 }
 
 async function enforceRateLimit(
-  request: Request,
   dependencies: ApiAppDependencies,
   bucket: string,
   subject: string,
@@ -506,7 +548,26 @@ async function enforceRateLimit(
       result.retryAfterSeconds
     );
   }
-  void request;
+}
+
+function appendHeaders(target: Headers, source?: HeadersInit): void {
+  const headers = new Headers(source);
+  headers.forEach((value, name) => {
+    if (name !== "set-cookie") target.set(name, value);
+  });
+  for (const cookie of headers.getSetCookie()) {
+    target.append("set-cookie", cookie);
+  }
+}
+
+function mergeResponseHeaders(response: Response, extra: Headers): Response {
+  const headers = new Headers(response.headers);
+  appendHeaders(headers, extra);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers
+  });
 }
 
 function withCsrf(headers: Headers, token: string): Headers {
