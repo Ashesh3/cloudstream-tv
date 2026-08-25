@@ -1,5 +1,7 @@
 # CloudStream TV
 
+> Deployment note: the `/api/internal/sync-due-sources` cron runs every 15 minutes and requires Vercel Pro.
+
 A Next.js web app for smart TVs that connects to Google Drive and OneDrive, displays videos in a Netflix-style dark cinematic UI optimized for TV remote control navigation, and streams video directly from cloud CDNs with zero-buffer playback.
 
 <img width="1326" height="707" alt="image" src="https://github.com/user-attachments/assets/7bd4c378-eca9-4885-a145-43eb54cb6bfe" />
