@@ -103,14 +103,28 @@ export class FirestoreRepository implements AppRepository {
       const requestRef = this.firestore.collection(COLLECTIONS.deviceRequests).doc(input.requestId);
       const deviceRef = this.firestore.collection(COLLECTIONS.devices).doc(input.device.id);
       const sessionRef = this.firestore.collection(COLLECTIONS.deviceSessions).doc(input.session.id);
-      const [requestSnapshot, deviceSnapshot, sessionSnapshot] = await Promise.all([
-        transaction.get(requestRef), transaction.get(deviceRef), transaction.get(sessionRef)
+      const tokenHashQuery = this.firestore
+        .collection(COLLECTIONS.deviceSessions)
+        .where("tokenHash", "==", input.session.tokenHash)
+        .limit(1);
+      const [requestSnapshot, deviceSnapshot, sessionSnapshot, tokenHashSnapshot] = await Promise.all([
+        transaction.get(requestRef),
+        transaction.get(deviceRef),
+        transaction.get(sessionRef),
+        transaction.get(tokenHashQuery)
       ]);
-      const request = requestSnapshot.data() as DeviceRequest | undefined;
+      const request = requestSnapshot.exists
+        ? decodeFirestoreDocument<DeviceRequest>(
+            requestSnapshot.id,
+            requestSnapshot.data()
+          )
+        : undefined;
       if (!request || request.status !== "pending") throw new Error("Device request is not pending");
+      validateDeviceApproval(request, input);
       if (deviceSnapshot.exists) throw new Error("Device already exists");
       if (sessionSnapshot.exists) throw new Error("Device session already exists");
-      const approvedAt = input.device.approvedAt;
+      if (!tokenHashSnapshot.empty) throw new Error("Device session token already exists");
+      const approvedAt = input.approvedAt;
       transaction.update(requestRef, { status: "approved", resolvedAt: approvedAt, approvedDeviceId: input.device.id });
       transaction.create(deviceRef, { ...input.device, assignedRootIds: [...input.rootIds] });
       transaction.create(sessionRef, input.session);
@@ -216,6 +230,22 @@ export class FirestoreRepository implements AppRepository {
 
 export type FirestoreAtomicWriter = Transaction | WriteBatch;
 
+export function validateDeviceApproval(
+  request: DeviceRequest,
+  input: ApproveDeviceRequestInput
+): void {
+  if (request.expiresAt <= input.approvedAt) {
+    throw new Error("Device request is expired");
+  }
+  if (
+    request.householdId !== input.device.householdId ||
+    request.householdId !== input.session.householdId ||
+    input.session.deviceId !== input.device.id
+  ) {
+    throw new Error("Device approval relationship is invalid");
+  }
+}
+
 interface FirestoreTimestampLike {
   toDate(): Date;
 }
@@ -230,6 +260,7 @@ function isFirestoreTimestamp(value: unknown): value is FirestoreTimestampLike {
 }
 
 function decodeFirestoreValue(value: unknown): unknown {
+  if (value instanceof Date) return value;
   if (isFirestoreTimestamp(value)) return value.toDate();
   if (Array.isArray(value)) return value.map(decodeFirestoreValue);
   if (typeof value !== "object" || value === null) return value;

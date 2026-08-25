@@ -79,7 +79,8 @@ describe("MemoryRepository security transitions", () => {
       requestId: "r1",
       device,
       session,
-      rootIds: ["root-1"]
+      rootIds: ["root-1"],
+      approvedAt: now
     });
 
     expect((await repo.getDeviceRequest("r1"))?.status).toBe("approved");
@@ -100,13 +101,71 @@ describe("MemoryRepository security transitions", () => {
         requestId: "r1",
         device,
         session,
-        rootIds: ["root-1"]
+        rootIds: ["root-1"],
+        approvedAt: now
       })
     ).rejects.toThrow(/already exists/i);
 
     expect((await repo.getDeviceRequest("r1"))?.status).toBe("pending");
     expect((await repo.getDevice("d1"))?.name).toBe("Existing device");
     expect(await repo.getDeviceSessionByHash(session.tokenHash)).toBeNull();
+  });
+
+  it("rejects expired device requests without partial writes", async () => {
+    const repo = new MemoryRepository();
+    await repo.createDeviceRequest({
+      ...pendingRequest,
+      expiresAt: new Date("2026-08-25T23:59:59Z")
+    });
+
+    await expect(
+      repo.approveDeviceRequest({
+        requestId: "r1",
+        device,
+        session,
+        rootIds: ["root-1"],
+        approvedAt: now
+      })
+    ).rejects.toThrow(/expired/i);
+
+    expect((await repo.getDeviceRequest("r1"))?.status).toBe("pending");
+    expect(await repo.getDevice("d1")).toBeNull();
+    expect(await repo.getDeviceSessionByHash(session.tokenHash)).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "device household",
+      device: { ...device, householdId: "h2" },
+      session
+    },
+    {
+      name: "session household",
+      device,
+      session: { ...session, householdId: "h2" }
+    },
+    {
+      name: "session device",
+      device,
+      session: { ...session, deviceId: "d2" }
+    }
+  ])("rejects a mismatched $name during approval", async ({ device: inputDevice, session: inputSession }) => {
+    const repo = new MemoryRepository();
+    await repo.createDeviceRequest(pendingRequest);
+
+    await expect(
+      repo.approveDeviceRequest({
+        requestId: "r1",
+        device: inputDevice,
+        session: inputSession,
+        rootIds: ["root-1"],
+        approvedAt: now
+      })
+    ).rejects.toThrow(/relationship/i);
+
+    expect((await repo.getDeviceRequest("r1"))?.status).toBe("pending");
+    expect(await repo.getDevice(inputDevice.id)).toBeNull();
+    expect(await repo.getDeviceSessionByHash(inputSession.tokenHash)).toBeNull();
   });
 
   it("revokes a device and all of its sessions together", async () => {
@@ -338,6 +397,7 @@ describe("Firestore document decoding", () => {
   it("converts nested Firestore timestamps into shared Date contracts", () => {
     const decoded = decodeFirestoreDocument("s1", {
       createdAt: { toDate: () => now },
+      alreadyDecodedAt: later,
       crawlCheckpoint: {
         resumedAt: { toDate: () => later }
       },
@@ -347,6 +407,7 @@ describe("Firestore document decoding", () => {
     expect(decoded).toEqual({
       id: "s1",
       createdAt: now,
+      alreadyDecodedAt: later,
       crawlCheckpoint: { resumedAt: later },
       dates: [later]
     });
@@ -394,6 +455,147 @@ describe("Firestore document decoding", () => {
     expect(updated).toBe(false);
   });
 });
+
+describe("FirestoreRepository device approval", () => {
+  it.each([
+    {
+      name: "expired request",
+      request: {
+        ...pendingRequest,
+        expiresAt: new Date("2026-08-25T23:59:59Z")
+      },
+      device,
+      session,
+      expected: /expired/i
+    },
+    {
+      name: "device household mismatch",
+      request: pendingRequest,
+      device: { ...device, householdId: "h2" },
+      session,
+      expected: /relationship/i
+    },
+    {
+      name: "session household mismatch",
+      request: pendingRequest,
+      device,
+      session: { ...session, householdId: "h2" },
+      expected: /relationship/i
+    },
+    {
+      name: "session device mismatch",
+      request: pendingRequest,
+      device,
+      session: { ...session, deviceId: "d2" },
+      expected: /relationship/i
+    }
+  ])("rejects $name before Firestore writes", async input => {
+    const fake = createApprovalFirestore(input.request, false);
+    const repo = new FirestoreRepository(fake.firestore);
+
+    await expect(
+      repo.approveDeviceRequest({
+        requestId: "r1",
+        device: input.device,
+        session: input.session,
+        rootIds: ["root-1"],
+        approvedAt: now
+      })
+    ).rejects.toThrow(input.expected);
+
+    expect(fake.writes).toEqual([]);
+  });
+
+  it("rejects a duplicate session token hash inside the transaction", async () => {
+    const fake = createApprovalFirestore(pendingRequest, true);
+    const repo = new FirestoreRepository(fake.firestore);
+
+    await expect(
+      repo.approveDeviceRequest({
+        requestId: "r1",
+        device,
+        session,
+        rootIds: ["root-1"],
+        approvedAt: now
+      })
+    ).rejects.toThrow(/token.*already exists/i);
+
+    expect(fake.queriedTokenHashes).toEqual([session.tokenHash]);
+    expect(fake.writes).toEqual([]);
+  });
+});
+
+function createApprovalFirestore(
+  request: DeviceRequest,
+  duplicateTokenHash: boolean
+): {
+  firestore: Firestore;
+  writes: string[];
+  queriedTokenHashes: string[];
+} {
+  const writes: string[] = [];
+  const queriedTokenHashes: string[] = [];
+  const requestRef = { kind: "request", id: "r1" };
+  const deviceRef = { kind: "device", id: "d1" };
+  const sessionRef = { kind: "session", id: "ds1" };
+  const tokenQuery = {
+    kind: "token-query",
+    limit() {
+      return this;
+    }
+  };
+  const firestore = {
+    collection(name: string) {
+      return {
+        doc(id: string) {
+          if (name === "deviceRequests" && id === "r1") return requestRef;
+          if (name === "devices" && id === "d1") return deviceRef;
+          if (name === "deviceSessions" && id === "ds1") return sessionRef;
+          throw new Error(`Unexpected document ${name}/${id}`);
+        },
+        where(field: string, operator: string, value: string) {
+          expect(name).toBe("deviceSessions");
+          expect(field).toBe("tokenHash");
+          expect(operator).toBe("==");
+          queriedTokenHashes.push(value);
+          return tokenQuery;
+        }
+      };
+    },
+    runTransaction: async (operation: (transaction: unknown) => unknown) =>
+      operation({
+        async get(target: unknown) {
+          if (target === requestRef) {
+            return {
+              id: "r1",
+              exists: true,
+              data: () => request
+            };
+          }
+          if (target === deviceRef || target === sessionRef) {
+            return { exists: false };
+          }
+          if (target === tokenQuery) {
+            return {
+              empty: !duplicateTokenHash,
+              docs: duplicateTokenHash
+                ? [{ id: "existing-session", data: () => session }]
+                : []
+            };
+          }
+          throw new Error("Unexpected transaction read");
+        },
+        update() {
+          writes.push("update");
+        },
+        create() {
+          writes.push("create");
+        }
+      })
+  } as unknown as Firestore;
+
+  return { firestore, writes, queriedTokenHashes };
+}
 
 function makeSource(): Source {
   return {

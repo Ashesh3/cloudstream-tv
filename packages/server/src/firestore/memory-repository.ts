@@ -12,7 +12,7 @@ import type {
   SyncLeaseInput,
   WatchHistory
 } from "@cloudframe/shared";
-import type { AppRepository } from "./repository";
+import { validateDeviceApproval, type AppRepository } from "./repository";
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -55,10 +55,11 @@ export class MemoryRepository implements AppRepository {
   async approveDeviceRequest(input: ApproveDeviceRequestInput): Promise<void> {
     const request = this.deviceRequests.get(input.requestId);
     if (!request || request.status !== "pending") throw new Error("Device request is not pending");
+    validateDeviceApproval(request, input);
     if (this.devices.has(input.device.id)) throw new Error("Device already exists");
     if (this.deviceSessions.has(input.session.id)) throw new Error("Device session already exists");
     if ([...this.deviceSessions.values()].some(value => value.tokenHash === input.session.tokenHash)) throw new Error("Device session token already exists");
-    this.deviceRequests.set(input.requestId, copy({ ...request, status: "approved", resolvedAt: input.device.approvedAt, approvedDeviceId: input.device.id }));
+    this.deviceRequests.set(input.requestId, copy({ ...request, status: "approved", resolvedAt: input.approvedAt, approvedDeviceId: input.device.id }));
     this.devices.set(input.device.id, copy({ ...input.device, assignedRootIds: [...input.rootIds] }));
     this.deviceSessions.set(input.session.id, copy(input.session));
   }

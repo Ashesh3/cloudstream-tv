@@ -166,6 +166,7 @@ export interface ApproveDeviceRequestInput {
   device: Device;
   session: DeviceSession;
   rootIds: EntityId[];
+  approvedAt: Date;
 }
 
 export interface RotateAdminPassphraseInput {
