@@ -1,7 +1,6 @@
 import { render } from "preact";
+import { TvApp } from "./app";
+import "./styles/tokens.css";
+import "./styles/app.css";
 
-function App() {
-  return <main aria-label="Cloudframe TV">Cloudframe TV</main>;
-}
-
-render(<App />, document.getElementById("app")!);
+render(<TvApp />, document.getElementById("app")!);

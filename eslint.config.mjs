@@ -8,6 +8,7 @@ export default tseslint.config(
       "apps/*/dist/**",
       "node_modules/**",
       ".superpowers/**",
+      ".vercel/**",
       ".next/**",
       "src/**",
       "tests/**/*.mjs"

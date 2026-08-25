@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [
     preact(),
     legacy({
-      targets: ["Chrome >= 68"],
+      targets: { chrome: "68" },
       modernPolyfills: true,
       renderLegacyChunks: true
     })
