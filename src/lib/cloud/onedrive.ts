@@ -6,7 +6,7 @@ import type { CloudConnection, BrowseItem } from "@/types";
  * Refresh the OneDrive access token if it is expired or about to expire.
  * Updates KV storage with the new token. Returns the current (or refreshed) access token.
  */
-async function refreshAccessToken(
+export async function getValidOneDriveAccessToken(
   sessionId: string,
   connection: CloudConnection
 ): Promise<string> {
@@ -82,7 +82,7 @@ export async function listOneDriveFiles(
   connection: CloudConnection,
   folderId: string
 ): Promise<BrowseItem[]> {
-  const accessToken = await refreshAccessToken(sessionId, connection);
+  const accessToken = await getValidOneDriveAccessToken(sessionId, connection);
   const endpoint = getChildrenEndpoint(folderId);
 
   const response = await fetch(endpoint, {
@@ -174,7 +174,7 @@ export async function getOneDriveStreamUrl(
   connection: CloudConnection,
   fileId: string
 ): Promise<string> {
-  const accessToken = await refreshAccessToken(sessionId, connection);
+  const accessToken = await getValidOneDriveAccessToken(sessionId, connection);
 
   const response = await fetch(
     `${ONEDRIVE_OAUTH.apiBase}/me/drive/items/${fileId}`,

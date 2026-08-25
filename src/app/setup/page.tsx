@@ -18,18 +18,29 @@ interface BreadcrumbEntry {
   name: string;
 }
 
+interface ConnectionSummary {
+  id: string;
+  provider: "google" | "onedrive";
+  email: string;
+  folders: Array<{ id: string; name: string }>;
+}
+
 /* ------------------------------------------------------------------ */
 /*  FolderPicker sub-component                                         */
 /* ------------------------------------------------------------------ */
 
 function FolderPicker({
-  sessionId,
+  pairingCode,
   connectionId,
   provider,
+  initialFolders,
+  onSaved,
 }: {
-  sessionId: string;
+  pairingCode: string;
   connectionId: string;
   provider: string;
+  initialFolders: Array<{ id: string; name: string }>;
+  onSaved: () => Promise<void>;
 }) {
   const [folders, setFolders] = useState<FolderNode[]>([]);
   const [loading, setLoading] = useState(true);
@@ -37,9 +48,10 @@ function FolderPicker({
   const [breadcrumb, setBreadcrumb] = useState<BreadcrumbEntry[]>([
     { id: "root", name: "Root" },
   ]);
-  const [selected, setSelected] = useState<Map<string, string>>(new Map());
+  const [selected, setSelected] = useState<Map<string, string>>(
+    () => new Map(initialFolders.map((folder) => [folder.id, folder.name]))
+  );
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
 
   const currentFolderId = breadcrumb[breadcrumb.length - 1].id;
 
@@ -49,7 +61,7 @@ function FolderPicker({
       setError(null);
       try {
         const params = new URLSearchParams({
-          sessionId,
+          code: pairingCode,
           connectionId,
           folderId,
         });
@@ -63,7 +75,7 @@ function FolderPicker({
         setLoading(false);
       }
     },
-    [sessionId, connectionId]
+    [pairingCode, connectionId]
   );
 
   useEffect(() => {
@@ -101,32 +113,18 @@ function FolderPicker({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          sessionId,
+          code: pairingCode,
           connectionId,
           folders: foldersToSave,
         }),
       });
       if (!res.ok) throw new Error("Failed to save folders");
-      setSaved(true);
+      await onSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
       setSaving(false);
     }
-  }
-
-  if (saved) {
-    return (
-      <div className="text-center py-12">
-        <div className="text-4xl mb-4">&#10003;</div>
-        <h2 className="text-xl font-semibold text-gray-900 mb-2">
-          Setup Complete!
-        </h2>
-        <p className="text-gray-600">
-          Your TV should now show your videos. You can close this page.
-        </p>
-      </div>
-    );
   }
 
   return (
@@ -153,6 +151,20 @@ function FolderPicker({
           </span>
         ))}
       </nav>
+
+      <button
+        type="button"
+        onClick={() => toggleSelect(breadcrumb[breadcrumb.length - 1])}
+        className={`mb-4 w-full rounded-lg border px-4 py-3 text-left text-sm font-medium ${
+          selected.has(currentFolderId)
+            ? "border-blue-600 bg-blue-50 text-blue-700"
+            : "border-gray-300 bg-white text-gray-700 hover:border-blue-400"
+        }`}
+      >
+        {selected.has(currentFolderId)
+          ? `Selected: ${breadcrumb[breadcrumb.length - 1].name}`
+          : `Select this folder: ${breadcrumb[breadcrumb.length - 1].name}`}
+      </button>
 
       {/* Folder list */}
       {loading ? (
@@ -201,21 +213,25 @@ function FolderPicker({
       )}
 
       {/* Selected summary & save */}
-      {selected.size > 0 && (
-        <div className="mt-6 border-t border-gray-200 pt-4">
+      <div className="mt-6 border-t border-gray-200 pt-4">
+        {selected.size > 0 ? (
           <p className="text-sm text-gray-600 mb-3">
             {selected.size} folder{selected.size > 1 ? "s" : ""} selected:{" "}
             {Array.from(selected.values()).join(", ")}
           </p>
-          <button
-            onClick={handleSave}
-            disabled={saving}
-            className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {saving ? "Saving..." : "Save & Finish"}
-          </button>
-        </div>
-      )}
+        ) : (
+          <p className="mb-3 text-sm text-gray-500">
+            Select the current folder or one or more folders below.
+          </p>
+        )}
+        <button
+          onClick={handleSave}
+          disabled={saving || selected.size === 0}
+          className="w-full bg-blue-600 text-white py-3 px-4 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {saving ? "Saving..." : "Save folders"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -230,13 +246,29 @@ function SetupPageContent() {
   const [pairingCode, setPairingCode] = useState(
     searchParams.get("code") ?? ""
   );
-  const [sessionId, setSessionId] = useState<string | null>(null);
   const [connectionId, setConnectionId] = useState<string | null>(null);
   const [provider, setProvider] = useState<string | null>(null);
   const [step, setStep] = useState<
-    "enter-code" | "connect" | "folders" | "loading"
+    "enter-code" | "connect" | "manage" | "folders" | "complete" | "loading"
   >("loading");
   const [error, setError] = useState<string | null>(null);
+  const [connections, setConnections] = useState<ConnectionSummary[]>([]);
+  const [mode, setMode] = useState<"setup" | "manage">("setup");
+
+  const loadConnections = useCallback(async (code: string) => {
+    const res = await fetch(
+      `/api/setup/connections?code=${encodeURIComponent(code)}`
+    );
+    if (!res.ok) throw new Error("Could not load connected sources");
+
+    const data = (await res.json()) as {
+      mode: "setup" | "manage";
+      connections: ConnectionSummary[];
+    };
+    setMode(data.mode);
+    setConnections(data.connections);
+    return data;
+  }, []);
 
   // On mount, decide which step we're on
   useEffect(() => {
@@ -264,18 +296,8 @@ function SetupPageContent() {
       setConnectionId(urlConnectionId);
       setProvider(urlProvider);
 
-      // Look up sessionId from the pairing code
-      fetch(`/api/pairing/status?code=${encodeURIComponent(paired)}`)
-        .then((res) => res.json())
-        .then((data) => {
-          if (data.sessionId) {
-            setSessionId(data.sessionId);
-            setStep("folders");
-          } else {
-            setError("Could not find session. Please try again.");
-            setStep("enter-code");
-          }
-        })
+      loadConnections(paired)
+        .then(() => setStep("folders"))
         .catch(() => {
           setError("Failed to verify session.");
           setStep("enter-code");
@@ -283,16 +305,72 @@ function SetupPageContent() {
       return;
     }
 
-    // If code is provided in URL, go to connect step
+    // If code is provided in URL, load any existing sources first.
     if (urlCode) {
       setPairingCode(urlCode);
-      setStep("connect");
+      loadConnections(urlCode)
+        .then((data) => {
+          setStep(
+            data.mode === "manage" || data.connections.length > 0
+              ? "manage"
+              : "connect"
+          );
+        })
+        .catch(() => {
+          setError("Pairing code expired or could not be loaded.");
+          setStep("enter-code");
+        });
       return;
     }
 
     // No code, show enter-code form
     setStep("enter-code");
-  }, [searchParams]);
+  }, [searchParams, loadConnections]);
+
+  const returnToManager = useCallback(async () => {
+    await loadConnections(pairingCode);
+    setConnectionId(null);
+    setProvider(null);
+    setStep("manage");
+  }, [loadConnections, pairingCode]);
+
+  async function removeSource(connectionIdToRemove: string) {
+    setError(null);
+    const res = await fetch("/api/setup/connections", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        code: pairingCode,
+        connectionId: connectionIdToRemove,
+      }),
+    });
+    if (!res.ok) {
+      setError("Could not remove this source.");
+      return;
+    }
+    await loadConnections(pairingCode);
+  }
+
+  async function finishSetup() {
+    setError(null);
+    const res = await fetch("/api/pairing/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: pairingCode }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      setError(data.error || "Could not finish setup.");
+      return;
+    }
+    setStep("complete");
+  }
+
+  function editConnection(connection: ConnectionSummary) {
+    setConnectionId(connection.id);
+    setProvider(connection.provider);
+    setStep("folders");
+  }
 
   function handleCodeSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -314,7 +392,8 @@ function SetupPageContent() {
       response_type: "code",
       scope: GOOGLE_OAUTH.scope,
       access_type: "offline",
-      prompt: "consent",
+      prompt: "select_account consent",
+      include_granted_scopes: "true",
       state: pairingCode,
     });
     window.location.href = `${GOOGLE_OAUTH.authUrl}?${params}`;
@@ -334,6 +413,7 @@ function SetupPageContent() {
       scope: ONEDRIVE_OAUTH.scope,
       response_mode: "query",
       state: pairingCode,
+      prompt: "select_account",
     });
     window.location.href = `${ONEDRIVE_OAUTH.authUrl}?${params}`;
   }
@@ -468,6 +548,95 @@ function SetupPageContent() {
             </div>
           )}
 
+          {/* Step: Manage Connected Sources */}
+          {step === "manage" && (
+            <div>
+              <p className="mb-1 text-sm text-gray-600">
+                Pairing code:{" "}
+                <span className="font-mono font-semibold text-gray-900">
+                  {pairingCode}
+                </span>
+              </p>
+              <h2 className="mb-2 text-lg font-semibold text-gray-900">
+                Connected cloud sources
+              </h2>
+              <p className="mb-5 text-sm text-gray-500">
+                Add another account, change its folders, or remove it. You can
+                connect Google Drive or OneDrive more than once.
+              </p>
+
+              {connections.length > 0 ? (
+                <div className="mb-6 space-y-3">
+                  {connections.map((connection) => (
+                    <div
+                      key={connection.id}
+                      className="rounded-lg border border-gray-200 p-4"
+                    >
+                      <div className="font-medium text-gray-900">
+                        {connection.provider === "google"
+                          ? "Google Drive"
+                          : "OneDrive"}
+                      </div>
+                      <div className="text-sm text-gray-500">
+                        {connection.email}
+                      </div>
+                      <div className="mt-2 text-sm text-gray-600">
+                        {connection.folders.length > 0
+                          ? connection.folders.map((folder) => folder.name).join(", ")
+                          : "No folders selected"}
+                      </div>
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => editConnection(connection)}
+                          className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 hover:border-blue-400 hover:text-blue-700"
+                        >
+                          Edit folders
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeSource(connection.id)}
+                          className="rounded-md border border-red-200 px-3 py-2 text-sm font-medium text-red-600 hover:bg-red-50"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mb-6 rounded-lg bg-gray-50 p-4 text-sm text-gray-500">
+                  No cloud sources are connected yet.
+                </p>
+              )}
+
+              <div className="space-y-3">
+                <button
+                  type="button"
+                  onClick={redirectToGoogle}
+                  className="w-full rounded-lg border border-gray-300 px-4 py-3 text-left font-medium text-gray-900 hover:bg-gray-50"
+                >
+                  + Add Google Drive
+                </button>
+                <button
+                  type="button"
+                  onClick={redirectToOneDrive}
+                  className="w-full rounded-lg border border-gray-300 px-4 py-3 text-left font-medium text-gray-900 hover:bg-gray-50"
+                >
+                  + Add OneDrive
+                </button>
+                <button
+                  type="button"
+                  onClick={finishSetup}
+                  disabled={mode === "setup" && connections.every((connection) => connection.folders.length === 0)}
+                  className="w-full rounded-lg bg-blue-600 px-4 py-3 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Finish and refresh TV
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Step: Loading */}
           {step === "loading" && (
             <div className="flex items-center justify-center py-12">
@@ -476,12 +645,29 @@ function SetupPageContent() {
           )}
 
           {/* Step: Folder Picker */}
-          {step === "folders" && sessionId && connectionId && provider && (
+          {step === "folders" && connectionId && provider && (
             <FolderPicker
-              sessionId={sessionId}
+              pairingCode={pairingCode}
               connectionId={connectionId}
               provider={provider}
+              initialFolders={
+                connections.find((connection) => connection.id === connectionId)
+                  ?.folders ?? []
+              }
+              onSaved={returnToManager}
             />
+          )}
+
+          {step === "complete" && (
+            <div className="py-10 text-center">
+              <div className="mb-4 text-4xl">&#10003;</div>
+              <h2 className="mb-2 text-xl font-semibold text-gray-900">
+                Configuration saved
+              </h2>
+              <p className="text-gray-600">
+                Your TV is refreshing its cloud sources. You can close this page.
+              </p>
+            </div>
           )}
         </div>
       </div>

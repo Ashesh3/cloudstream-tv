@@ -8,6 +8,7 @@ import {
   FocusProvider,
   useDpad,
   useFocusable,
+  useFocusContext,
 } from "@/lib/navigation";
 import { ContentRow } from "@/components";
 import {
@@ -16,6 +17,14 @@ import {
   getStoredSessionId,
   storeSessionId,
 } from "@/lib/client/session";
+import {
+  completeReconfigure,
+  dismissReconfigure,
+  EMPTY_RECONFIGURE_STATE,
+  expireReconfigure,
+  shouldPollReconfigure,
+  type ReconfigureState,
+} from "@/lib/client/reconfigure-state";
 import { POLL_INTERVAL_MS } from "@/lib/constants";
 import type { BrowseItem, CloudProvider } from "@/types";
 
@@ -38,6 +47,7 @@ function ReconfigureButton({ onSelect }: { onSelect: () => void }) {
     id: "reconfigure",
     row: -1,
     col: 0,
+    autoFocus: false,
     onSelect,
   });
 
@@ -46,16 +56,124 @@ function ReconfigureButton({ onSelect }: { onSelect: () => void }) {
       <button
         type="button"
         onClick={onSelect}
-        className={`rounded-xl border px-5 py-3 text-tv-sm font-semibold transition-colors ${
+        className={`rounded-xl border px-5 py-3 text-tv-sm font-semibold transition-colors hover:border-red-500 hover:bg-red-600 hover:text-white ${
           isFocused
-            ? "border-tv-accent bg-tv-accent text-black"
-            : "border-tv-border bg-tv-surface text-tv-text hover:bg-tv-card"
+            ? "border-red-500 bg-red-600 text-white"
+            : "border-tv-border bg-tv-surface text-tv-text"
         }`}
-        title="Disconnect this TV and configure cloud storage again"
+        title="Manage connected cloud storage"
       >
         Reconfigure
       </button>
     </div>
+  );
+}
+
+function ReconfigureModal({
+  code,
+  error,
+  onClose,
+}: {
+  code: string | null;
+  error: string | null;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    function blockBackgroundRemoteInput(event: KeyboardEvent) {
+      if (
+        ![
+          "ArrowUp",
+          "ArrowDown",
+          "ArrowLeft",
+          "ArrowRight",
+          "Enter",
+          " ",
+          "Escape",
+          "Backspace",
+        ].includes(event.key)
+      ) {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if (event.key === "Escape" || event.key === "Backspace") {
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", blockBackgroundRemoteInput, true);
+    return () => {
+      window.removeEventListener("keydown", blockBackgroundRemoteInput, true);
+    };
+  }, [onClose]);
+
+  const setupUrl = code
+    ? `${typeof window !== "undefined" ? window.location.origin : ""}/setup?code=${encodeURIComponent(code)}`
+    : "";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-6 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.94 }}
+        className="relative w-full max-w-xl rounded-2xl border border-tv-border bg-tv-surface p-8 text-center shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-4 rounded-lg px-3 py-2 text-tv-sm text-tv-text-dim hover:bg-tv-card hover:text-white"
+          aria-label="Close reconfigure dialog"
+        >
+          Close
+        </button>
+
+        <h2 className="mb-2 text-tv-lg font-bold">Reconfigure cloud storage</h2>
+        <p className="mb-6 text-tv-sm text-tv-text-dim">
+          Scan this code to add, edit, or remove cloud sources. Your current
+          TV session stays connected.
+        </p>
+
+        {error ? (
+          <p className="rounded-xl bg-red-600/15 px-4 py-3 text-tv-sm text-red-400">
+            {error}
+          </p>
+        ) : code ? (
+          <div className="flex flex-col items-center gap-4">
+            <div className="rounded-xl bg-white p-2">
+              <QRCode
+                value={setupUrl}
+                size={200}
+                qrStyle="dots"
+                eyeRadius={8}
+                bgColor="#FFFFFF"
+                fgColor="#000000"
+                quietZone={8}
+              />
+            </div>
+            <div className="font-mono text-tv-base font-bold tracking-widest text-tv-accent">
+              {code}
+            </div>
+            <p className="text-tv-xs text-tv-text-dim">
+              Press Back on the remote to dismiss
+            </p>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-4 py-10">
+            <div className="h-12 w-12 animate-spin rounded-full border-b-2 border-tv-accent" />
+            <p className="text-tv-sm text-tv-text-dim">Creating secure QR code...</p>
+          </div>
+        )}
+      </motion.div>
+    </motion.div>
   );
 }
 
@@ -65,12 +183,20 @@ function ReconfigureButton({ onSelect }: { onSelect: () => void }) {
 
 function TVHomeInner() {
   const router = useRouter();
+  const { focusedId, setFocus } = useFocusContext();
 
   const [viewState, setViewState] = useState<ViewState>("loading");
   const [pairingCode, setPairingCode] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [folderGroups, setFolderGroups] = useState<FolderGroup[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [pairingPollToken, setPairingPollToken] = useState<string | null>(null);
+  const [reconfigureState, setReconfigureState] = useState<ReconfigureState>(
+    EMPTY_RECONFIGURE_STATE
+  );
+  const focusBeforeReconfigureRef = useRef<string | null>(null);
+  const lastContentFocusRef = useRef<string | null>(null);
+  const focusedIdRef = useRef<string | null>(focusedId);
 
   // D-pad navigation (no back handler on home)
   useDpad();
@@ -100,6 +226,7 @@ function TVHomeInner() {
         .then((res) => res.json())
         .then((data) => {
           setPairingCode(data.code);
+          setPairingPollToken(data.pollToken);
           setViewState("pairing");
         })
         .catch(() => {
@@ -113,13 +240,18 @@ function TVHomeInner() {
     if (!pairingCode || sessionId) return;
 
     function checkStatus() {
-      fetch(`/api/pairing/status?code=${encodeURIComponent(pairingCode!)}`)
+      fetch(`/api/pairing/status?code=${encodeURIComponent(pairingCode!)}`, {
+        headers: pairingPollToken
+          ? { "X-Pairing-Poll-Token": pairingPollToken }
+          : {},
+      })
         .then((res) => res.json())
         .then((data) => {
           if (data.paired && data.sessionId) {
             storeSessionId(data.sessionId);
             setSessionId(data.sessionId);
             setPairingCode(null);
+            setPairingPollToken(null);
           }
         })
         .catch(() => {
@@ -132,7 +264,7 @@ function TVHomeInner() {
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [pairingCode, sessionId]);
+  }, [pairingCode, pairingPollToken, sessionId]);
 
   /* ---- Fetch content once session is set ---- */
   useEffect(() => {
@@ -188,14 +320,120 @@ function TVHomeInner() {
     containerRef.current?.focus();
   }, [viewState]);
 
-  const reconfigure = useCallback(async () => {
-    clearStoredSessionId();
-    try {
-      await fetch("/api/session", { method: "DELETE" });
-    } finally {
-      window.location.reload();
+  useEffect(() => {
+    focusedIdRef.current = focusedId;
+    if (focusedId && focusedId !== "reconfigure") {
+      lastContentFocusRef.current = focusedId;
     }
+  }, [focusedId]);
+
+  const loadContent = useCallback(() => {
+    return fetchWithSession("/api/browse")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to browse files");
+        return res.json();
+      })
+      .then((data) => {
+        const groups: FolderGroup[] = data.folders ?? [];
+        setFolderGroups(groups);
+        setViewState(groups.length > 0 ? "browse" : "empty");
+      })
+      .catch(() => {
+        setViewState("empty");
+      });
   }, []);
+
+  const reconfigure = useCallback(() => {
+    if (reconfigureState.code && reconfigureState.pollToken) {
+      setReconfigureState((current) => ({ ...current, visible: true }));
+      return;
+    }
+
+    focusBeforeReconfigureRef.current =
+      lastContentFocusRef.current ?? "row0-col0";
+    setReconfigureState({
+      visible: true,
+      code: null,
+      pollToken: null,
+      error: null,
+    });
+
+    fetchWithSession("/api/pairing", { method: "POST" })
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to create management code");
+        return res.json();
+      })
+      .then((data) =>
+        setReconfigureState({
+          visible: true,
+          code: data.code,
+          pollToken: data.pollToken,
+          error: null,
+        })
+      )
+      .catch(() =>
+        setReconfigureState({
+          visible: true,
+          code: null,
+          pollToken: null,
+          error: "Could not create a QR code. Try again.",
+        })
+      );
+  }, [reconfigureState.code, reconfigureState.pollToken]);
+
+  const closeReconfigure = useCallback(() => {
+    setReconfigureState((current) => dismissReconfigure(current));
+
+    const restoreId = focusBeforeReconfigureRef.current ?? "row0-col0";
+    window.requestAnimationFrame(() => {
+      setFocus(restoreId);
+      containerRef.current?.focus();
+    });
+  }, [setFocus]);
+
+  useEffect(() => {
+    if (!shouldPollReconfigure(reconfigureState)) return;
+
+    const checkStatus = () => {
+      fetch(
+        `/api/pairing/status?code=${encodeURIComponent(reconfigureState.code!)}`,
+        {
+          headers: {
+            "X-Pairing-Poll-Token": reconfigureState.pollToken!,
+          },
+        }
+      )
+        .then((res) => {
+          if (res.status === 404) {
+            setReconfigureState((current) => expireReconfigure(current));
+            return null;
+          }
+          if (!res.ok) throw new Error("Failed to check pairing status");
+          return res.json();
+        })
+        .then((data) => {
+          if (!data) return;
+          if (data.complete) {
+            setViewState("loading");
+            setReconfigureState(completeReconfigure());
+            void loadContent();
+
+            const restoreId =
+              focusBeforeReconfigureRef.current ?? "row0-col0";
+            window.requestAnimationFrame(() => {
+              setFocus(restoreId);
+              containerRef.current?.focus();
+            });
+          }
+        })
+        .catch(() => {
+          // Keep polling while the modal is open.
+        });
+    };
+
+    const interval = setInterval(checkStatus, POLL_INTERVAL_MS);
+    return () => clearInterval(interval);
+  }, [reconfigureState, loadContent, setFocus]);
 
   /* ---- Render ---- */
   return (
@@ -207,6 +445,16 @@ function TVHomeInner() {
           <ReconfigureButton onSelect={reconfigure} />
         )}
       </header>
+
+      <AnimatePresence>
+        {reconfigureState.visible && (
+          <ReconfigureModal
+            code={reconfigureState.code}
+            error={reconfigureState.error}
+            onClose={closeReconfigure}
+          />
+        )}
+      </AnimatePresence>
 
       <AnimatePresence mode="wait">
         {/* ---- Pairing Screen ---- */}

@@ -1,22 +1,36 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getConnections, getSessionIdFromRequest } from "@/lib/kv";
-import { listGoogleDriveFolders, listOneDriveFolders } from "@/lib/cloud";
+import { getConnections, getPairingSession } from "@/lib/kv";
+import {
+  getValidGoogleAccessToken,
+  getValidOneDriveAccessToken,
+  listGoogleDriveFolders,
+  listOneDriveFolders,
+} from "@/lib/cloud";
+import { isPairingMutable } from "@/lib/kv/pairing";
 
 export async function GET(request: NextRequest) {
   try {
-    const sessionId = getSessionIdFromRequest(request);
     const { searchParams } = request.nextUrl;
+    const code = searchParams.get("code");
     const connectionId = searchParams.get("connectionId");
     const folderId = searchParams.get("folderId") ?? "root";
 
-    if (!sessionId || !connectionId) {
+    if (!code || !connectionId) {
       return NextResponse.json(
-        { error: "Missing required parameters: sessionId, connectionId" },
+        { error: "Missing required parameters: code, connectionId" },
         { status: 400 }
       );
     }
 
-    const connections = await getConnections(sessionId);
+    const pairing = await getPairingSession(code);
+    if (!pairing || !isPairingMutable(pairing)) {
+      return NextResponse.json(
+        { error: "Pairing session not found, expired, or complete" },
+        { status: 404 }
+      );
+    }
+
+    const connections = await getConnections(pairing.sessionId);
     const connection = connections.find((c) => c.id === connectionId);
 
     if (!connection) {
@@ -29,9 +43,17 @@ export async function GET(request: NextRequest) {
     let folders: Array<{ id: string; name: string }>;
 
     if (connection.provider === "google") {
-      folders = await listGoogleDriveFolders(connection.accessToken, folderId);
+      const token = await getValidGoogleAccessToken(
+        pairing.sessionId,
+        connection
+      );
+      folders = await listGoogleDriveFolders(token, folderId);
     } else {
-      folders = await listOneDriveFolders(connection.accessToken, folderId);
+      const token = await getValidOneDriveAccessToken(
+        pairing.sessionId,
+        connection
+      );
+      folders = await listOneDriveFolders(token, folderId);
     }
 
     return NextResponse.json({ folders });

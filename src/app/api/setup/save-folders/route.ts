@@ -1,31 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getConnections, saveConnection, getSessionIdFromRequest } from "@/lib/kv";
+import { getConnections, getPairingSession, saveConnection } from "@/lib/kv";
+import { isPairingMutable } from "@/lib/kv/pairing";
 import type { CloudFolder } from "@/types";
 
 export async function POST(request: NextRequest) {
   try {
-    const sessionIdFromReq = getSessionIdFromRequest(request);
     const body = (await request.json()) as {
-      sessionId?: string;
+      code?: string;
       connectionId?: string;
       folders?: Array<{ id: string; name: string }>;
     };
 
-    const { connectionId, folders } = body;
-    // Allow body.sessionId as legacy fallback
-    const sessionId = sessionIdFromReq ?? body.sessionId ?? null;
+    const { code, connectionId, folders } = body;
 
-    if (!sessionId || !connectionId || !folders) {
+    if (!code || !connectionId || !folders) {
       return NextResponse.json(
         {
           error:
-            "Missing required fields: sessionId, connectionId, folders",
+            "Missing required fields: code, connectionId, folders",
         },
         { status: 400 }
       );
     }
 
-    const connections = await getConnections(sessionId);
+    const pairing = await getPairingSession(code);
+    if (!pairing || !isPairingMutable(pairing)) {
+      return NextResponse.json(
+        { error: "Pairing session not found, expired, or complete" },
+        { status: 404 }
+      );
+    }
+
+    const connections = await getConnections(pairing.sessionId);
     const connection = connections.find((c) => c.id === connectionId);
 
     if (!connection) {
@@ -43,7 +49,7 @@ export async function POST(request: NextRequest) {
     }));
 
     connection.folders = cloudFolders;
-    await saveConnection(sessionId, connection);
+    await saveConnection(pairing.sessionId, connection);
 
     return NextResponse.json({ ok: true });
   } catch (error) {

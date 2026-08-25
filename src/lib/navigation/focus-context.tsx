@@ -8,12 +8,18 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import {
+  chooseInitialFocusId,
+  chooseManualFocusId,
+  chooseReplacementFocusId,
+} from "./focus-policy";
 
 export interface FocusableElement {
   id: string;
   element: HTMLElement;
   row: number;
   col: number;
+  autoFocus: boolean;
   onSelect?: () => void;
 }
 
@@ -45,16 +51,20 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   const register = useCallback(
     (item: FocusableElement) => {
       itemsRef.current.set(item.id, item);
-      // Auto-focus the first registered item if nothing is focused
       setFocusedId((current) => {
-        if (current === null) {
-          item.element.scrollIntoView({
-            behavior: "smooth",
-            block: "nearest",
-          });
-          return item.id;
-        }
-        return current;
+        if (current !== null) return current;
+
+        const initialId = chooseInitialFocusId(
+          Array.from(itemsRef.current.values())
+        );
+        if (!initialId) return null;
+
+        const initial = itemsRef.current.get(initialId);
+        initial?.element.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
+        return initialId;
       });
     },
     []
@@ -71,18 +81,14 @@ export function FocusProvider({ children }: { children: ReactNode }) {
         // The focused item was removed; move focus to the nearest neighbor
         if (!removedItem || itemsRef.current.size === 0) return null;
 
-        const remaining = Array.from(itemsRef.current.values());
-        remaining.sort((a, b) => {
-          const distA =
-            Math.abs(a.row - removedItem.row) +
-            Math.abs(a.col - removedItem.col);
-          const distB =
-            Math.abs(b.row - removedItem.row) +
-            Math.abs(b.col - removedItem.col);
-          return distA - distB;
-        });
+        const replacementId = chooseReplacementFocusId(
+          Array.from(itemsRef.current.values()),
+          removedItem
+        );
+        if (!replacementId) return null;
 
-        const nearest = remaining[0];
+        const nearest = itemsRef.current.get(replacementId);
+        if (!nearest) return null;
         nearest.element.scrollIntoView({
           behavior: "smooth",
           block: "nearest",
@@ -96,7 +102,20 @@ export function FocusProvider({ children }: { children: ReactNode }) {
   const moveFocus = useCallback(
     (direction: Direction) => {
       const currentId = focusedId;
-      if (currentId === null) return;
+      if (currentId === null) {
+        const manualId = chooseManualFocusId(
+          Array.from(itemsRef.current.values())
+        );
+        if (!manualId) return;
+
+        const manual = itemsRef.current.get(manualId);
+        setFocusedId(manualId);
+        manual?.element.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
+        return;
+      }
 
       const current = itemsRef.current.get(currentId);
       if (!current) return;

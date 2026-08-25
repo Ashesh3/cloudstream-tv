@@ -3,6 +3,7 @@ export {
   getGoogleDriveStreamUrl,
   getGoogleOAuthUrl,
   exchangeGoogleCode,
+  getValidGoogleAccessToken,
   listGoogleDriveFolders,
 } from "./google-drive";
 
@@ -11,5 +12,6 @@ export {
   getOneDriveStreamUrl,
   getOneDriveOAuthUrl,
   exchangeOneDriveCode,
+  getValidOneDriveAccessToken,
   listOneDriveFolders,
 } from "./onedrive";

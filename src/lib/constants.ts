@@ -11,6 +11,14 @@ export const VIDEO_MIME_PREFIXES = ["video/mp4", "video/webm", "video/quicktime"
 
 export const KV_KEYS = {
   connections: (sessionId: string) => `connections:${sessionId}`,
+  connectionMetadata: (sessionId: string, connectionId: string) =>
+    `connection-metadata:${sessionId}:${connectionId}`,
+  connectionMetadataPrefix: (sessionId: string) =>
+    `connection-metadata:${sessionId}`,
+  connectionTokens: (sessionId: string, connectionId: string) =>
+    `connection-tokens:${sessionId}:${connectionId}`,
+  connectionTombstone: (sessionId: string, connectionId: string) =>
+    `connection-tombstone:${sessionId}:${connectionId}`,
   watchHistory: (sessionId: string, fileId: string) =>
     `watch-history:${sessionId}:${fileId}`,
   pairing: (code: string) => `pairing:${code}`,

@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPairingSession, getConnections } from "@/lib/kv";
 import { setSessionCookie } from "@/lib/kv/session";
+import {
+  isPairingPollAuthorized,
+  summarizePairingConnections,
+} from "@/lib/kv/pairing";
 
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = request.nextUrl;
     const code = searchParams.get("code");
+    const pollToken = request.headers.get("x-pairing-poll-token");
 
     if (!code) {
       return NextResponse.json(
@@ -23,12 +28,27 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    if (!isPairingPollAuthorized(session, pollToken)) {
+      return NextResponse.json({ error: "Unauthorized poll" }, { status: 403 });
+    }
+
     const connections = await getConnections(session.sessionId);
-    const paired = connections.length > 0;
+    const configuration = summarizePairingConnections(
+      connections.map((connection) => connection.folders.length)
+    );
+    // Pairing sessions created before explicit completion existed retain the
+    // legacy behavior. New setup/manage sessions wait until the phone presses
+    // Finish so multiple sources can be configured in one pass.
+    const paired = session.mode
+      ? Boolean(session.completedAt)
+      : configuration.paired;
 
     const response = NextResponse.json({
       paired,
+      complete: paired,
+      hasConnections: configuration.hasConnections,
       ...(paired ? { sessionId: session.sessionId } : {}),
+      mode: session.mode ?? "setup",
     });
 
     if (paired) {

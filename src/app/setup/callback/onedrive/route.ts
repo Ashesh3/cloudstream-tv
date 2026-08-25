@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getPairingSession, saveConnection } from "@/lib/kv";
 import { exchangeOneDriveCode } from "@/lib/cloud";
 import { ONEDRIVE_OAUTH } from "@/lib/constants";
+import { isPairingMutable } from "@/lib/kv/pairing";
 import type { CloudConnection } from "@/types";
 
 async function resolveOneDriveFolderByPath(
@@ -58,7 +59,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(debug, { status: 500 });
   }
 
-  if (!pairingSession) {
+  if (!pairingSession || !isPairingMutable(pairingSession)) {
     debug.step = "pairing_not_found";
     return NextResponse.json(debug, { status: 404 });
   }

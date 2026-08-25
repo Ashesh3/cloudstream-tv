@@ -55,6 +55,9 @@ export interface PairingSession {
   sessionId: string;
   createdAt: number;
   expiresAt: number;
+  pollToken?: string;
+  mode?: "setup" | "manage";
+  completedAt?: number;
 }
 
 export interface StreamUrlResponse {

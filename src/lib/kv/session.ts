@@ -1,7 +1,8 @@
 import { cookies } from "next/headers";
 import type { NextRequest } from "next/server";
 import type { NextResponse } from "next/server";
-import { getConnections } from "./storage";
+import { getConnections, hasSession } from "./storage";
+import { isSessionRestorable } from "./pairing";
 
 export const SESSION_COOKIE = "tv-session-id";
 export const SESSION_HEADER = "x-session-id";
@@ -58,10 +59,14 @@ export function getSessionIdFromRequest(request: NextRequest): string | null {
   return fromQuery ?? null;
 }
 
-/**
- * Validate that a session has at least one cloud connection.
- */
+/** Validate a durable TV session, including one with no current sources. */
 export async function validateSession(sessionId: string): Promise<boolean> {
-  const connections = await getConnections(sessionId);
-  return connections.length > 0;
+  const [connections, sessionRecord] = await Promise.all([
+    getConnections(sessionId),
+    hasSession(sessionId),
+  ]);
+  return isSessionRestorable({
+    hasSessionRecord: sessionRecord,
+    connectionCount: connections.length,
+  });
 }

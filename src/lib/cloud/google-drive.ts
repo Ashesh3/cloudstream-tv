@@ -6,7 +6,7 @@ import type { CloudConnection, BrowseItem } from "@/types";
  * Refresh the Google access token if it is expired or about to expire.
  * Updates KV storage with the new token. Returns the current (or refreshed) access token.
  */
-async function refreshAccessToken(
+export async function getValidGoogleAccessToken(
   sessionId: string,
   connection: CloudConnection
 ): Promise<string> {
@@ -51,7 +51,7 @@ export async function listGoogleDriveFiles(
   connection: CloudConnection,
   folderId: string
 ): Promise<BrowseItem[]> {
-  const accessToken = await refreshAccessToken(sessionId, connection);
+  const accessToken = await getValidGoogleAccessToken(sessionId, connection);
 
   const query = `'${folderId}' in parents and trashed = false`;
   const fields =
@@ -141,7 +141,7 @@ export async function getGoogleDriveStreamUrl(
   connection: CloudConnection,
   fileId: string
 ): Promise<string> {
-  const accessToken = await refreshAccessToken(sessionId, connection);
+  const accessToken = await getValidGoogleAccessToken(sessionId, connection);
   return `${GOOGLE_OAUTH.apiBase}/files/${fileId}?alt=media&access_token=${encodeURIComponent(accessToken)}`;
 }
 

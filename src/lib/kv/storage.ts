@@ -1,7 +1,22 @@
-import { put, get, del } from "@vercel/blob";
+import { put, get, del, list } from "@vercel/blob";
 import { v4 as uuidv4 } from "uuid";
 import { KV_KEYS, PAIRING_CODE_EXPIRY_MS } from "../constants";
+import { buildPairingSession } from "./pairing";
+import {
+  joinConnectionRecords,
+  splitConnectionRecords,
+  type ConnectionMetadataRecord,
+  type ConnectionTokenRecord,
+} from "./connection-records";
 import type { CloudConnection, WatchHistory, PairingSession } from "@/types";
+
+interface StoredSession {
+  createdAt: number;
+}
+
+interface ConnectionTombstone {
+  deletedAt: number;
+}
 
 /**
  * Storage layer backed by Vercel Blob.
@@ -27,6 +42,10 @@ import type { CloudConnection, WatchHistory, PairingSession } from "@/types";
  */
 function keyToPath(key: string): string {
   return "kv/" + key.split(":").map(encodeURIComponent).join("/") + ".json";
+}
+
+function keyPrefixToPath(key: string): string {
+  return "kv/" + key.split(":").map(encodeURIComponent).join("/") + "/";
 }
 
 async function kvGet<T>(key: string): Promise<T | null> {
@@ -63,10 +82,60 @@ async function kvDel(key: string): Promise<void> {
 export async function getConnections(
   sessionId: string
 ): Promise<CloudConnection[]> {
-  const connections = await kvGet<CloudConnection[]>(
-    KV_KEYS.connections(sessionId)
+  const legacyConnections =
+    (await kvGet<CloudConnection[]>(KV_KEYS.connections(sessionId))) ?? [];
+  const connectionIds = new Set(
+    legacyConnections.map((connection) => connection.id)
   );
-  return connections ?? [];
+
+  for (const connectionId of await listConnectionIds(sessionId)) {
+    connectionIds.add(connectionId);
+  }
+
+  const legacyById = new Map(
+    legacyConnections.map((connection) => [connection.id, connection])
+  );
+
+  const resolved = await Promise.all(
+    Array.from(connectionIds).map(async (connectionId) => {
+      const [metadata, tokens, tombstone] = await Promise.all([
+        kvGet<ConnectionMetadataRecord>(
+          KV_KEYS.connectionMetadata(sessionId, connectionId)
+        ),
+        kvGet<ConnectionTokenRecord>(
+          KV_KEYS.connectionTokens(sessionId, connectionId)
+        ),
+        kvGet<ConnectionTombstone>(
+          KV_KEYS.connectionTombstone(sessionId, connectionId)
+        ),
+      ]);
+
+      if (tombstone) return null;
+
+      const legacy = legacyById.get(connectionId);
+      const effectiveTokens =
+        tokens ??
+        (legacy
+          ? {
+              accessToken: legacy.accessToken,
+              refreshToken: legacy.refreshToken,
+              tokenExpiry: legacy.tokenExpiry,
+            }
+          : null);
+
+      if (metadata && effectiveTokens) {
+        return joinConnectionRecords(metadata, effectiveTokens);
+      }
+      if (legacy) {
+        return tokens ? { ...legacy, ...tokens } : legacy;
+      }
+      return null;
+    })
+  );
+
+  return resolved.filter(
+    (connection): connection is CloudConnection => connection !== null
+  );
 }
 
 /**
@@ -76,14 +145,40 @@ export async function saveConnection(
   sessionId: string,
   connection: CloudConnection
 ): Promise<void> {
-  const existing = await getConnections(sessionId);
-  const index = existing.findIndex((c) => c.id === connection.id);
-  if (index >= 0) {
-    existing[index] = connection;
-  } else {
-    existing.push(connection);
+  const tombstone = await kvGet<ConnectionTombstone>(
+    KV_KEYS.connectionTombstone(sessionId, connection.id)
+  );
+  if (tombstone) {
+    throw new Error("Cannot save a removed cloud connection");
   }
-  await kvSet(KV_KEYS.connections(sessionId), existing);
+
+  const [metadata, legacyConnections, tokens] = await Promise.all([
+    kvGet<ConnectionMetadataRecord>(
+      KV_KEYS.connectionMetadata(sessionId, connection.id)
+    ),
+    kvGet<CloudConnection[]>(KV_KEYS.connections(sessionId)),
+    kvGet<ConnectionTokenRecord>(
+      KV_KEYS.connectionTokens(sessionId, connection.id)
+    ),
+  ]);
+  const legacy = legacyConnections?.find(
+    (candidate) => candidate.id === connection.id
+  );
+  const records = splitConnectionRecords(
+    connection,
+    metadata?.createdAt ?? Date.now()
+  );
+
+  if (!tokens && !legacy) {
+    await kvSet(
+      KV_KEYS.connectionTokens(sessionId, connection.id),
+      records.tokens
+    );
+  }
+  await kvSet(
+    KV_KEYS.connectionMetadata(sessionId, connection.id),
+    records.metadata
+  );
 }
 
 /**
@@ -93,9 +188,13 @@ export async function removeConnection(
   sessionId: string,
   connectionId: string
 ): Promise<void> {
-  const existing = await getConnections(sessionId);
-  const filtered = existing.filter((c) => c.id !== connectionId);
-  await kvSet(KV_KEYS.connections(sessionId), filtered);
+  await kvSet(KV_KEYS.connectionTombstone(sessionId, connectionId), {
+    deletedAt: Date.now(),
+  });
+  await Promise.all([
+    kvDel(KV_KEYS.connectionMetadata(sessionId, connectionId)),
+    kvDel(KV_KEYS.connectionTokens(sessionId, connectionId)),
+  ]);
 }
 
 /**
@@ -107,13 +206,28 @@ export async function updateTokens(
   accessToken: string,
   tokenExpiry: number
 ): Promise<void> {
-  const existing = await getConnections(sessionId);
-  const connection = existing.find((c) => c.id === connectionId);
-  if (connection) {
-    connection.accessToken = accessToken;
-    connection.tokenExpiry = tokenExpiry;
-    await kvSet(KV_KEYS.connections(sessionId), existing);
-  }
+  const tombstone = await kvGet<ConnectionTombstone>(
+    KV_KEYS.connectionTombstone(sessionId, connectionId)
+  );
+  if (tombstone) return;
+
+  const [tokens, legacyConnections] = await Promise.all([
+    kvGet<ConnectionTokenRecord>(
+      KV_KEYS.connectionTokens(sessionId, connectionId)
+    ),
+    kvGet<CloudConnection[]>(KV_KEYS.connections(sessionId)),
+  ]);
+  const legacy = legacyConnections?.find(
+    (connection) => connection.id === connectionId
+  );
+  const refreshToken = tokens?.refreshToken ?? legacy?.refreshToken;
+  if (!refreshToken) return;
+
+  await kvSet(KV_KEYS.connectionTokens(sessionId, connectionId), {
+    accessToken,
+    refreshToken,
+    tokenExpiry,
+  } satisfies ConnectionTokenRecord);
 }
 
 /**
@@ -151,20 +265,69 @@ function generatePairingCode(): string {
 /**
  * Create a new pairing session with a generated code and session id.
  */
-export async function createPairingSession(): Promise<PairingSession> {
+export async function createPairingSession(
+  existingSessionId: string | null = null
+): Promise<PairingSession> {
   const code = generatePairingCode();
-  const sessionId = uuidv4();
   const now = Date.now();
   const session: PairingSession = {
-    code,
-    sessionId,
-    createdAt: now,
-    expiresAt: now + PAIRING_CODE_EXPIRY_MS,
+    ...buildPairingSession({
+      code,
+      existingSessionId,
+      generatedSessionId: uuidv4(),
+      pollToken: uuidv4(),
+      now,
+      expiryMs: PAIRING_CODE_EXPIRY_MS,
+    }),
+    mode: existingSessionId ? "manage" : "setup",
   };
 
   await kvSet(KV_KEYS.pairing(code), session);
+  if (existingSessionId) {
+    await ensureSession(session.sessionId);
+  }
 
   return session;
+}
+
+async function listConnectionIds(sessionId: string): Promise<string[]> {
+  const prefix = keyPrefixToPath(KV_KEYS.connectionMetadataPrefix(sessionId));
+  const ids: string[] = [];
+  let cursor: string | undefined;
+
+  do {
+    const result = await list({ prefix, cursor, limit: 1000 });
+    for (const blob of result.blobs) {
+      const filename = blob.pathname.slice(prefix.length);
+      if (filename.endsWith(".json")) {
+        ids.push(decodeURIComponent(filename.slice(0, -5)));
+      }
+    }
+    cursor = result.hasMore ? result.cursor : undefined;
+  } while (cursor);
+
+  return ids;
+}
+
+export async function ensureSession(sessionId: string): Promise<void> {
+  const existing = await kvGet<StoredSession>(KV_KEYS.session(sessionId));
+  if (existing) return;
+
+  await kvSet(KV_KEYS.session(sessionId), { createdAt: Date.now() });
+}
+
+export async function hasSession(sessionId: string): Promise<boolean> {
+  return Boolean(await kvGet<StoredSession>(KV_KEYS.session(sessionId)));
+}
+
+export async function completePairingSession(code: string): Promise<boolean> {
+  const session = await getPairingSession(code);
+  if (!session) return false;
+
+  session.completedAt = Date.now();
+  await kvSet(KV_KEYS.pairing(code), session);
+  await ensureSession(session.sessionId);
+  return true;
 }
 
 /**
