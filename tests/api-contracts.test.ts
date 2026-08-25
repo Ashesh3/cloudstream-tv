@@ -46,6 +46,7 @@ describe("public API DTOs", () => {
       "requestSecretHash",
       "encryptedRefreshToken",
       "encryptedAccessToken",
+      "providerAccountId",
       "accessTokenCiphertext",
       "tokenHash",
       "ciphertext",
@@ -136,6 +137,7 @@ function makeSource(): Source {
     id: "s1",
     householdId: "h1",
     provider: "google",
+    providerAccountId: "synthetic-account-a",
     accountLabel: "Family Drive",
     encryptedRefreshToken: {
       keyVersion: "v1",

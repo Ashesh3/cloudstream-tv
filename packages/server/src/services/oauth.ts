@@ -156,6 +156,15 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
       ) {
         throw new OAuthServiceError("SOURCE_NOT_FOUND", "Source not found.");
       }
+      if (
+        !existing.providerAccountId ||
+        existing.providerAccountId !== account.accountId
+      ) {
+        throw new OAuthServiceError(
+          "OAUTH_ACCOUNT_MISMATCH",
+          "Reconnect must use the same cloud account."
+        );
+      }
       const current = sourceService.decryptSource(existing).credentials;
       const refreshToken = account.credentials.refreshToken ?? current.refreshToken;
       if (!refreshToken) {
@@ -181,6 +190,7 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
         id: createId(),
         householdId: consumed.householdId,
         provider: consumed.provider,
+        providerAccountId: account.accountId,
         accountLabel: account.accountLabel,
         credentials: account.credentials,
         createdAt: now()
@@ -199,6 +209,7 @@ export type OAuthServiceErrorCode =
   | "OAUTH_STATE_INVALID"
   | "OAUTH_CANCELLED"
   | "OAUTH_PROVIDER_ERROR"
+  | "OAUTH_ACCOUNT_MISMATCH"
   | "SOURCE_NOT_FOUND";
 
 export class OAuthServiceError extends Error {

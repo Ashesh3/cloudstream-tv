@@ -92,6 +92,8 @@ export function createGoogleDriveAdapter(
       url.searchParams.set("q", `'${input.folderId.replaceAll("'", "\\'")}' in parents and trashed = false`);
       url.searchParams.set("pageSize", String(input.pageSize));
       url.searchParams.set("spaces", "drive");
+      url.searchParams.set("supportsAllDrives", "true");
+      url.searchParams.set("includeItemsFromAllDrives", "true");
       url.searchParams.set("fields", `nextPageToken,files(${GOOGLE_FILE_FIELDS})`);
       if (input.cursor) url.searchParams.set("pageToken", input.cursor);
       const page = await googleJson<GoogleFilePage>(fetch, url, input.credentials.accessToken, now);
@@ -115,6 +117,8 @@ export function createGoogleDriveAdapter(
       url.searchParams.set("pageToken", input.cursor);
       url.searchParams.set("pageSize", String(input.pageSize));
       url.searchParams.set("includeRemoved", "true");
+      url.searchParams.set("supportsAllDrives", "true");
+      url.searchParams.set("includeItemsFromAllDrives", "true");
       url.searchParams.set("fields", `nextPageToken,newStartPageToken,changes(fileId,removed,file(${GOOGLE_FILE_FIELDS}))`);
       const page = await googleJson<GoogleChangesResponse>(
         fetch,
@@ -143,7 +147,7 @@ export function createGoogleDriveAdapter(
     async getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null> {
       const file = await googleJson<GoogleFile>(
         fetch,
-        `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}?fields=id,thumbnailLink,version`,
+        `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}?fields=id,thumbnailLink,version&supportsAllDrives=true`,
         input.credentials.accessToken,
         now
       );
@@ -160,6 +164,7 @@ export function createGoogleDriveAdapter(
       );
       url.searchParams.set("alt", "media");
       url.searchParams.set("access_token", input.credentials.accessToken);
+      url.searchParams.set("supportsAllDrives", "true");
       return { url: url.toString(), expiresAt: input.credentials.accessTokenExpiresAt };
     }
   };

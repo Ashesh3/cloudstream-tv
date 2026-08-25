@@ -737,6 +737,7 @@ function makeSource(): Source {
     id: "s1",
     householdId: "h1",
     provider: "google",
+    providerAccountId: "synthetic-account-a",
     accountLabel: "Family Google Drive",
     encryptedRefreshToken: {
       keyVersion: "v1",

@@ -15,6 +15,7 @@ export interface CreateEncryptedSourceInput {
   id: string;
   householdId: string;
   provider: Source["provider"];
+  providerAccountId: string | null;
   accountLabel: string;
   credentials: ProviderCredentials;
   createdAt: Date;
@@ -55,6 +56,7 @@ export function createSourceService(
       id: input.id,
       householdId: input.householdId,
       provider: input.provider,
+      providerAccountId: input.providerAccountId,
       accountLabel: input.accountLabel,
       encryptedRefreshToken: encryptProviderToken(
         input.credentials.refreshToken,

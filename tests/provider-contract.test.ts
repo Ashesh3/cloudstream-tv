@@ -210,7 +210,7 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     if (provider === "google") {
       expect(thumbnail?.url.endsWith("=s720")).toBe(true);
       expect(media.url).toBe(
-        "https://www.googleapis.com/drive/v3/files/g-image-a?alt=media&access_token=synthetic-access-token"
+        "https://www.googleapis.com/drive/v3/files/g-image-a?alt=media&access_token=synthetic-access-token&supportsAllDrives=true"
       );
       expect(media.expiresAt).toEqual(accessExpiresAt);
     } else {
@@ -219,6 +219,42 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     }
     expect(requests.every(url => !url.pathname.includes("/api/"))).toBe(true);
   });
+
+  if (provider === "google") {
+    it("adds Shared Drive flags to list, changes, thumbnail, and media requests", async () => {
+      const { adapter, requests } = createHarness(provider);
+      await adapter.listFolder({
+        credentials,
+        folderId: "g-root",
+        cursor: null,
+        pageSize: 50
+      });
+      await adapter.getChanges({
+        credentials,
+        cursor: "google-delta-previous",
+        pageSize: 50
+      });
+      await adapter.getThumbnailUrl({
+        credentials,
+        providerNodeId: "g-image-a",
+        maxDimension: 720
+      });
+      const media = await adapter.getMediaUrl({
+        credentials,
+        providerNodeId: "g-image-a"
+      });
+
+      const list = requests.find(url => url.pathname.endsWith("/files"))!;
+      const changes = requests.find(url => url.pathname.endsWith("/changes"))!;
+      const thumbnail = requests.find(url => url.pathname.endsWith("/g-image-a"))!;
+      expect(list.searchParams.get("supportsAllDrives")).toBe("true");
+      expect(list.searchParams.get("includeItemsFromAllDrives")).toBe("true");
+      expect(changes.searchParams.get("supportsAllDrives")).toBe("true");
+      expect(changes.searchParams.get("includeItemsFromAllDrives")).toBe("true");
+      expect(thumbnail.searchParams.get("supportsAllDrives")).toBe("true");
+      expect(new URL(media.url).searchParams.get("supportsAllDrives")).toBe("true");
+    });
+  }
 });
 
 describe("provider failure normalization", () => {

@@ -90,6 +90,7 @@ export type SourceStatus =
 export interface Source extends StoredEntity {
   householdId: EntityId;
   provider: ProviderKind;
+  providerAccountId: string | null;
   accountLabel: string;
   encryptedRefreshToken: EncryptedSecret;
   encryptedAccessToken: EncryptedSecret | null;

@@ -288,7 +288,7 @@ describe("OAuth state and encrypted source lifecycle", () => {
     expect((await repository.listOAuthStates(household.id))[0]?.consumedAt).toEqual(now);
   });
 
-  it("reconnects only a matching household/provider source and retains refresh token when omitted", async () => {
+  it("reconnects only the same provider account and retains refresh token when omitted", async () => {
     const { repository, google, service } = await setup();
     const sourceService = createSourceService({
       repository,
@@ -301,6 +301,7 @@ describe("OAuth state and encrypted source lifecycle", () => {
         id: "source-existing",
         householdId: household.id,
         provider: "google",
+        providerAccountId: "synthetic-account-a",
         accountLabel: "Old label",
         credentials: {
           accessToken: "synthetic-old-access",
@@ -354,6 +355,104 @@ describe("OAuth state and encrypted source lifecycle", () => {
       })
     ).rejects.toMatchObject({ code: "SOURCE_NOT_FOUND" });
   });
+
+  it("rejects a reconnect from a different provider account without mutating the source or starting sync", async () => {
+    const { repository, google, startInitialSync, service } = await setup();
+    const sourceService = createSourceService({
+      repository,
+      providers: registry(google),
+      keyring,
+      now: () => now
+    });
+    const original = sourceService.encryptSource({
+      id: "source-existing",
+      householdId: household.id,
+      provider: "google",
+      providerAccountId: "synthetic-account-a",
+      accountLabel: "Original label",
+      credentials: {
+        accessToken: "synthetic-old-access",
+        refreshToken: "synthetic-old-refresh",
+        accessTokenExpiresAt: new Date(now.getTime() + 1000)
+      },
+      createdAt: new Date("2025-01-01T00:00:00.000Z")
+    });
+    await repository.putSource(original);
+    vi.mocked(google.completeAuthorization).mockResolvedValueOnce({
+      accountId: "synthetic-account-b",
+      accountLabel: "Intruder label",
+      credentials: {
+        accessToken: "synthetic-intruder-access",
+        refreshToken: "synthetic-intruder-refresh",
+        accessTokenExpiresAt: new Date(now.getTime() + 60 * 60 * 1000)
+      }
+    });
+    const start = await service.beginAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      reconnectSourceId: "source-existing"
+    });
+
+    await expect(
+      service.completeAuthorization({
+        householdId: household.id,
+        adminSessionId: "admin-session-a",
+        provider: "google",
+        redirectUri,
+        state: new URL(start.authorizationUrl).searchParams.get("state")!,
+        code: "synthetic-code"
+      })
+    ).rejects.toMatchObject({ code: "OAUTH_ACCOUNT_MISMATCH" });
+
+    expect(await repository.getSource("source-existing")).toEqual(original);
+    expect(startInitialSync).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a legacy reconnect source has no provider account identity", async () => {
+    const { repository, google, startInitialSync, service } = await setup();
+    const sourceService = createSourceService({
+      repository,
+      providers: registry(google),
+      keyring,
+      now: () => now
+    });
+    const legacy = sourceService.encryptSource({
+      id: "source-legacy",
+      householdId: household.id,
+      provider: "google",
+      providerAccountId: null,
+      accountLabel: "Legacy label",
+      credentials: {
+        accessToken: "synthetic-old-access",
+        refreshToken: "synthetic-old-refresh",
+        accessTokenExpiresAt: new Date(now.getTime() + 1000)
+      },
+      createdAt: new Date("2025-01-01T00:00:00.000Z")
+    });
+    await repository.putSource(legacy);
+    const start = await service.beginAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      reconnectSourceId: "source-legacy"
+    });
+
+    await expect(
+      service.completeAuthorization({
+        householdId: household.id,
+        adminSessionId: "admin-session-a",
+        provider: "google",
+        redirectUri,
+        state: new URL(start.authorizationUrl).searchParams.get("state")!,
+        code: "synthetic-code"
+      })
+    ).rejects.toMatchObject({ code: "OAUTH_ACCOUNT_MISMATCH" });
+    expect(await repository.getSource("source-legacy")).toEqual(legacy);
+    expect(startInitialSync).not.toHaveBeenCalled();
+  });
 });
 
 async function sha256Base64Url(value: string): Promise<string> {
@@ -375,6 +474,7 @@ describe("source credential refresh", () => {
       id: "source-a",
       householdId: household.id,
       provider: "google",
+      providerAccountId: "synthetic-account-a",
       accountLabel: "Family cloud",
       credentials: {
         accessToken: "synthetic-stale-access",
@@ -421,6 +521,7 @@ describe("source credential refresh", () => {
         id: "source-a",
         householdId: household.id,
         provider: "google",
+        providerAccountId: "synthetic-account-a",
         accountLabel: "Family cloud",
         credentials: {
           accessToken: "synthetic-stale-access",
