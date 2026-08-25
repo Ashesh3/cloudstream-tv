@@ -133,6 +133,29 @@ describe("MemoryRepository security transitions", () => {
     expect(await repo.getDeviceSessionByHash(session.tokenHash)).toBeNull();
   });
 
+  it("rejects reuse of a session token hash already stored in memory", async () => {
+    const repo = new MemoryRepository();
+    await repo.createDeviceRequest(pendingRequest);
+    await repo.putDeviceSession({
+      ...session,
+      id: "existing-session",
+      deviceId: "existing-device"
+    });
+
+    await expect(
+      repo.approveDeviceRequest({
+        requestId: "r1",
+        device,
+        session,
+        rootIds: ["root-1"],
+        approvedAt: now
+      })
+    ).rejects.toThrow(/token.*already exists/i);
+
+    expect((await repo.getDeviceRequest("r1"))?.status).toBe("pending");
+    expect(await repo.getDevice("d1")).toBeNull();
+  });
+
   it.each([
     {
       name: "device household",
@@ -457,6 +480,38 @@ describe("Firestore document decoding", () => {
 });
 
 describe("FirestoreRepository device approval", () => {
+  it("allows only one concurrent approval to claim a session token hash", async () => {
+    const fake = createConcurrentApprovalFirestore();
+    const repo = new FirestoreRepository(fake.firestore);
+    const secondDevice = { ...device, id: "d2", name: "Bedroom" };
+    const secondSession = {
+      ...session,
+      id: "ds2",
+      deviceId: "d2"
+    };
+
+    const results = await Promise.allSettled([
+      repo.approveDeviceRequest({
+        requestId: "r1",
+        device,
+        session,
+        rootIds: ["root-1"],
+        approvedAt: now
+      }),
+      repo.approveDeviceRequest({
+        requestId: "r2",
+        device: secondDevice,
+        session: secondSession,
+        rootIds: ["root-1"],
+        approvedAt: now
+      })
+    ]);
+
+    expect(results.filter(result => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter(result => result.status === "rejected")).toHaveLength(1);
+    expect(fake.createdTokenClaimIds).toEqual([session.tokenHash]);
+  });
+
   it.each([
     {
       name: "expired request",
@@ -520,7 +575,7 @@ describe("FirestoreRepository device approval", () => {
       })
     ).rejects.toThrow(/token.*already exists/i);
 
-    expect(fake.queriedTokenHashes).toEqual([session.tokenHash]);
+    expect(fake.readTokenClaimIds).toEqual([session.tokenHash]);
     expect(fake.writes).toEqual([]);
   });
 });
@@ -531,19 +586,14 @@ function createApprovalFirestore(
 ): {
   firestore: Firestore;
   writes: string[];
-  queriedTokenHashes: string[];
+  readTokenClaimIds: string[];
 } {
   const writes: string[] = [];
-  const queriedTokenHashes: string[] = [];
+  const readTokenClaimIds: string[] = [];
   const requestRef = { kind: "request", id: "r1" };
   const deviceRef = { kind: "device", id: "d1" };
   const sessionRef = { kind: "session", id: "ds1" };
-  const tokenQuery = {
-    kind: "token-query",
-    limit() {
-      return this;
-    }
-  };
+  const tokenClaimRef = { kind: "token-claim", id: session.tokenHash };
   const firestore = {
     collection(name: string) {
       return {
@@ -551,14 +601,11 @@ function createApprovalFirestore(
           if (name === "deviceRequests" && id === "r1") return requestRef;
           if (name === "devices" && id === "d1") return deviceRef;
           if (name === "deviceSessions" && id === "ds1") return sessionRef;
+          if (name === "deviceSessionTokenClaims") {
+            readTokenClaimIds.push(id);
+            return tokenClaimRef;
+          }
           throw new Error(`Unexpected document ${name}/${id}`);
-        },
-        where(field: string, operator: string, value: string) {
-          expect(name).toBe("deviceSessions");
-          expect(field).toBe("tokenHash");
-          expect(operator).toBe("==");
-          queriedTokenHashes.push(value);
-          return tokenQuery;
         }
       };
     },
@@ -575,12 +622,11 @@ function createApprovalFirestore(
           if (target === deviceRef || target === sessionRef) {
             return { exists: false };
           }
-          if (target === tokenQuery) {
+          if (target === tokenClaimRef) {
             return {
-              empty: !duplicateTokenHash,
-              docs: duplicateTokenHash
-                ? [{ id: "existing-session", data: () => session }]
-                : []
+              id: session.tokenHash,
+              exists: duplicateTokenHash,
+              data: () => ({ sessionId: "existing-session" })
             };
           }
           throw new Error("Unexpected transaction read");
@@ -594,7 +640,96 @@ function createApprovalFirestore(
       })
   } as unknown as Firestore;
 
-  return { firestore, writes, queriedTokenHashes };
+  return { firestore, writes, readTokenClaimIds };
+}
+
+function createConcurrentApprovalFirestore(): {
+  firestore: Firestore;
+  createdTokenClaimIds: string[];
+} {
+  const createdDocumentKeys = new Set<string>();
+  const createdTokenClaimIds: string[] = [];
+  const readyResolvers: Array<() => void> = [];
+  let readyCount = 0;
+
+  const references = new Map<string, { key: string }>();
+  const reference = (collection: string, id: string) => {
+    const key = `${collection}/${id}`;
+    const existing = references.get(key);
+    if (existing) return existing;
+    const created = { key };
+    references.set(key, created);
+    return created;
+  };
+
+  const firestore = {
+    collection(name: string) {
+      return {
+        doc(id: string) {
+          return reference(name, id);
+        },
+        where() {
+          return {
+            limit() {
+              return this;
+            }
+          };
+        }
+      };
+    },
+    async runTransaction(
+      operation: (transaction: unknown) => Promise<unknown>
+    ): Promise<unknown> {
+      const stagedCreates: Array<{ reference: { key: string } }> = [];
+      const transaction = {
+        async get(target: { key?: string }) {
+          if (target.key?.startsWith("deviceRequests/")) {
+            const id = target.key.split("/")[1] ?? "";
+            return {
+              id,
+              exists: true,
+              data: () => ({ ...pendingRequest, id })
+            };
+          }
+          if (
+            target.key?.startsWith("devices/") ||
+            target.key?.startsWith("deviceSessions/") ||
+            target.key?.startsWith("deviceSessionTokenClaims/")
+          ) {
+            return { id: target.key.split("/")[1], exists: false };
+          }
+          return { empty: true, docs: [] };
+        },
+        update() {},
+        create(target: { key: string }) {
+          stagedCreates.push({ reference: target });
+        }
+      };
+
+      const result = await operation(transaction);
+      readyCount += 1;
+      if (readyCount < 2) {
+        await new Promise<void>(resolve => readyResolvers.push(resolve));
+      } else {
+        readyResolvers.splice(0).forEach(resolve => resolve());
+      }
+
+      for (const create of stagedCreates) {
+        if (createdDocumentKeys.has(create.reference.key)) {
+          throw new Error(`Document already exists: ${create.reference.key}`);
+        }
+      }
+      for (const create of stagedCreates) {
+        createdDocumentKeys.add(create.reference.key);
+        if (create.reference.key.startsWith("deviceSessionTokenClaims/")) {
+          createdTokenClaimIds.push(create.reference.key.split("/")[1] ?? "");
+        }
+      }
+      return result;
+    }
+  } as unknown as Firestore;
+
+  return { firestore, createdTokenClaimIds };
 }
 
 function makeSource(): Source {

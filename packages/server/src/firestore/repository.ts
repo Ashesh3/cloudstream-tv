@@ -52,6 +52,7 @@ const COLLECTIONS = {
   deviceRequests: "deviceRequests",
   devices: "devices",
   deviceSessions: "deviceSessions",
+  deviceSessionTokenClaims: "deviceSessionTokenClaims",
   sources: "sources",
   roots: "roots",
   nodes: "nodes",
@@ -103,15 +104,14 @@ export class FirestoreRepository implements AppRepository {
       const requestRef = this.firestore.collection(COLLECTIONS.deviceRequests).doc(input.requestId);
       const deviceRef = this.firestore.collection(COLLECTIONS.devices).doc(input.device.id);
       const sessionRef = this.firestore.collection(COLLECTIONS.deviceSessions).doc(input.session.id);
-      const tokenHashQuery = this.firestore
-        .collection(COLLECTIONS.deviceSessions)
-        .where("tokenHash", "==", input.session.tokenHash)
-        .limit(1);
-      const [requestSnapshot, deviceSnapshot, sessionSnapshot, tokenHashSnapshot] = await Promise.all([
+      const tokenClaimRef = this.firestore
+        .collection(COLLECTIONS.deviceSessionTokenClaims)
+        .doc(input.session.tokenHash);
+      const [requestSnapshot, deviceSnapshot, sessionSnapshot, tokenClaimSnapshot] = await Promise.all([
         transaction.get(requestRef),
         transaction.get(deviceRef),
         transaction.get(sessionRef),
-        transaction.get(tokenHashQuery)
+        transaction.get(tokenClaimRef)
       ]);
       const request = requestSnapshot.exists
         ? decodeFirestoreDocument<DeviceRequest>(
@@ -123,11 +123,18 @@ export class FirestoreRepository implements AppRepository {
       validateDeviceApproval(request, input);
       if (deviceSnapshot.exists) throw new Error("Device already exists");
       if (sessionSnapshot.exists) throw new Error("Device session already exists");
-      if (!tokenHashSnapshot.empty) throw new Error("Device session token already exists");
+      if (tokenClaimSnapshot.exists) throw new Error("Device session token already exists");
       const approvedAt = input.approvedAt;
       transaction.update(requestRef, { status: "approved", resolvedAt: approvedAt, approvedDeviceId: input.device.id });
       transaction.create(deviceRef, { ...input.device, assignedRootIds: [...input.rootIds] });
       transaction.create(sessionRef, input.session);
+      transaction.create(tokenClaimRef, {
+        tokenHash: input.session.tokenHash,
+        sessionId: input.session.id,
+        deviceId: input.device.id,
+        householdId: input.device.householdId,
+        createdAt: approvedAt
+      });
     });
   }
 
