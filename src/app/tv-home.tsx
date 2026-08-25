@@ -10,18 +10,14 @@ import {
   useFocusable,
 } from "@/lib/navigation";
 import { ContentRow } from "@/components";
+import {
+  clearStoredSessionId,
+  fetchWithSession,
+  getStoredSessionId,
+  storeSessionId,
+} from "@/lib/client/session";
 import { POLL_INTERVAL_MS } from "@/lib/constants";
 import type { BrowseItem, CloudProvider } from "@/types";
-
-/* ------------------------------------------------------------------ */
-/*  Helpers                                                            */
-/* ------------------------------------------------------------------ */
-
-/** Store sessionId in both localStorage and a cookie for API routes. */
-function persistSessionId(id: string) {
-  localStorage.setItem("tv-session-id", id);
-  document.cookie = `tv-session-id=${encodeURIComponent(id)}; path=/; max-age=${60 * 60 * 24 * 365}; SameSite=Lax`;
-}
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
@@ -81,11 +77,23 @@ function TVHomeInner() {
 
   /* ---- Session bootstrap ---- */
   useEffect(() => {
-    const stored = localStorage.getItem("tv-session-id");
+    const stored = getStoredSessionId();
     if (stored) {
-      // Ensure the cookie stays in sync with localStorage
-      persistSessionId(stored);
-      setSessionId(stored);
+      // Reissue the HTTP-only cookie after cookie clearing/access-code login.
+      fetchWithSession("/api/session", { method: "POST" })
+        .then((res) => {
+          if (res.status === 404) {
+            clearStoredSessionId();
+            window.location.reload();
+            return;
+          }
+          setSessionId(stored);
+        })
+        .catch(() => {
+          // The explicit session header still lets TV API calls recover when
+          // this browser rejects cookies entirely.
+          setSessionId(stored);
+        });
     } else {
       // Create a pairing session
       fetch("/api/pairing", { method: "POST" })
@@ -109,7 +117,7 @@ function TVHomeInner() {
         .then((res) => res.json())
         .then((data) => {
           if (data.paired && data.sessionId) {
-            persistSessionId(data.sessionId);
+            storeSessionId(data.sessionId);
             setSessionId(data.sessionId);
             setPairingCode(null);
           }
@@ -131,8 +139,11 @@ function TVHomeInner() {
     if (!sessionId) return;
     setViewState("loading");
 
-    fetch("/api/browse")
-      .then((res) => res.json())
+    fetchWithSession("/api/browse")
+      .then((res) => {
+        if (!res.ok) throw new Error("Failed to browse files");
+        return res.json();
+      })
       .then((data) => {
         const groups: FolderGroup[] = data.folders ?? [];
         setFolderGroups(groups);
@@ -177,10 +188,13 @@ function TVHomeInner() {
     containerRef.current?.focus();
   }, [viewState]);
 
-  const reconfigure = useCallback(() => {
-    localStorage.removeItem("tv-session-id");
-    document.cookie = "tv-session-id=; path=/; max-age=0; SameSite=Lax";
-    window.location.reload();
+  const reconfigure = useCallback(async () => {
+    clearStoredSessionId();
+    try {
+      await fetch("/api/session", { method: "DELETE" });
+    } finally {
+      window.location.reload();
+    }
   }, []);
 
   /* ---- Render ---- */

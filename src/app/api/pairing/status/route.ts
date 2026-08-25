@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getPairingSession, getConnections } from "@/lib/kv";
+import { setSessionCookie } from "@/lib/kv/session";
 
 export async function GET(request: NextRequest) {
   try {
@@ -25,10 +26,16 @@ export async function GET(request: NextRequest) {
     const connections = await getConnections(session.sessionId);
     const paired = connections.length > 0;
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       paired,
       ...(paired ? { sessionId: session.sessionId } : {}),
     });
+
+    if (paired) {
+      setSessionCookie(response, session.sessionId);
+    }
+
+    return response;
   } catch (error) {
     console.error("Pairing status error:", error);
     return NextResponse.json(

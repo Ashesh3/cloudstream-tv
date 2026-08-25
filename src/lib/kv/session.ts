@@ -1,9 +1,36 @@
 import { cookies } from "next/headers";
 import type { NextRequest } from "next/server";
+import type { NextResponse } from "next/server";
 import { getConnections } from "./storage";
 
-const SESSION_COOKIE = "tv-session-id";
-const SESSION_HEADER = "x-session-id";
+export const SESSION_COOKIE = "tv-session-id";
+export const SESSION_HEADER = "x-session-id";
+const SESSION_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
+
+/**
+ * Persist the TV session from a server response. Some smart-TV browsers do
+ * not reliably accept cookies written through document.cookie, but do accept
+ * normal Set-Cookie response headers.
+ */
+export function setSessionCookie(response: NextResponse, sessionId: string) {
+  response.cookies.set(SESSION_COOKIE, sessionId, {
+    path: "/",
+    maxAge: SESSION_MAX_AGE_SECONDS,
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+  });
+}
+
+export function clearSessionCookie(response: NextResponse) {
+  response.cookies.set(SESSION_COOKIE, "", {
+    path: "/",
+    maxAge: 0,
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+  });
+}
 
 /**
  * Get the session ID from the request cookies.

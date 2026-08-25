@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { TVPlayer } from "@/components/tv-player";
+import { fetchWithSession } from "@/lib/client/session";
 import type { CloudProvider, WatchHistory } from "@/types";
 
 export default function PlayPage() {
@@ -38,11 +39,11 @@ export default function PlayPage() {
     });
 
     Promise.all([
-      fetch(`/api/stream-url?${streamParams}`).then((res) => {
+      fetchWithSession(`/api/stream-url?${streamParams}`).then((res) => {
         if (!res.ok) throw new Error("Failed to get stream URL");
         return res.json();
       }),
-      fetch(`/api/watch-history?${historyParams}`)
+      fetchWithSession(`/api/watch-history?${historyParams}`)
         .then((res) => res.json())
         .catch(() => ({ history: null })),
     ])
@@ -68,7 +69,7 @@ export default function PlayPage() {
     (position: number, duration: number) => {
       if (!videoId) return;
 
-      fetch("/api/watch-history", {
+      fetchWithSession("/api/watch-history", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

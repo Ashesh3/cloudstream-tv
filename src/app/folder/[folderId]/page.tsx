@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import { FocusProvider, useDpad } from "@/lib/navigation";
 import { ContentGrid, Breadcrumb } from "@/components";
+import { fetchWithSession } from "@/lib/client/session";
 import type { BrowseItem, CloudProvider } from "@/types";
 
 /* ------------------------------------------------------------------ */
@@ -44,7 +45,7 @@ function FolderViewInner() {
     setError(null);
 
     const qs = new URLSearchParams({ connectionId, folderId });
-    fetch(`/api/browse?${qs}`)
+    fetchWithSession(`/api/browse?${qs}`)
       .then((res) => {
         if (!res.ok) throw new Error("Failed to load folder contents");
         return res.json();
