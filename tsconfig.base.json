@@ -1,0 +1,40 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@cloudframe/shared": ["packages/shared/src/index.ts"],
+      "@cloudframe/shared/*": ["packages/shared/src/*"],
+      "@cloudframe/server": ["packages/server/src/index.ts"],
+      "@cloudframe/server/*": ["packages/server/src/*"],
+      "@cloudframe/providers": ["packages/providers/src/index.ts"],
+      "@cloudframe/providers/*": ["packages/providers/src/*"],
+      "@cloudframe/indexer": ["packages/indexer/src/index.ts"],
+      "@cloudframe/indexer/*": ["packages/indexer/src/*"],
+      "@cloudframe/tv-core": ["packages/tv-core/src/index.ts"],
+      "@cloudframe/tv-core/*": ["packages/tv-core/src/*"]
+    }
+  },
+  "include": [
+    "api/**/*.ts",
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "tests/**/*.ts",
+    "vitest.config.ts",
+    "playwright.config.ts"
+  ],
+  "exclude": ["node_modules", "dist", "apps/*/dist", "src", "tests/**/*.mjs"]
+}

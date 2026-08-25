@@ -19,6 +19,8 @@
 
 # production
 /build
+/dist
+/apps/*/dist
 
 # misc
 .DS_Store
@@ -36,6 +38,17 @@ yarn-error.log*
 
 # vercel
 .vercel
+
+# local design and test artifacts
+.superpowers/
+.firebase/
+firebase-debug.log*
+playwright-report/
+test-results/
+
+# credentials
+*service-account*.json
+firebase-adminsdk-*.json
 
 # typescript
 *.tsbuildinfo

@@ -1,0 +1,21 @@
+{
+  "name": "@cloudframe/tv",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@cloudframe/shared": "*",
+    "@cloudframe/tv-core": "*",
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "@vitejs/plugin-legacy": "^8.2.3",
+    "terser": "^5.44.0",
+    "vite": "^8.2.2"
+  }
+}
