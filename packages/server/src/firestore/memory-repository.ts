@@ -269,6 +269,8 @@ export class MemoryRepository implements AppRepository {
     if (
       !source ||
       source.leaseOwner !== input.expectedLeaseOwner ||
+      !source.leaseExpiresAt ||
+      source.leaseExpiresAt <= input.failedAt ||
       JSON.stringify(source.crawlCheckpoint) !== JSON.stringify(input.expectedCheckpoint)
     ) return false;
     this.sources.set(source.id, copy({

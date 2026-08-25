@@ -344,6 +344,31 @@ describe("bounded resumable indexing", () => {
     });
   });
 
+  it("ignores a provider failure after the same owner's lease expires", async () => {
+    const repository = await seededRepository();
+    await repository.acquireSyncLease({
+      sourceId: "s1",
+      owner: "expired-owner",
+      now,
+      expiresAt: new Date(now.getTime() + 1_000)
+    });
+    const source = (await repository.getSource("s1"))!;
+    await expect(repository.recordSyncFailure({
+      sourceId: "s1",
+      expectedLeaseOwner: "expired-owner",
+      expectedCheckpoint: source.crawlCheckpoint,
+      failedAt: new Date(now.getTime() + 2_000),
+      status: "error",
+      errorCode: "PROVIDER_TIMEOUT",
+      nextSyncAt: new Date(now.getTime() + 60_000)
+    })).resolves.toBe(false);
+    expect(await repository.getSource("s1")).toMatchObject({
+      status: "syncing",
+      leaseOwner: "expired-owner",
+      lastSyncErrorCode: null
+    });
+  });
+
   it("rejects stale lease owners and expired long-running batches", async () => {
     const repository = await seededRepository();
     await repository.acquireSyncLease({ sourceId: "s1", owner: "owner-a", now, expiresAt: new Date(now.getTime() + 1_000) });
