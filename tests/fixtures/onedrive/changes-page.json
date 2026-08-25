@@ -1,0 +1,26 @@
+{
+  "@odata.deltaLink": "https://graph.microsoft.com/v1.0/me/drive/root/delta?token=synthetic-delta-next",
+  "value": [
+    {
+      "id": "o-deleted-a",
+      "deleted": { "state": "deleted" }
+    },
+    {
+      "id": "o-image-moved",
+      "name": "Moved.jpg",
+      "parentReference": { "id": "o-folder-b" },
+      "file": { "mimeType": "image/jpeg" },
+      "image": { "width": 800, "height": 600 },
+      "createdDateTime": "2024-06-01T00:00:00.000Z",
+      "lastModifiedDateTime": "2024-06-02T00:00:00.000Z",
+      "thumbnails": [{ "large": { "url": "https://synthetic.invalid/onedrive-moved" } }],
+      "eTag": "moved-etag"
+    },
+    {
+      "id": "o-document-a",
+      "name": "Ignored.txt",
+      "parentReference": { "id": "o-root" },
+      "file": { "mimeType": "text/plain" }
+    }
+  ]
+}

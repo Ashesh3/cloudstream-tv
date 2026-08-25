@@ -11,3 +11,11 @@ export * from "./services/admin-auth";
 export * from "./services/bootstrap";
 export * from "./services/device-auth";
 export * from "./services/device-enrollment";
+export * from "./services/sources";
+export * from "./services/oauth";
+export type {
+  ProviderAdapter,
+  ProviderCredentials,
+  ProviderRegistry
+} from "@cloudframe/providers";
+export { ProviderError } from "@cloudframe/providers";

@@ -7,6 +7,7 @@ import type {
   DeviceSession,
   Household,
   MediaNode,
+  OAuthState,
   RotateAdminPassphraseInput,
   Source,
   SyncLeaseInput,
@@ -24,6 +25,7 @@ import type {
   AuthenticatedDeviceSession,
   RateLimitConsumeInput,
   RateLimitConsumeResult,
+  ConsumeOAuthStateInput,
   ResolveDeviceRequestInput,
   UpdateDeviceInput
 } from "./repository";
@@ -41,6 +43,7 @@ export class MemoryRepository implements AppRepository {
   private nodes = new Map<string, MediaNode>();
   private history = new Map<string, WatchHistory>();
   private rateLimits = new Map<string, number>();
+  private oauthStates = new Map<string, OAuthState>();
 
   async getHousehold(id: string) { return this.get(this.households, id); }
   async putHousehold(value: Household) { this.set(this.households, value); }
@@ -91,6 +94,25 @@ export class MemoryRepository implements AppRepository {
   async putSource(value: Source) { this.set(this.sources, value); }
   async getSource(id: string) { return this.get(this.sources, id); }
   async listSources(householdId: string) { return this.filter(this.sources, value => value.householdId === householdId); }
+  async createOAuthState(value: OAuthState) { this.create(this.oauthStates, value, "OAuth state"); }
+  async listOAuthStates(householdId: string) { return this.filter(this.oauthStates, value => value.householdId === householdId); }
+  async consumeOAuthState(input: ConsumeOAuthStateInput): Promise<OAuthState | null> {
+    const state = [...this.oauthStates.values()].find(value => value.stateHash === input.stateHash);
+    if (
+      !state ||
+      state.householdId !== input.householdId ||
+      state.adminSessionId !== input.adminSessionId ||
+      state.provider !== input.provider ||
+      state.redirectUri !== input.redirectUri ||
+      state.consumedAt !== null ||
+      state.expiresAt <= input.now
+    ) {
+      return null;
+    }
+    const consumed = copy({ ...state, consumedAt: input.now });
+    this.oauthStates.set(state.id, consumed);
+    return copy(consumed);
+  }
   async putRoot(value: AssignedRoot) { this.set(this.roots, value); }
   async getRoot(id: string) { return this.get(this.roots, id); }
   async listRootsForSource(sourceId: string) { return this.filter(this.roots, value => value.sourceId === sourceId); }

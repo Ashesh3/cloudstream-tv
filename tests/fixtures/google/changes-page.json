@@ -1,0 +1,34 @@
+{
+  "newStartPageToken": "google-delta-next",
+  "changes": [
+    {
+      "fileId": "g-deleted-a",
+      "removed": true
+    },
+    {
+      "fileId": "g-image-moved",
+      "removed": false,
+      "file": {
+        "id": "g-image-moved",
+        "name": "Moved.jpg",
+        "mimeType": "image/jpeg",
+        "parents": ["g-folder-b"],
+        "createdTime": "2024-06-01T00:00:00.000Z",
+        "modifiedTime": "2024-06-02T00:00:00.000Z",
+        "imageMediaMetadata": { "width": 800, "height": 600 },
+        "thumbnailLink": "https://synthetic.invalid/google-moved=s220",
+        "version": "21"
+      }
+    },
+    {
+      "fileId": "g-sheet-a",
+      "removed": false,
+      "file": {
+        "id": "g-sheet-a",
+        "name": "Ignored sheet",
+        "mimeType": "application/vnd.google-apps.spreadsheet",
+        "parents": ["g-root"]
+      }
+    }
+  ]
+}

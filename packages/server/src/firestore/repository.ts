@@ -7,6 +7,7 @@ import type {
   DeviceSession,
   Household,
   MediaNode,
+  OAuthState,
   RotateAdminPassphraseInput,
   Source,
   SyncLeaseInput,
@@ -69,6 +70,15 @@ export interface UpdateDeviceInput {
   >;
 }
 
+export interface ConsumeOAuthStateInput {
+  stateHash: string;
+  householdId: string;
+  adminSessionId: string;
+  provider: Source["provider"];
+  redirectUri: string;
+  now: Date;
+}
+
 export type RepositoryErrorCode =
   | "DEVICE_REQUEST_NOT_FOUND"
   | "DEVICE_REQUEST_NOT_PENDING"
@@ -116,6 +126,9 @@ export interface AppRepository {
   putSource(source: Source): Promise<void>;
   getSource(id: string): Promise<Source | null>;
   listSources(householdId: string): Promise<Source[]>;
+  createOAuthState(state: OAuthState): Promise<void>;
+  consumeOAuthState(input: ConsumeOAuthStateInput): Promise<OAuthState | null>;
+  listOAuthStates(householdId: string): Promise<OAuthState[]>;
   acquireSyncLease(input: SyncLeaseInput): Promise<boolean>;
   releaseSyncLease(sourceId: string, owner: string): Promise<boolean>;
   putRoot(root: AssignedRoot): Promise<void>;
@@ -137,6 +150,7 @@ const COLLECTIONS = {
   deviceSessions: "deviceSessions",
   deviceSessionTokenClaims: "deviceSessionTokenClaims",
   rateLimits: "rateLimits",
+  oauthStates: "oauthStates",
   sources: "sources",
   roots: "roots",
   nodes: "nodes",
@@ -173,6 +187,31 @@ export class FirestoreRepository implements AppRepository {
   putSource(value: Source) { return this.put(COLLECTIONS.sources, value); }
   getSource(id: string) { return this.getById<Source>(COLLECTIONS.sources, id); }
   listSources(householdId: string) { return this.getMany<Source>(this.query(COLLECTIONS.sources, "householdId", householdId)); }
+  createOAuthState(value: OAuthState) { return this.create(COLLECTIONS.oauthStates, value); }
+  listOAuthStates(householdId: string) { return this.getMany<OAuthState>(this.query(COLLECTIONS.oauthStates, "householdId", householdId)); }
+  async consumeOAuthState(input: ConsumeOAuthStateInput): Promise<OAuthState | null> {
+    return this.firestore.runTransaction(async transaction => {
+      const snapshots = await transaction.get(
+        this.firestore.collection(COLLECTIONS.oauthStates).where("stateHash", "==", input.stateHash).limit(1)
+      );
+      const snapshot = snapshots.docs[0];
+      if (!snapshot) return null;
+      const state = decodeFirestoreDocument<OAuthState>(snapshot.id, snapshot.data());
+      if (
+        state.householdId !== input.householdId ||
+        state.adminSessionId !== input.adminSessionId ||
+        state.provider !== input.provider ||
+        state.redirectUri !== input.redirectUri ||
+        state.consumedAt !== null ||
+        state.expiresAt <= input.now
+      ) {
+        return null;
+      }
+      const consumed = { ...state, consumedAt: input.now };
+      transaction.set(snapshot.ref, consumed);
+      return consumed;
+    });
+  }
   putRoot(value: AssignedRoot) { return this.put(COLLECTIONS.roots, value); }
   getRoot(id: string) { return this.getById<AssignedRoot>(COLLECTIONS.roots, id); }
   listRootsForSource(sourceId: string) { return this.getMany<AssignedRoot>(this.query(COLLECTIONS.roots, "sourceId", sourceId)); }

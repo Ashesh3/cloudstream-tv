@@ -108,6 +108,19 @@ export interface Source extends StoredEntity {
   createdAt: Date;
 }
 
+export interface OAuthState extends StoredEntity {
+  stateHash: string;
+  householdId: EntityId;
+  adminSessionId: EntityId;
+  provider: ProviderKind;
+  redirectUri: string;
+  reconnectSourceId: EntityId | null;
+  encryptedCodeVerifier: EncryptedSecret;
+  createdAt: Date;
+  expiresAt: Date;
+  consumedAt: Date | null;
+}
+
 export interface AssignedRoot extends StoredEntity {
   householdId: EntityId;
   sourceId: EntityId;
