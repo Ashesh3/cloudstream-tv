@@ -14,22 +14,91 @@ import type {
 } from "@cloudframe/shared";
 import type { Firestore, Query, Transaction, WriteBatch } from "@google-cloud/firestore";
 
+export interface RateLimitConsumeInput {
+  bucket: string;
+  subject: string;
+  now: Date;
+  windowSeconds: number;
+  limit: number;
+}
+
+export interface RateLimitConsumeResult {
+  allowed: boolean;
+  remaining: number;
+  retryAfterSeconds: number;
+}
+
+export interface AuthenticateAdminSessionInput {
+  tokenHash: string;
+  householdId: string;
+  now: Date;
+  renewalExpiresAt: Date;
+  renewBefore: Date;
+}
+
+export type AuthenticateDeviceSessionInput = AuthenticateAdminSessionInput;
+
+export interface AuthenticatedDeviceSession {
+  session: DeviceSession;
+  device: Device;
+  household: Household;
+  renewed: boolean;
+}
+
+export interface AuthenticatedAdminSession {
+  session: AdminSession;
+  household: Household;
+  renewed: boolean;
+}
+
+export interface ResolveDeviceRequestInput {
+  requestId: string;
+  householdId: string;
+  now: Date;
+}
+
+export interface UpdateDeviceInput {
+  deviceId: string;
+  householdId: string;
+  rootIds: string[];
+  patch: Partial<
+    Pick<
+      Device,
+      "name" | "enabled" | "mediaOrder" | "slideshowSeconds"
+    >
+  >;
+}
+
 export interface AppRepository {
   getHousehold(id: string): Promise<Household | null>;
   putHousehold(household: Household): Promise<void>;
+  createHouseholdIfAbsent(household: Household): Promise<Household>;
   getAdminSessionByHash(tokenHash: string): Promise<AdminSession | null>;
   putAdminSession(session: AdminSession): Promise<void>;
+  authenticateAdminSession(
+    input: AuthenticateAdminSessionInput
+  ): Promise<AuthenticatedAdminSession | null>;
+  revokeAdminSession(sessionId: string, tokenHash: string, revokedAt: Date): Promise<boolean>;
   rotateAdminPassphrase(input: RotateAdminPassphraseInput): Promise<Household>;
   createDeviceRequest(request: DeviceRequest): Promise<void>;
   getDeviceRequest(id: string): Promise<DeviceRequest | null>;
+  getDeviceRequestBySecretHash(tokenHash: string): Promise<DeviceRequest | null>;
   listDeviceRequests(householdId: string): Promise<DeviceRequest[]>;
   approveDeviceRequest(input: ApproveDeviceRequestInput): Promise<void>;
+  approveDeviceRequestWithRoots(input: ApproveDeviceRequestInput): Promise<void>;
+  denyDeviceRequest(input: ResolveDeviceRequestInput): Promise<DeviceRequest>;
+  expireDeviceRequest(input: ResolveDeviceRequestInput): Promise<DeviceRequest>;
   putDevice(device: Device): Promise<void>;
   getDevice(id: string): Promise<Device | null>;
   listDevices(householdId: string): Promise<Device[]>;
+  updateDeviceWithRoots(input: UpdateDeviceInput): Promise<Device>;
   revokeDevice(deviceId: string, revokedAt: Date): Promise<void>;
   putDeviceSession(session: DeviceSession): Promise<void>;
   getDeviceSessionByHash(tokenHash: string): Promise<DeviceSession | null>;
+  authenticateDeviceSession(
+    input: AuthenticateDeviceSessionInput
+  ): Promise<AuthenticatedDeviceSession | null>;
+  consumeRateLimit(input: RateLimitConsumeInput): Promise<RateLimitConsumeResult>;
   putSource(source: Source): Promise<void>;
   getSource(id: string): Promise<Source | null>;
   listSources(householdId: string): Promise<Source[]>;
@@ -53,6 +122,7 @@ const COLLECTIONS = {
   devices: "devices",
   deviceSessions: "deviceSessions",
   deviceSessionTokenClaims: "deviceSessionTokenClaims",
+  rateLimits: "rateLimits",
   sources: "sources",
   roots: "roots",
   nodes: "nodes",
@@ -64,10 +134,22 @@ export class FirestoreRepository implements AppRepository {
 
   getHousehold(id: string) { return this.getById<Household>(COLLECTIONS.households, id); }
   putHousehold(value: Household) { return this.put(COLLECTIONS.households, value); }
+  async createHouseholdIfAbsent(value: Household): Promise<Household> {
+    return this.firestore.runTransaction(async transaction => {
+      const reference = this.firestore.collection(COLLECTIONS.households).doc(value.id);
+      const snapshot = await transaction.get(reference);
+      if (snapshot.exists) {
+        return decodeFirestoreDocument<Household>(snapshot.id, snapshot.data());
+      }
+      transaction.create(reference, value);
+      return value;
+    });
+  }
   getAdminSessionByHash(hash: string) { return this.getOne<AdminSession>(this.query(COLLECTIONS.adminSessions, "tokenHash", hash)); }
   putAdminSession(value: AdminSession) { return this.put(COLLECTIONS.adminSessions, value); }
   createDeviceRequest(value: DeviceRequest) { return this.create(COLLECTIONS.deviceRequests, value); }
   getDeviceRequest(id: string) { return this.getById<DeviceRequest>(COLLECTIONS.deviceRequests, id); }
+  getDeviceRequestBySecretHash(hash: string) { return this.getOne<DeviceRequest>(this.query(COLLECTIONS.deviceRequests, "requestSecretHash", hash)); }
   listDeviceRequests(householdId: string) { return this.getMany<DeviceRequest>(this.query(COLLECTIONS.deviceRequests, "householdId", householdId)); }
   putDevice(value: Device) { return this.put(COLLECTIONS.devices, value); }
   getDevice(id: string) { return this.getById<Device>(COLLECTIONS.devices, id); }
@@ -100,6 +182,17 @@ export class FirestoreRepository implements AppRepository {
   }
 
   async approveDeviceRequest(input: ApproveDeviceRequestInput): Promise<void> {
+    return this.approveDeviceRequestTransaction(input, false);
+  }
+
+  async approveDeviceRequestWithRoots(input: ApproveDeviceRequestInput): Promise<void> {
+    return this.approveDeviceRequestTransaction(input, true);
+  }
+
+  private async approveDeviceRequestTransaction(
+    input: ApproveDeviceRequestInput,
+    validateRoots: boolean
+  ): Promise<void> {
     await this.firestore.runTransaction(async transaction => {
       const requestRef = this.firestore.collection(COLLECTIONS.deviceRequests).doc(input.requestId);
       const deviceRef = this.firestore.collection(COLLECTIONS.devices).doc(input.device.id);
@@ -107,11 +200,17 @@ export class FirestoreRepository implements AppRepository {
       const tokenClaimRef = this.firestore
         .collection(COLLECTIONS.deviceSessionTokenClaims)
         .doc(input.session.tokenHash);
-      const [requestSnapshot, deviceSnapshot, sessionSnapshot, tokenClaimSnapshot] = await Promise.all([
+      const rootReferences = validateRoots
+        ? input.rootIds.map(rootId =>
+            this.firestore.collection(COLLECTIONS.roots).doc(rootId)
+          )
+        : [];
+      const [requestSnapshot, deviceSnapshot, sessionSnapshot, tokenClaimSnapshot, ...rootSnapshots] = await Promise.all([
         transaction.get(requestRef),
         transaction.get(deviceRef),
         transaction.get(sessionRef),
-        transaction.get(tokenClaimRef)
+        transaction.get(tokenClaimRef),
+        ...rootReferences.map(reference => transaction.get(reference))
       ]);
       const request = requestSnapshot.exists
         ? decodeFirestoreDocument<DeviceRequest>(
@@ -124,6 +223,13 @@ export class FirestoreRepository implements AppRepository {
       if (deviceSnapshot.exists) throw new Error("Device already exists");
       if (sessionSnapshot.exists) throw new Error("Device session already exists");
       if (tokenClaimSnapshot.exists) throw new Error("Device session token already exists");
+      if (validateRoots) {
+        validateRootSnapshots(
+          rootSnapshots,
+          input.device.householdId,
+          input.rootIds
+        );
+      }
       const approvedAt = input.approvedAt;
       transaction.update(requestRef, { status: "approved", resolvedAt: approvedAt, approvedDeviceId: input.device.id });
       transaction.create(deviceRef, { ...input.device, assignedRootIds: [...input.rootIds] });
@@ -135,6 +241,142 @@ export class FirestoreRepository implements AppRepository {
         householdId: input.device.householdId,
         createdAt: approvedAt
       });
+    });
+  }
+
+  async denyDeviceRequest(input: ResolveDeviceRequestInput): Promise<DeviceRequest> {
+    return this.resolveDeviceRequest(input, "denied");
+  }
+
+  async expireDeviceRequest(input: ResolveDeviceRequestInput): Promise<DeviceRequest> {
+    return this.resolveDeviceRequest(input, "expired");
+  }
+
+  async updateDeviceWithRoots(input: UpdateDeviceInput): Promise<Device> {
+    return this.firestore.runTransaction(async transaction => {
+      const deviceReference = this.firestore.collection(COLLECTIONS.devices).doc(input.deviceId);
+      const rootReferences = input.rootIds.map(rootId =>
+        this.firestore.collection(COLLECTIONS.roots).doc(rootId)
+      );
+      const [deviceSnapshot, ...rootSnapshots] = await Promise.all([
+        transaction.get(deviceReference),
+        ...rootReferences.map(reference => transaction.get(reference))
+      ]);
+      if (!deviceSnapshot.exists) throw new Error("Device not found");
+      const device = decodeFirestoreDocument<Device>(deviceSnapshot.id, deviceSnapshot.data());
+      if (device.householdId !== input.householdId) throw new Error("Device not found");
+      validateRootSnapshots(rootSnapshots, input.householdId, input.rootIds);
+      const updated: Device = {
+        ...device,
+        ...input.patch,
+        assignedRootIds: [...input.rootIds]
+      };
+      transaction.set(deviceReference, updated);
+      return updated;
+    });
+  }
+
+  async authenticateAdminSession(
+    input: AuthenticateAdminSessionInput
+  ): Promise<AuthenticatedAdminSession | null> {
+    return this.firestore.runTransaction(async transaction => {
+      const sessions = await transaction.get(
+        this.firestore.collection(COLLECTIONS.adminSessions).where("tokenHash", "==", input.tokenHash).limit(1)
+      );
+      const snapshot = sessions.docs[0];
+      if (!snapshot) return null;
+      const session = decodeFirestoreDocument<AdminSession>(snapshot.id, snapshot.data());
+      const householdReference = this.firestore.collection(COLLECTIONS.households).doc(input.householdId);
+      const householdSnapshot = await transaction.get(householdReference);
+      if (!householdSnapshot.exists) return null;
+      const household = decodeFirestoreDocument<Household>(householdSnapshot.id, householdSnapshot.data());
+      if (!isValidAdminSession(session, household, input)) return null;
+      const renewed = session.expiresAt < input.renewBefore;
+      const updated = {
+        ...session,
+        lastSeenAt: input.now,
+        ...(renewed ? { expiresAt: input.renewalExpiresAt } : {})
+      };
+      transaction.set(snapshot.ref, updated);
+      return { session: updated, household, renewed };
+    });
+  }
+
+  async revokeAdminSession(
+    sessionId: string,
+    tokenHash: string,
+    revokedAt: Date
+  ): Promise<boolean> {
+    return this.firestore.runTransaction(async transaction => {
+      const reference = this.firestore.collection(COLLECTIONS.adminSessions).doc(sessionId);
+      const snapshot = await transaction.get(reference);
+      if (!snapshot.exists) return false;
+      const session = decodeFirestoreDocument<AdminSession>(snapshot.id, snapshot.data());
+      if (session.tokenHash !== tokenHash) return false;
+      transaction.update(reference, { revokedAt });
+      return true;
+    });
+  }
+
+  async authenticateDeviceSession(
+    input: AuthenticateDeviceSessionInput
+  ): Promise<AuthenticatedDeviceSession | null> {
+    return this.firestore.runTransaction(async transaction => {
+      const sessions = await transaction.get(
+        this.firestore.collection(COLLECTIONS.deviceSessions).where("tokenHash", "==", input.tokenHash).limit(1)
+      );
+      const snapshot = sessions.docs[0];
+      if (!snapshot) return null;
+      const session = decodeFirestoreDocument<DeviceSession>(snapshot.id, snapshot.data());
+      const [deviceSnapshot, householdSnapshot] = await Promise.all([
+        transaction.get(this.firestore.collection(COLLECTIONS.devices).doc(session.deviceId)),
+        transaction.get(this.firestore.collection(COLLECTIONS.households).doc(input.householdId))
+      ]);
+      if (!deviceSnapshot.exists || !householdSnapshot.exists) return null;
+      const device = decodeFirestoreDocument<Device>(deviceSnapshot.id, deviceSnapshot.data());
+      const household = decodeFirestoreDocument<Household>(householdSnapshot.id, householdSnapshot.data());
+      if (!isValidDeviceSession(session, device, household, input)) return null;
+      const renewed = session.expiresAt < input.renewBefore;
+      const updatedSession = {
+        ...session,
+        lastSeenAt: input.now,
+        ...(renewed ? { expiresAt: input.renewalExpiresAt } : {})
+      };
+      const updatedDevice = { ...device, lastSeenAt: input.now };
+      transaction.set(snapshot.ref, updatedSession);
+      transaction.set(deviceSnapshot.ref, updatedDevice);
+      return { session: updatedSession, device: updatedDevice, household, renewed };
+    });
+  }
+
+  async consumeRateLimit(input: RateLimitConsumeInput): Promise<RateLimitConsumeResult> {
+    const windowMs = input.windowSeconds * 1000;
+    const windowStart = Math.floor(input.now.getTime() / windowMs) * windowMs;
+    const documentId = rateLimitDocumentId(input.bucket, input.subject, windowStart);
+    return this.firestore.runTransaction(async transaction => {
+      const reference = this.firestore.collection(COLLECTIONS.rateLimits).doc(documentId);
+      const snapshot = await transaction.get(reference);
+      const count = snapshot.exists ? Number(snapshot.data()?.count ?? 0) : 0;
+      const retryAfterSeconds = Math.max(
+        1,
+        Math.ceil((windowStart + windowMs - input.now.getTime()) / 1000)
+      );
+      if (count >= input.limit) {
+        return { allowed: false, remaining: 0, retryAfterSeconds };
+      }
+      const next = count + 1;
+      transaction.set(reference, {
+        bucket: input.bucket,
+        subject: input.subject,
+        windowStart: new Date(windowStart),
+        expiresAt: new Date(windowStart + windowMs * 2),
+        count: next
+      });
+      return {
+        allowed: true,
+        remaining: Math.max(0, input.limit - next),
+        retryAfterSeconds
+      };
     });
   }
 
@@ -205,6 +447,28 @@ export class FirestoreRepository implements AppRepository {
     });
   }
 
+  private async resolveDeviceRequest(
+    input: ResolveDeviceRequestInput,
+    status: "denied" | "expired"
+  ): Promise<DeviceRequest> {
+    return this.firestore.runTransaction(async transaction => {
+      const reference = this.firestore.collection(COLLECTIONS.deviceRequests).doc(input.requestId);
+      const snapshot = await transaction.get(reference);
+      if (!snapshot.exists) throw new Error("Device request not found");
+      const request = decodeFirestoreDocument<DeviceRequest>(snapshot.id, snapshot.data());
+      if (request.householdId !== input.householdId || request.status !== "pending") {
+        throw new Error("Device request is not pending");
+      }
+      const updated: DeviceRequest = {
+        ...request,
+        status,
+        resolvedAt: input.now
+      };
+      transaction.set(reference, updated);
+      return updated;
+    });
+  }
+
   private query(collection: string, field: string, value: unknown): Query {
     return this.firestore.collection(collection).where(field, "==", value);
   }
@@ -251,6 +515,70 @@ export function validateDeviceApproval(
   ) {
     throw new Error("Device approval relationship is invalid");
   }
+}
+
+interface SnapshotLike {
+  id: string;
+  exists: boolean;
+  data(): Record<string, unknown> | undefined;
+}
+
+function validateRootSnapshots(
+  snapshots: SnapshotLike[],
+  householdId: string,
+  rootIds: string[]
+): void {
+  if (rootIds.length === 0 || new Set(rootIds).size !== rootIds.length) {
+    throw new Error("Root assignment is invalid");
+  }
+  for (const snapshot of snapshots) {
+    if (!snapshot.exists) throw new Error("Root assignment is invalid");
+    const root = decodeFirestoreDocument<AssignedRoot>(snapshot.id, snapshot.data());
+    if (root.householdId !== householdId || !root.enabled) {
+      throw new Error("Root assignment is invalid");
+    }
+  }
+}
+
+function isValidAdminSession(
+  session: AdminSession,
+  household: Household,
+  input: AuthenticateAdminSessionInput
+): boolean {
+  return (
+    session.householdId === input.householdId &&
+    household.id === input.householdId &&
+    session.passphraseVersion === household.adminPassphraseVersion &&
+    session.revokedAt === null &&
+    session.expiresAt > input.now
+  );
+}
+
+function isValidDeviceSession(
+  session: DeviceSession,
+  device: Device,
+  household: Household,
+  input: AuthenticateDeviceSessionInput
+): boolean {
+  return (
+    session.householdId === input.householdId &&
+    session.deviceId === device.id &&
+    device.householdId === input.householdId &&
+    household.id === input.householdId &&
+    session.revokedAt === null &&
+    session.expiresAt > input.now &&
+    device.enabled &&
+    device.revokedAt === null
+  );
+}
+
+function rateLimitDocumentId(
+  bucket: string,
+  subject: string,
+  windowStart: number
+): string {
+  const value = `${bucket}\u0000${subject}\u0000${windowStart}`;
+  return Buffer.from(value, "utf8").toString("base64url");
 }
 
 interface FirestoreTimestampLike {
