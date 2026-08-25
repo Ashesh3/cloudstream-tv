@@ -16,6 +16,15 @@ export interface IndexOrchestratorRepository
     completedAt: Date;
     nextSyncAt: Date;
   }): Promise<void>;
+  recordSyncFailure(input: {
+    sourceId: string;
+    expectedLeaseOwner: string;
+    expectedCheckpoint: IndexCheckpoint | null;
+    failedAt: Date;
+    status: "reauth-required" | "error";
+    errorCode: string;
+    nextSyncAt: Date | null;
+  }): Promise<boolean>;
 }
 
 export interface IndexOrchestratorDependencies {
@@ -162,7 +171,13 @@ export function createIndexOrchestrator(
       }
         return { complete: false };
       } catch (error) {
-        await recordProviderFailure(dependencies.repository, source, error, now());
+        await recordProviderFailure(
+          dependencies.repository,
+          source,
+          leaseOwner,
+          error,
+          now()
+        );
         throw error;
       }
     }
@@ -218,14 +233,18 @@ function syntheticRootProviderNode(
 async function recordProviderFailure(
   repository: IndexOrchestratorRepository,
   source: Source,
+  leaseOwner: string,
   error: unknown,
   failedAt: Date
 ): Promise<void> {
   if (!(error instanceof ProviderError)) return;
-  await repository.putSource({
-    ...source,
+  await repository.recordSyncFailure({
+    sourceId: source.id,
+    expectedLeaseOwner: leaseOwner,
+    expectedCheckpoint: source.crawlCheckpoint,
+    failedAt,
     status: error.code === "PROVIDER_REAUTH_REQUIRED" ? "reauth-required" : "error",
-    lastSyncErrorCode: error.code,
+    errorCode: error.code,
     nextSyncAt: error.retryAfterSeconds === null
       ? source.nextSyncAt
       : new Date(failedAt.getTime() + error.retryAfterSeconds * 1000)

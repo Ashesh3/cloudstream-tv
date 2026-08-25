@@ -256,6 +256,33 @@ export class MemoryRepository implements AppRepository {
     return true;
   }
 
+  async recordSyncFailure(input: {
+    sourceId: string;
+    expectedLeaseOwner: string;
+    expectedCheckpoint: import("@cloudframe/shared").IndexCheckpoint | null;
+    failedAt: Date;
+    status: "reauth-required" | "error";
+    errorCode: string;
+    nextSyncAt: Date | null;
+  }): Promise<boolean> {
+    const source = this.sources.get(input.sourceId);
+    if (
+      !source ||
+      source.leaseOwner !== input.expectedLeaseOwner ||
+      JSON.stringify(source.crawlCheckpoint) !== JSON.stringify(input.expectedCheckpoint)
+    ) return false;
+    this.sources.set(source.id, copy({
+      ...source,
+      status: input.status,
+      lastSyncErrorCode: input.errorCode,
+      nextSyncAt: input.nextSyncAt,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      activeWorkflowRunId: null
+    }));
+    return true;
+  }
+
   async approveDeviceRequest(input: ApproveDeviceRequestInput): Promise<void> {
     return this.approveDeviceRequestTransaction(input, false);
   }

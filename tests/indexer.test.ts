@@ -294,6 +294,7 @@ describe("bounded resumable indexing", () => {
       getCredentials: async () => ({ accessToken: "a", refreshToken: "r", accessTokenExpiresAt: later() }),
       now: () => now
     });
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
     await expect(throttled.runNext("s1", "delta", "owner")).rejects.toMatchObject({ code: "PROVIDER_THROTTLED" });
     expect(await repository.getSource("s1")).toMatchObject({
       status: "error",
@@ -308,9 +309,39 @@ describe("bounded resumable indexing", () => {
       now: () => now
     });
     await repository.putNode(indexedFixtureNode());
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
     await expect(reauth.runNext("s1", "delta", "owner")).rejects.toMatchObject({ code: "PROVIDER_REAUTH_REQUIRED" });
     expect(await repository.getSource("s1")).toMatchObject({ status: "reauth-required" });
     expect(await repository.listNodesForSource("s1")).not.toEqual([]);
+  });
+
+  it("ignores a stale provider failure after a newer owner advances the source", async () => {
+    const repository = await seededRepository();
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "old-owner", now, expiresAt: later() });
+    let rejectBlocked!: (error: unknown) => void;
+    const blocked = new Promise<never>((_resolve, reject) => { rejectBlocked = reject; });
+    const orchestrator = createIndexOrchestrator({
+      repository,
+      providers: { get: () => ({ getChanges: () => blocked } as unknown as ProviderAdapter) },
+      getCredentials: async () => ({ accessToken: "a", refreshToken: "r", accessTokenExpiresAt: later() }),
+      now: () => now
+    });
+    const oldRun = orchestrator.runNext("s1", "delta", "old-owner");
+    await Promise.resolve();
+    await repository.releaseSyncLease("s1", "old-owner");
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "new-owner", now, expiresAt: later() });
+    const advanced = (await repository.getSource("s1"))!;
+    const newCheckpoint = { mode: "delta" as const, providerPageCursor: "new-page", processedNodeCount: 99, generation: "new-generation" };
+    await repository.putSource({ ...advanced, crawlCheckpoint: newCheckpoint, deltaCursor: "new-delta", activeWorkflowRunId: "new-run" });
+    rejectBlocked(new ProviderError("PROVIDER_THROTTLED", "late", { retryable: true, retryAfterSeconds: 90 }));
+    await expect(oldRun).rejects.toMatchObject({ code: "PROVIDER_THROTTLED" });
+    expect(await repository.getSource("s1")).toMatchObject({
+      leaseOwner: "new-owner",
+      crawlCheckpoint: newCheckpoint,
+      deltaCursor: "new-delta",
+      activeWorkflowRunId: "new-run",
+      lastSyncErrorCode: null
+    });
   });
 
   it("rejects stale lease owners and expired long-running batches", async () => {

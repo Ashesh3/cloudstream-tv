@@ -168,6 +168,15 @@ export interface AppRepository {
   leaseDueSources(input: DueSourceLeaseInput): Promise<Source[]>;
   completeSyncRun(input: { sourceId: string; leaseOwner: string; completedAt: Date; nextSyncAt: Date }): Promise<void>;
   markSyncRunStarted(input: { sourceId: string; leaseOwner: string; runId: string; startedAt: Date }): Promise<boolean>;
+  recordSyncFailure(input: {
+    sourceId: string;
+    expectedLeaseOwner: string;
+    expectedCheckpoint: import("@cloudframe/shared").IndexCheckpoint | null;
+    failedAt: Date;
+    status: "reauth-required" | "error";
+    errorCode: string;
+    nextSyncAt: Date | null;
+  }): Promise<boolean>;
   putWatchHistory(history: WatchHistory): Promise<void>;
   getWatchHistory(deviceId: string, nodeId: string): Promise<WatchHistory | null>;
   listWatchHistory(input: ListWatchHistoryInput): Promise<WatchHistory[]>;
@@ -443,6 +452,36 @@ export class FirestoreRepository implements AppRepository {
       const source = snapshot.exists ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data()) : null;
       if (!source || source.leaseOwner !== input.leaseOwner || !source.leaseExpiresAt || source.leaseExpiresAt <= input.startedAt) return false;
       transaction.update(ref, { status: "syncing", activeWorkflowRunId: input.runId, lastSyncStartedAt: input.startedAt, lastSyncErrorCode: null });
+      return true;
+    });
+  }
+
+  async recordSyncFailure(input: {
+    sourceId: string;
+    expectedLeaseOwner: string;
+    expectedCheckpoint: import("@cloudframe/shared").IndexCheckpoint | null;
+    failedAt: Date;
+    status: "reauth-required" | "error";
+    errorCode: string;
+    nextSyncAt: Date | null;
+  }): Promise<boolean> {
+    const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+    return this.firestore.runTransaction(async transaction => {
+      const snapshot = await transaction.get(ref);
+      const source = snapshot.exists ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data()) : null;
+      if (
+        !source ||
+        source.leaseOwner !== input.expectedLeaseOwner ||
+        JSON.stringify(source.crawlCheckpoint) !== JSON.stringify(input.expectedCheckpoint)
+      ) return false;
+      transaction.update(ref, {
+        status: input.status,
+        lastSyncErrorCode: input.errorCode,
+        nextSyncAt: input.nextSyncAt,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        activeWorkflowRunId: null
+      });
       return true;
     });
   }
