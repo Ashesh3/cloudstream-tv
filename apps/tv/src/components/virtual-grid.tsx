@@ -30,8 +30,10 @@ interface VirtualGridProps<T extends VirtualGridItem> {
   rowHeight: number;
   viewportHeight: number;
   scrollTop?: number;
+  hasNextPage?: boolean;
+  focusRevision?: number;
   onScrollTopChange?: (value: number) => void;
-  onFocusedIndexChange: (index: number, needsPageExtension?: boolean) => void;
+  onFocusedIndexChange: (index: number, needsPageExtension?: boolean, pendingIndex?: number) => void;
   onMountedItemsChange?: (ids: string[]) => void;
   onSelect?: (item: T, index: number) => void;
   onBack?: () => void;
@@ -80,9 +82,9 @@ export function VirtualGrid<T extends VirtualGridItem>(props: VirtualGridProps<T
   useEffect(() => {
     const host = container.current;
     if (!host) return;
-    const focused = host.querySelector<HTMLElement>("[data-grid-focused='true']");
+    const focused = host.querySelector<HTMLElement>("[data-grid-focused='true'] button, [data-grid-focused='true'] [tabindex]");
     focused?.focus();
-  }, [props.focusedIndex, window.startIndex, window.endIndex]);
+  }, [props.focusedIndex, props.focusRevision, window.startIndex, window.endIndex]);
 
   return (
     <div
@@ -104,9 +106,10 @@ export function VirtualGrid<T extends VirtualGridItem>(props: VirtualGridProps<T
           const next = moveFocus({
             index: props.focusedIndex,
             itemCount: props.items.length,
-            columns: props.columns
+            columns: props.columns,
+            hasNextPage: props.hasNextPage
           }, action);
-          if (next.needsPageExtension) props.onFocusedIndexChange(next.index, true);
+          if (next.needsPageExtension) props.onFocusedIndexChange(next.index, true, next.pendingIndex);
           else props.onFocusedIndexChange(next.index);
         } else return;
         event.preventDefault();

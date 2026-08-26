@@ -25,7 +25,7 @@ export function FolderCard({ name, subtitle, thumbnails, focused, onSelect }: Fo
       onClick={onSelect}
       tabIndex={focused ? 0 : -1}
     >
-      <span className="card-visual folder-mosaic" aria-hidden="true">
+      <span className="card-visual folder-mosaic" data-mosaic={variant} aria-hidden="true">
         {covers.map(cover => <MosaicPane key={cover.nodeId} thumbnail={cover} />)}
         {covers.length === 0 && <EmptyFolderArt />}
       </span>

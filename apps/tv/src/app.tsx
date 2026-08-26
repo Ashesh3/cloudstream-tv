@@ -50,7 +50,13 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
   const [stack, setStack] = useState<NavigationEntry[]>([]);
   const [thumbnails, setThumbnails] = useState<Record<string, ThumbnailUrlItem>>({});
   const [mountedIds, setMountedIds] = useState<string[]>([]);
+  const [loadedPageCursors, setLoadedPageCursors] = useState<(string | null)[]>([]);
+  const [restoredFocusTick, setRestoredFocusTick] = useState(0);
   const loadVersion = useRef(0);
+  const pageRequest = useRef<Promise<void> | null>(null);
+  const pendingFocus = useRef<number | null>(null);
+  const requestedFocus = useRef<number | null>(null);
+  const restoreFocusAfterDrawer = useRef<number | null>(null);
   const mountedRequest = useRef<AbortController | null>(null);
   const columns = useResponsiveColumns();
   const viewportHeight = useViewportHeight();
@@ -64,6 +70,7 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
       setBrowse({ folder: null, roots: response.roots, items: response.roots.map(root => ({ ...root, itemType: "root" as const })), nextCursor: null, loading: false, error: null });
       setFocusedIndex(0);
       setScrollTop(0);
+      setLoadedPageCursors([]);
     } catch (error) {
       if (version !== loadVersion.current) return;
       const message = error instanceof Error ? error.message : "Unable to load folders.";
@@ -77,16 +84,15 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
     try {
       const response = await api.folder(nodeId, cursor);
       if (version !== loadVersion.current) return;
-      setBrowse(current => ({
-        folder: response,
-        roots: current.roots,
-        items: append
+      setBrowse(current => {
+        const items = append
           ? [...current.items, ...response.children.map(node => ({ ...node, itemType: "node" as const }))]
-          : response.children.map(node => ({ ...node, itemType: "node" as const })),
-        nextCursor: response.nextCursor,
-        loading: false,
-        error: null
-      }));
+          : response.children.map(node => ({ ...node, itemType: "node" as const }));
+        if (append && requestedFocus.current !== null) setFocusedIndex(Math.min(requestedFocus.current, Math.max(0, items.length - 1)));
+        return { folder: response, roots: current.roots, items, nextCursor: response.nextCursor, loading: false, error: null };
+      });
+      setLoadedPageCursors(current => append ? [...current, cursor ?? null] : [null]);
+      if (append) requestedFocus.current = null;
     } catch (error) {
       if (version !== loadVersion.current) return;
       const message = error instanceof Error ? error.message : "This source is temporarily unavailable.";
@@ -94,6 +100,16 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
       if ((error as { code?: string }).code === "DEVICE_UNAUTHORIZED") onUnauthorized();
     }
   }, [api, onUnauthorized]);
+
+  const appendNextPage = useCallback((pendingIndex?: number) => {
+    if (!browse.folder || !browse.nextCursor || pageRequest.current) return;
+    pendingFocus.current = pendingIndex ?? null;
+    requestedFocus.current = pendingFocus.current;
+    const promise = loadFolder(browse.folder.parent.id, browse.nextCursor, true).finally(() => {
+      if (pageRequest.current === promise) pageRequest.current = null;
+    });
+    pageRequest.current = promise;
+  }, [browse.folder, browse.nextCursor, loadFolder]);
 
   useEffect(() => { void loadHome(); }, [loadHome]);
 
@@ -119,16 +135,27 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
       const action = normalizeTvKey(event);
       if (!action || !shouldHandleTvKey(action, event.repeat)) return;
       if (action === "menu") {
-        setDrawerOpen(value => !value);
+        if (drawerOpen) {
+          setDrawerOpen(false);
+          window.setTimeout(() => setFocusedIndex(value => value), 0);
+        } else {
+          restoreFocusAfterDrawer.current = focusedIndex;
+          setDrawerOpen(true);
+        }
         event.preventDefault();
       } else if (action === "back" && drawerOpen) {
         setDrawerOpen(false);
+        const restore = restoreFocusAfterDrawer.current;
+        if (restore !== null) window.setTimeout(() => setFocusedIndex(restore), 0);
+        event.preventDefault();
+      } else if (action === "back" && !drawerOpen && stack.length > 0) {
+        goBack();
         event.preventDefault();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [drawerOpen]);
+  }, [drawerOpen, focusedIndex, stack, browse]);
 
   const openItem = (item: BrowseItem, index: number) => {
     const nodeId = item.itemType === "root" ? item.nodeId : item.kind === "folder" ? item.id : null;
@@ -138,7 +165,7 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
       focusedItemId: item.id,
       focusedIndex: index,
       scrollTop,
-      loadedPageCursor: browse.nextCursor
+      loadedPageCursors
     }));
     setFocusedIndex(0);
     setScrollTop(0);
@@ -157,13 +184,16 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
     if (!entry.folderId) {
       void api.home().then(response => {
         const items = response.roots.map(root => ({ ...root, itemType: "root" as const }));
-        setBrowse({ folder: null, roots: response.roots, items, nextCursor: entry.loadedPageCursor, loading: false, error: null });
+        setBrowse({ folder: null, roots: response.roots, items, nextCursor: null, loading: false, error: null });
         restore(items);
       });
     } else {
-      void api.folder(entry.folderId).then(response => {
-        const items = response.children.map(node => ({ ...node, itemType: "node" as const }));
-        setBrowse(current => ({ folder: response, roots: current.roots, items, nextCursor: response.nextCursor, loading: false, error: null }));
+      const version = ++loadVersion.current;
+      void restoreFolderPages(api, entry.folderId, entry.loadedPageCursors, version, loadVersion).then(result => {
+        if (!result) return;
+        const items = result.items;
+        setBrowse(current => ({ folder: result.folder, roots: current.roots, items, nextCursor: result.nextCursor, loading: false, error: null }));
+        setLoadedPageCursors(entry.loadedPageCursors);
         restore(items);
       });
     }
@@ -192,12 +222,14 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
           rowHeight={cardRowHeight()}
           viewportHeight={viewportHeight}
           scrollTop={scrollTop}
+          hasNextPage={Boolean(browse.nextCursor)}
+          focusRevision={restoredFocusTick}
           onScrollTopChange={setScrollTop}
           onMountedItemsChange={setMountedIds}
-          onFocusedIndexChange={(index, extend) => {
+          onFocusedIndexChange={(index, extend, pendingIndex) => {
             setFocusedIndex(index);
             ensureIndexVisible(index, columns, cardRowHeight(), viewportHeight, scrollTop, setScrollTop);
-            if (extend && browse.folder && browse.nextCursor) void loadFolder(browse.folder.parent.id, browse.nextCursor, true);
+            if (extend) appendNextPage(pendingIndex);
           }}
           onSelect={openItem}
           onBack={goBack}
@@ -220,7 +252,7 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
           )}
         />
       )}
-      <SourceDrawer open={drawerOpen} roots={browse.roots} onClose={() => setDrawerOpen(false)} onHome={() => { setDrawerOpen(false); void loadHome(); }} onSelect={root => { setDrawerOpen(false); void loadFolder(root.nodeId); }} />
+      <SourceDrawer open={drawerOpen} roots={browse.roots} onClose={() => { setDrawerOpen(false); const restore = restoreFocusAfterDrawer.current; if (restore !== null) window.setTimeout(() => { setFocusedIndex(restore); setRestoredFocusTick(value => value + 1); }, 0); }} onHome={() => { setDrawerOpen(false); void loadHome(); }} onSelect={root => { setDrawerOpen(false); void loadFolder(root.nodeId); }} />
     </main>
   );
 }
@@ -280,4 +312,22 @@ function ensureIndexVisible(index: number, columns: number, rowHeight: number, v
   const bottom = top + rowHeight;
   if (top < current) set(top);
   else if (bottom > current + viewport) set(Math.max(0, bottom - viewport));
+}
+
+async function restoreFolderPages(
+  api: TvApi,
+  folderId: string,
+  cursors: (string | null)[],
+  version: number,
+  currentVersion: { current: number }
+): Promise<{ folder: TvFolderResponse; items: BrowseItem[]; nextCursor: string | null } | null> {
+  let folder: TvFolderResponse | null = null;
+  const items: BrowseItem[] = [];
+  for (const cursor of cursors.slice(0, 20)) {
+    const response = await api.folder(folderId, cursor);
+    if (version !== currentVersion.current) return null;
+    folder = response;
+    items.push(...response.children.map(node => ({ ...node, itemType: "node" as const })));
+  }
+  return folder ? { folder, items, nextCursor: folder.nextCursor } : null;
 }

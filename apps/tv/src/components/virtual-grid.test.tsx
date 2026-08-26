@@ -83,6 +83,25 @@ describe("virtualized TV grid", () => {
     );
     expect(screen.getByTestId("item-20")).toBeInTheDocument();
   });
+
+  it("requests a page when Down has no loaded destination in an incomplete final row", () => {
+    const focus = vi.fn();
+    render(
+      <VirtualGrid
+        ariaLabel="Media"
+        items={items.slice(0, 10)}
+        focusedIndex={8}
+        columns={4}
+        rowHeight={200}
+        viewportHeight={400}
+        hasNextPage
+        onFocusedIndexChange={focus}
+        renderItem={(item, state) => <button data-focused={state.focused}>{item.label}</button>}
+      />
+    );
+    fireEvent.keyDown(screen.getByRole("grid"), { key: "ArrowDown" });
+    expect(focus).toHaveBeenCalledWith(8, true, 12);
+  });
 });
 
 describe("folder mosaics and media cards", () => {
@@ -99,6 +118,7 @@ describe("folder mosaics and media cards", () => {
     render(<FolderCard name={`Folder ${count}`} thumbnails={thumbnails} focused={false} />);
     const card = screen.getByRole("button", { name: new RegExp(`Folder ${count}`) });
     expect(card).toHaveAttribute("data-mosaic", variant);
+    expect(card.querySelector(".folder-mosaic")).toHaveAttribute("data-mosaic", variant);
     expect(card.querySelectorAll("img")).toHaveLength(count);
   });
 

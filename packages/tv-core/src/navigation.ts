@@ -3,7 +3,7 @@ export interface NavigationEntry {
   focusedItemId: string | null;
   focusedIndex: number;
   scrollTop: number;
-  loadedPageCursor: string | null;
+  loadedPageCursors: (string | null)[];
 }
 
 export interface RestoredNavigationEntry extends NavigationEntry {

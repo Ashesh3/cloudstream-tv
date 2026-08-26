@@ -92,6 +92,61 @@ describe("TV enrollment and browse states", () => {
     expect(screen.getByText("Home Drive")).toBeVisible();
   });
 
+  it("restores exact grid focus after the source drawer closes", async () => {
+    const client = readyApiWithRoots();
+    render(<TvApp api={client} browserSupported />);
+    const grid = await screen.findByRole("grid");
+    fireEvent.keyDown(grid, { key: "ArrowRight" });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Trips/ })).toHaveFocus());
+    fireEvent.keyDown(window, { keyCode: 457 });
+    expect(screen.getByRole("dialog", { name: "Sources" })).toBeVisible();
+    fireEvent.keyDown(screen.getByRole("dialog", { name: "Sources" }), { key: "Escape" });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Trips/ })).toHaveFocus());
+  });
+
+  it("loads missing pages once and focuses the same-column destination after append", async () => {
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.folder)
+      .mockResolvedValueOnce(folderPage("folder-parent", 0, 10, "page-2"))
+      .mockResolvedValueOnce(folderPage("folder-parent", 10, 6, null));
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    const grid = await screen.findByRole("grid", { name: "Parent" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Node 12/ })).toHaveFocus());
+  });
+
+  it("refetches every saved page before Back restores a later-page item", async () => {
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.folder)
+      .mockResolvedValueOnce(folderPage("folder-parent", 0, 10, "page-2"))
+      .mockResolvedValueOnce(folderPage("folder-parent", 10, 6, null))
+      .mockResolvedValueOnce(folderPage("node-12", 0, 0, null, "Child"))
+      .mockResolvedValueOnce(folderPage("folder-parent", 0, 10, "page-2"))
+      .mockResolvedValueOnce(folderPage("folder-parent", 10, 6, null));
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    const grid = await screen.findByRole("grid", { name: "Parent" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "ArrowRight" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    await screen.findByRole("button", { name: /Node 12/ });
+    fireEvent.click(screen.getByRole("button", { name: /Node 12/ }));
+    await screen.findByRole("heading", { name: "Child" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(5));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Node 12/ })).toHaveFocus());
+  });
+
   it("shows no-roots, empty-folder and offline retry states", async () => {
     const noRoots = api();
     vi.mocked(noRoots.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
@@ -119,3 +174,28 @@ const household = {
   id: "household-primary", createdAt: "2026-08-26T00:00:00.000Z", allowNewDeviceRequests: true,
   defaultMediaOrder: "captured-desc" as const, defaultSlideshowSeconds: 8
 };
+
+const rootCards = [
+  { id: "root-1", sourceId: "source-1", displayName: "Family", provider: "google" as const, accountLabel: "Home", nodeId: "folder-1", folderCoverNodeIds: [], childFolderCount: 2, childMediaCount: 8 },
+  { id: "root-2", sourceId: "source-2", displayName: "Trips", provider: "onedrive" as const, accountLabel: "Cloud", nodeId: "folder-2", folderCoverNodeIds: [], childFolderCount: 1, childMediaCount: 5 }
+];
+
+function readyApiWithRoots() {
+  const client = api();
+  vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+  vi.mocked(client.home).mockResolvedValue({ roots: rootCards });
+  vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
+  return client;
+}
+
+function folderPage(parentId: string, start: number, count: number, nextCursor: string | null, parentName = "Parent") {
+  return {
+    parent: node(parentId, "folder", parentName), breadcrumbs: [],
+    children: Array.from({ length: count }, (_, offset) => node(`node-${start + offset}`, start + offset === 12 ? "folder" : "image", `Node ${start + offset}`)),
+    nextCursor
+  };
+}
+
+function node(id: string, kind: "folder" | "image", name: string) {
+  return { id, sourceId: "source-1", provider: "google" as const, parentNodeId: null, name, normalizedName: name.toLowerCase(), kind, mimeType: kind === "image" ? "image/jpeg" : null, size: null, width: null, height: null, capturedAt: null, createdAtProvider: null, modifiedAtProvider: null, thumbnailRevision: null, hasPreview: false, folderCoverNodeIds: [], childFolderCount: 0, childMediaCount: 0, available: true };
+}

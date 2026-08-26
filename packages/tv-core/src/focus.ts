@@ -5,7 +5,9 @@ export interface GridFocusState {
   itemId?: string | null;
   itemCount: number;
   columns: number;
+  hasNextPage?: boolean;
   needsPageExtension?: boolean;
+  pendingIndex?: number;
 }
 
 export function moveFocus(state: GridFocusState, direction: FocusDirection): GridFocusState {
@@ -21,10 +23,13 @@ export function moveFocus(state: GridFocusState, direction: FocusDirection): Gri
   if (direction === "up" && index >= columns) next -= columns;
   if (direction === "down") {
     if (index + columns < itemCount) next += columns;
-    else if (Math.floor(index / columns) < Math.floor((itemCount - 1) / columns)) next = itemCount - 1;
+    else if (state.hasNextPage) {
+      needsPageExtension = true;
+      return { ...state, index, needsPageExtension, pendingIndex: index + columns };
+    } else if (Math.floor(index / columns) < Math.floor((itemCount - 1) / columns)) next = itemCount - 1;
     else if (index === itemCount - 1) needsPageExtension = true;
   }
-  return { ...state, index: next, needsPageExtension };
+  return { ...state, index: next, needsPageExtension, pendingIndex: undefined };
 }
 
 export function resizeFocus(

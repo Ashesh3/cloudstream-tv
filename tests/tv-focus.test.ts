@@ -64,6 +64,19 @@ describe("explicit grid focus", () => {
     expect(moveFocus({ ...start, index: 4 }, "down").needsPageExtension).toBe(false);
   });
 
+  it("requests the missing same-column destination from any incomplete final-row cell", () => {
+    expect(moveFocus({ ...start, index: 8, hasNextPage: true }, "down")).toMatchObject({
+      index: 8,
+      needsPageExtension: true,
+      pendingIndex: 12
+    });
+    expect(moveFocus({ ...start, index: 9, hasNextPage: true }, "down")).toMatchObject({
+      index: 9,
+      needsPageExtension: true,
+      pendingIndex: 13
+    });
+  });
+
   it("preserves the focused item across column changes", () => {
     const result = resizeFocus(
       { index: 7, itemId: "node-7", itemCount: 12, columns: 4 },
@@ -77,8 +90,8 @@ describe("explicit grid focus", () => {
 describe("folder navigation restoration", () => {
   it("pops the newest folder while preserving older history", () => {
     expect(popNavigationEntry([
-      { folderId: null, focusedItemId: "a", focusedIndex: 0, scrollTop: 0, loadedPageCursor: null },
-      { folderId: "a", focusedItemId: "b", focusedIndex: 4, scrollTop: 300, loadedPageCursor: "page" }
+      { folderId: null, focusedItemId: "a", focusedIndex: 0, scrollTop: 0, loadedPageCursors: [] },
+      { folderId: "a", focusedItemId: "b", focusedIndex: 4, scrollTop: 300, loadedPageCursors: [null, "page"] }
     ])).toMatchObject({
       entry: { folderId: "a", focusedItemId: "b" },
       stack: [{ folderId: null, focusedItemId: "a" }]
@@ -91,14 +104,14 @@ describe("folder navigation restoration", () => {
       focusedItemId: "folder-child",
       focusedIndex: 8,
       scrollTop: 720,
-      loadedPageCursor: "page-2"
+      loadedPageCursors: [null, "page-1", "page-2"]
     });
     expect(stack).toEqual([{
       folderId: "root-a",
       focusedItemId: "folder-child",
       focusedIndex: 8,
       scrollTop: 720,
-      loadedPageCursor: "page-2"
+      loadedPageCursors: [null, "page-1", "page-2"]
     }]);
   });
 
@@ -108,12 +121,12 @@ describe("folder navigation restoration", () => {
       focusedItemId: "folder-child",
       focusedIndex: 8,
       scrollTop: 720,
-      loadedPageCursor: "page-2"
+      loadedPageCursors: [null, "page-1", "page-2"]
     }, ["other", "folder-child", "later"])).toMatchObject({
       focusedIndex: 1,
       focusedItemId: "folder-child",
       scrollTop: 720,
-      loadedPageCursor: "page-2"
+      loadedPageCursors: [null, "page-1", "page-2"]
     });
   });
 
@@ -123,7 +136,7 @@ describe("folder navigation restoration", () => {
       focusedItemId: "gone",
       focusedIndex: 8,
       scrollTop: 720,
-      loadedPageCursor: null
+      loadedPageCursors: [null]
     }, ["a", "b", "c"])).toMatchObject({ focusedIndex: 2, focusedItemId: "c" });
   });
 });
