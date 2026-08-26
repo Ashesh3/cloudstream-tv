@@ -549,7 +549,7 @@ export class FirestoreRepository implements AppRepository {
           transaction.create(deterministicRef, enabled);
         }
       }
-      if (!(alreadyEnabledIdenticalRoot && hasActiveInitialSync(source, input.resetAt))) {
+      if (!(alreadyEnabledIdenticalRoot && hasActiveSelectedRootSync(source, input.resetAt))) {
         transaction.update(sourceRef, initialSourceReset());
       }
       return enabled;
@@ -1212,11 +1212,15 @@ function initialSourceReset(): Pick<
   };
 }
 
-function hasActiveInitialSync(source: Source, resetAt: Date): boolean {
+function hasActiveSelectedRootSync(source: Source, resetAt: Date): boolean {
   return (
     source.status === "syncing" &&
     source.deltaCursor === null &&
-    (source.crawlCheckpoint === null || source.crawlCheckpoint.mode === "initial") &&
+    (
+      source.crawlCheckpoint === null ||
+      source.crawlCheckpoint.mode === "initial" ||
+      source.crawlCheckpoint.mode === "reconcile"
+    ) &&
     source.nextSyncAt === null &&
     source.lastSyncErrorCode === null &&
     source.leaseOwner !== null &&

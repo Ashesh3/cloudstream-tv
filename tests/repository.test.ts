@@ -378,17 +378,21 @@ describe("MemoryRepository domain storage", () => {
     });
   });
 
-  it("does not clear an active initial lease when a duplicate selection arrives", async () => {
+  it.each(["initial", "reconcile"] as const)(
+    "does not clear an active selected-root lease during %s when a duplicate selection arrives",
+    async mode => {
     const repo = new MemoryRepository();
     const source = makeSource({
       status: "syncing",
       deltaCursor: null,
       crawlCheckpoint: {
-        mode: "initial",
+        mode,
         providerPageCursor: "page-2",
         processedNodeCount: 25,
         generation: "generation-1",
-        pendingProviderFolderIds: ["photos-child"]
+        ...(mode === "initial"
+          ? { pendingProviderFolderIds: ["photos-child"] }
+          : { reconciliationCursor: "node-25" })
       },
       activeWorkflowRunId: "run-1",
       nextSyncAt: null,
@@ -403,7 +407,8 @@ describe("MemoryRepository domain storage", () => {
     await repo.enableRootAndResetInitial({ root, sourceId: source.id, resetAt: now });
 
     expect(await repo.getSource(source.id)).toEqual(source);
-  });
+    }
+  );
 
   it("resets an active crawl when a different root is added", async () => {
     const repo = new MemoryRepository();
@@ -907,17 +912,21 @@ describe("FirestoreRepository admin management transactions", () => {
     );
   });
 
-  it("preserves a checkpointed active initial sync for the same enabled Firestore root", async () => {
+  it.each(["initial", "reconcile"] as const)(
+    "preserves a checkpointed active selected-root sync during %s for the same enabled Firestore root",
+    async mode => {
     const writes: string[] = [];
     const source = makeSource({
       status: "syncing",
       deltaCursor: null,
       crawlCheckpoint: {
-        mode: "initial",
+        mode,
         providerPageCursor: "page-2",
         processedNodeCount: 25,
         generation: "generation-1",
-        pendingProviderFolderIds: ["photos-child"]
+        ...(mode === "initial"
+          ? { pendingProviderFolderIds: ["photos-child"] }
+          : { reconciliationCursor: "node-25" })
       },
       activeWorkflowRunId: "run-1",
       nextSyncAt: null,
@@ -941,7 +950,8 @@ describe("FirestoreRepository admin management transactions", () => {
 
     expect(writes.some(write => write.startsWith("update:sources/s1:"))).toBe(false);
     expect(writes.some(write => write.startsWith(`set:roots/${existing.id}:`))).toBe(true);
-  });
+    }
+  );
 
   it("serializes concurrent absent-root creates onto one deterministic document", async () => {
     const fake = createConcurrentRootFirestore();

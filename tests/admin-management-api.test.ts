@@ -935,17 +935,21 @@ describe("admin management HTTP API", () => {
     expect(workflowStart).toHaveBeenCalledTimes(1);
   });
 
-  it("does not relaunch a checkpointed initial crawl when the same enabled root is selected again", async () => {
+  it.each(["initial", "reconcile"] as const)(
+    "does not relaunch a checkpointed selected-root crawl during %s when the same enabled root is selected again",
+    async mode => {
     const harness = await createTestApi();
     const source = makeSource(harness.householdId, harness.now, {
       providerRootId: "root",
       status: "syncing",
       crawlCheckpoint: {
-        mode: "initial",
+        mode,
         providerPageCursor: "page-2",
         processedNodeCount: 25,
         generation: "generation-1",
-        pendingProviderFolderIds: ["photos-child"]
+        ...(mode === "initial"
+          ? { pendingProviderFolderIds: ["photos-child"] }
+          : { reconciliationCursor: "node-25" })
       },
       activeWorkflowRunId: "run-1",
       leaseOwner: "active-owner",
@@ -994,7 +998,8 @@ describe("admin management HTTP API", () => {
     });
     expect(workflowStart).not.toHaveBeenCalled();
     expect(await harness.repository.getSource(source.id)).toEqual(source);
-  });
+    }
+  );
 
   it("maps only bounded OAuth failures while unexpected callback defects remain safe 500s", async () => {
     const harness = await createTestApi();

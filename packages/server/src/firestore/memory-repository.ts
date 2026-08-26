@@ -284,16 +284,20 @@ export class MemoryRepository implements AppRepository {
       }
     }
     this.roots.set(deterministicId, enabled);
-    const activeInitialSync =
+    const activeSelectedRootSync =
       source.status === "syncing" &&
       source.deltaCursor === null &&
-      (source.crawlCheckpoint === null || source.crawlCheckpoint.mode === "initial") &&
+      (
+        source.crawlCheckpoint === null ||
+        source.crawlCheckpoint.mode === "initial" ||
+        source.crawlCheckpoint.mode === "reconcile"
+      ) &&
       source.nextSyncAt === null &&
       source.lastSyncErrorCode === null &&
       source.leaseOwner !== null &&
       source.leaseExpiresAt !== null &&
       source.leaseExpiresAt > input.resetAt;
-    if (!(alreadyEnabledIdenticalRoot && activeInitialSync)) {
+    if (!(alreadyEnabledIdenticalRoot && activeSelectedRootSync)) {
       this.sources.set(source.id, copy({
         ...source,
         status: "syncing",
