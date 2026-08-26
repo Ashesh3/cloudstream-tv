@@ -513,7 +513,7 @@ describe("OAuth state and encrypted source lifecycle", () => {
     expect(startInitialSync).not.toHaveBeenCalled();
   });
 
-  it("fails closed when a legacy reconnect source has no provider account identity", async () => {
+  it("binds a verified account once for a reauth-required migrated source and preserves roots", async () => {
     const { repository, google, startInitialSync, service } = await setup();
     const sourceService = createSourceService({
       repository,
@@ -534,7 +534,13 @@ describe("OAuth state and encrypted source lifecycle", () => {
       },
       createdAt: new Date("2025-01-01T00:00:00.000Z")
     });
-    await repository.putSource(legacy);
+    await repository.putSource({ ...legacy, status: "reauth-required", lastSyncErrorCode: "MIGRATION_RECONNECT_REQUIRED" });
+    await repository.putRoot({
+      id: "legacy-root", householdId: household.id, sourceId: legacy.id,
+      providerNodeId: "legacy-folder", displayName: "Legacy folder",
+      ancestryProviderIds: [], enabled: false, createdAt: now
+    });
+    const roots = await repository.listRootsForSource(legacy.id);
     const start = await service.beginAuthorization({
       householdId: household.id,
       adminSessionId: "admin-session-a",
@@ -543,18 +549,40 @@ describe("OAuth state and encrypted source lifecycle", () => {
       reconnectSourceId: "source-legacy"
     });
 
-    await expect(
-      service.completeAuthorization({
-        householdId: household.id,
-        adminSessionId: "admin-session-a",
-        provider: "google",
-        redirectUri,
-        state: new URL(start.authorizationUrl).searchParams.get("state")!,
-        code: "synthetic-code"
-      })
-    ).rejects.toMatchObject({ code: "OAUTH_ACCOUNT_MISMATCH" });
-    expect(await repository.getSource("source-legacy")).toEqual(legacy);
-    expect(startInitialSync).not.toHaveBeenCalled();
+    await service.completeAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      state: new URL(start.authorizationUrl).searchParams.get("state")!,
+      code: "synthetic-code"
+    });
+    expect(await repository.getSource("source-legacy")).toMatchObject({
+      providerAccountId: "synthetic-account-a",
+      status: "syncing",
+      lastSyncErrorCode: null
+    });
+    expect(await repository.listRootsForSource(legacy.id)).toEqual(roots);
+    expect(startInitialSync).toHaveBeenCalledWith(legacy.id);
+  });
+
+  it("still rejects a different account after a migrated source is bound", async () => {
+    const { repository, google, service } = await setup();
+    const sourceService = createSourceService({ repository, providers: registry(google), keyring, now: () => now });
+    const source = sourceService.encryptSource({
+      id: "source-bound", householdId: household.id, provider: "google",
+      providerAccountId: "synthetic-account-a", accountLabel: "Bound account",
+      credentials: { accessToken: "old", refreshToken: "refresh", accessTokenExpiresAt: now },
+      createdAt: now
+    });
+    await repository.putSource({ ...source, status: "reauth-required", lastSyncErrorCode: "PROVIDER_REAUTH_REQUIRED" });
+    vi.mocked(google.completeAuthorization).mockResolvedValueOnce({
+      accountId: "synthetic-account-b", accountLabel: "Other account",
+      credentials: { accessToken: "new", refreshToken: "new-refresh", accessTokenExpiresAt: new Date(now.getTime() + 3600000) }
+    });
+    const start = await service.beginAuthorization({ householdId: household.id, adminSessionId: "admin-session-a", provider: "google", redirectUri, reconnectSourceId: source.id });
+    await expect(service.completeAuthorization({ householdId: household.id, adminSessionId: "admin-session-a", provider: "google", redirectUri, state: new URL(start.authorizationUrl).searchParams.get("state")!, code: "code" }))
+      .rejects.toMatchObject({ code: "OAUTH_ACCOUNT_MISMATCH" });
   });
 });
 

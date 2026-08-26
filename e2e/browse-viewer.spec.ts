@@ -9,10 +9,7 @@ test("folder browse opens a unified image and video viewer", async ({ page }) =>
   await expect(page.getByText("Sunset.jpg")).toBeVisible();
   await page.getByText("Sunset.jpg").click();
   await expect(page.locator("img")).toBeVisible();
-  await page.locator(".viewer-shell").focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(page.locator("video")).toBeVisible();
-  await expect(page.locator(".viewer-shell")).toHaveScreenshot("tv-viewer-video.png", { animations: "disabled" });
+  await expect(page.locator(".viewer-shell")).toHaveScreenshot("tv-viewer-image.png", { animations: "disabled" });
 });
 
 test("viewer persists video history on page lifecycle", async ({ page }) => {

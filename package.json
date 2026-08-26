@@ -11,6 +11,7 @@
     "build": "npm run build -w @cloudframe/tv && npm run build -w @cloudframe/admin && node scripts/build-site.mjs",
     "build:e2e": "cross-env CLOUDFRAME_E2E_BUILD=1 npm run build",
     "build:vercel": "npm run build && node scripts/build-vercel.mjs",
+    "check:chromium68": "node scripts/check-chromium68.mjs",
     "dev:tv": "npm run dev -w @cloudframe/tv",
     "dev:admin": "npm run dev -w @cloudframe/admin",
     "lint": "eslint .",
@@ -25,6 +26,7 @@
     "@cloudframe/indexer": "*",
     "@google-cloud/firestore": "^9.0.0",
     "@node-rs/argon2": "^2.1.0",
+    "@vercel/blob": "2.8.0",
     "@vercel/oidc": "^3.8.5",
     "@workflow/builders": "4.1.10",
     "workflow": "4.8.5",
@@ -45,7 +47,8 @@
     "jsdom": "^29.0.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.11",
+    "ws": "^8.18.3"
   },
   "optionalDependencies": {
     "@node-rs/argon2-linux-arm64-gnu": "2.1.0",

@@ -31,4 +31,15 @@ describe("browser acceptance harness", () => {
     expect(viewer).toContain("saveElementHistory(active.id");
     expect(`${enrollment}\n${browse}`).toContain("toHaveScreenshot");
   });
+
+  it("includes a shared real API/repository acceptance journey", async () => {
+    const source = await readFile("e2e/shared-api.spec.ts", "utf8");
+    expect(source).toContain("createApiApp");
+    expect(source).toContain("MemoryRepository");
+    expect(source).toMatch(/device_request.*device_session/is);
+    expect(source).toContain("/approve");
+    expect(source).toContain("/api/tv/home");
+    expect(source).toContain("assignedRootIds");
+    expect(source).toContain('method: "DELETE"');
+  });
 });

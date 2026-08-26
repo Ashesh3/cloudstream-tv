@@ -46,11 +46,12 @@ npm run typecheck
 npm run lint
 npm run build
 node scripts/check-tv-bundle.mjs
+npm run check:chromium68
 npm run build:vercel
 npx playwright test
 ```
 
-`build:vercel` assembles Build Output API v3 with both static SPAs, the API Web function, and transformed Workflow SDK flow/step/webhook functions. The exact generated workflow ID is injected into the API bundle from the manifest; it is never hand-maintained.
+`build:vercel` assembles Build Output API v3 with both static SPAs, the API Web function, and transformed Workflow SDK flow/step/webhook functions. The exact generated workflow ID is injected into the API bundle from the manifest; it is never hand-maintained. `check:chromium68` caches official pinned Chromium snapshot revision `555668`, asserts the reported browser major is 68, executes the actual legacy TV entry through CDP, and verifies Promise, fetch, URL, and AbortController.
 
 The E2E build enables synthetic APIs only when `CLOUDFRAME_E2E_BUILD=1`. Ordinary production builds replace the test injection branch with `false` and do not expose the hook.
 

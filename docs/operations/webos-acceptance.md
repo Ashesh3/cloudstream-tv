@@ -6,8 +6,9 @@ Automated compatibility proves the legacy bundle parses and stays within budgets
 
 1. Deploy the exact candidate commit to the dev preview.
 2. Confirm `node scripts/check-tv-bundle.mjs` passes.
-3. Confirm the TV has no previously approved Cloudframe cookie, or revoke the old device first.
-4. Open the preview URL in the LG browser. Do not install a service worker or use Web Storage.
+3. Confirm `npm run check:chromium68` executes the legacy entry in pinned Chromium 68 snapshot revision `555668`.
+4. Confirm the TV has no previously approved Cloudframe cookie, or revoke the old device first.
+5. Open the preview URL in the LG browser. Do not install a service worker or use Web Storage.
 
 ## Enrollment
 

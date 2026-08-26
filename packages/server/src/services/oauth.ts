@@ -158,10 +158,11 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
       ) {
         throw new OAuthServiceError("SOURCE_NOT_FOUND", "Source not found.");
       }
-      if (
-        !existing.providerAccountId ||
-        existing.providerAccountId !== account.accountId
-      ) {
+      const migrationReconnect =
+        existing.providerAccountId === null &&
+        existing.status === "reauth-required" &&
+        existing.lastSyncErrorCode?.startsWith("MIGRATION_") === true;
+      if (!migrationReconnect && existing.providerAccountId !== account.accountId) {
         throw new OAuthServiceError(
           "OAUTH_ACCOUNT_MISMATCH",
           "Reconnect must use the same cloud account."
@@ -177,6 +178,9 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
       }
       source = {
         ...existing,
+        providerAccountId: migrationReconnect
+          ? account.accountId
+          : existing.providerAccountId,
         accountLabel: account.accountLabel,
         encryptedRefreshToken: encryptProviderToken(refreshToken, keyring),
         encryptedAccessToken: encryptProviderToken(

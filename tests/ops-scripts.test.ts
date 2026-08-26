@@ -89,6 +89,12 @@ describe("operations scripts", () => {
     expect(source).not.toMatch(/localStorage|sessionStorage/);
   });
 
+  it("declares the live Vercel Blob reader used outside fixture mode", async () => {
+    const root = JSON.parse(await readFile("package.json", "utf8"));
+    expect(root.dependencies["@vercel/blob"]).toBe("2.8.0");
+    await expect(import("@vercel/blob")).resolves.toHaveProperty("list");
+  });
+
   it("TV bundle checker enforces legacy syntax and compressed budgets", async () => {
     const source = await readFile("scripts/check-tv-bundle.mjs", "utf8");
     expect(source).toContain("180 * 1024");
@@ -105,6 +111,15 @@ describe("operations scripts", () => {
     const result = await runNode("scripts/check-tv-bundle.mjs", [], {});
     expect(result.code, result.stderr).toBe(0);
     expect(result.stdout).toContain("TV bundle compatibility and budget check passed");
+  });
+
+  it("defines a pinned Chromium 68 execution lane and required API check", async () => {
+    const source = await readFile("scripts/check-chromium68.mjs", "utf8");
+    expect(source).toContain("555668");
+    expect(source).toContain("Chrome/68.");
+    expect(source).toContain("AbortController");
+    expect(source).toContain("remote-debugging-port");
+    expect(source).not.toContain("latest");
   });
 });
 

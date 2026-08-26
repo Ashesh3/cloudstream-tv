@@ -23,7 +23,7 @@ export default defineConfig({
     {
       name: "tv-1920",
       use: { ...devices["Desktop Chrome"], viewport: { width: 1920, height: 1080 } },
-      testMatch: /(?:enrollment|browse-viewer)\.spec\.ts/
+      testMatch: /(?:enrollment|browse-viewer|shared-api)\.spec\.ts/
     },
     {
       name: "admin-mobile",
