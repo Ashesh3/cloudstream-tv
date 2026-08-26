@@ -454,12 +454,14 @@ async function rotatePassphrase(request: Request, dependencies: ApiAppDependenci
 async function adminSources(request: Request, dependencies: ApiAppDependencies, now: Date) {
   const authenticated = await authenticateAdmin(request, dependencies, now);
   const sources = await dependencies.repository.listSources(dependencies.config.householdId);
-  const values = await Promise.all(sources.map(async source => ({
-    ...encodeSourceDto(source),
-    roots: (await dependencies.repository.listRootsForSource(source.id))
-      .filter(root => root.householdId === dependencies.config.householdId)
-      .map(encodeAssignedRootDto)
-  })));
+  const values = await Promise.all(sources.map(async source => {
+    const roots = (await dependencies.repository.listRootsForSource(source.id))
+      .filter(root => root.householdId === dependencies.config.householdId);
+    return {
+      ...encodeSourceDto(source, roots.filter(root => root.enabled).length),
+      roots: roots.map(encodeAssignedRootDto)
+    };
+  }));
   return ok({ sources: values }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
 }
 
@@ -548,7 +550,7 @@ async function sourceTree(request: Request, dependencies: ApiAppDependencies, no
   const roots = (await dependencies.repository.listRootsForSource(sourceId))
     .filter(root => root.householdId === dependencies.config.householdId && root.enabled);
   const rootByProviderNodeId = new Map(roots.map(root => [root.providerNodeId, root.id]));
-  return ok({ source: encodeSourceDto(source), parent: parent ? encodeMediaNodeDto(parent) : null, folders: children.filter(node => node.available && node.kind === "folder" && node.householdId === dependencies.config.householdId).map(node => ({ ...encodeMediaNodeDto(node), assignedRootId: rootByProviderNodeId.get(node.providerNodeId) ?? null })) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+  return ok({ source: encodeSourceDto(source, roots.length), parent: parent ? encodeMediaNodeDto(parent) : null, folders: children.filter(node => node.available && node.kind === "folder" && node.householdId === dependencies.config.householdId).map(node => ({ ...encodeMediaNodeDto(node), assignedRootId: rootByProviderNodeId.get(node.providerNodeId) ?? null })) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
 }
 
 async function createRoot(request: Request, dependencies: ApiAppDependencies, now: Date, sourceId: string) {
@@ -556,8 +558,8 @@ async function createRoot(request: Request, dependencies: ApiAppDependencies, no
   verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
   await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
   const body = await readJsonObject(request);
-  if (typeof body.nodeId !== "string" || (body.displayName !== undefined && typeof body.displayName !== "string")) throw new HttpError(400, "INVALID_ROOT", "Root request is invalid.");
-  const [source, node] = await Promise.all([dependencies.repository.getSource(sourceId), dependencies.repository.getNode(body.nodeId)]);
+  if (typeof body.providerNodeId !== "string" || (body.displayName !== undefined && typeof body.displayName !== "string")) throw new HttpError(400, "INVALID_ROOT", "Root request is invalid.");
+  const [source, node] = await Promise.all([dependencies.repository.getSource(sourceId), dependencies.repository.getNode(body.providerNodeId)]);
   if (!source || source.householdId !== dependencies.config.householdId || !node || !node.available || node.kind !== "folder" || node.householdId !== dependencies.config.householdId || node.sourceId !== sourceId) throw new HttpError(404, "FOLDER_NOT_FOUND", "Folder not found.");
   const ancestryProviderIds = await providerAncestry(dependencies.repository, node);
   const displayName = typeof body.displayName === "string" && body.displayName.trim() ? body.displayName.trim().slice(0, 120) : node.name;

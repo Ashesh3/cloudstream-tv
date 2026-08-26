@@ -62,6 +62,7 @@ function adapter(provider: "google" | "onedrive" = "google"): ProviderAdapter {
       thumbnailRevision: null,
       hasPreview: false
     })),
+    getNode: vi.fn(),
     listFolder: vi.fn(),
     getChanges: vi.fn(),
     getThumbnailUrl: vi.fn(),

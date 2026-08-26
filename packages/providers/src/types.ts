@@ -66,6 +66,11 @@ export interface ListFolderInput {
   pageSize: number;
 }
 
+export interface GetNodeInput {
+  credentials: ProviderCredentials;
+  providerNodeId: string;
+}
+
 export interface ChangesInput {
   credentials: ProviderCredentials;
   cursor: string | null;
@@ -105,6 +110,7 @@ export interface ProviderAdapter {
   completeAuthorization(input: AuthorizationCallback): Promise<ProviderAccount>;
   refreshCredentials(source: Source): Promise<RefreshedCredentials>;
   getRoot(credentials: ProviderCredentials): Promise<ProviderNode>;
+  getNode(input: GetNodeInput): Promise<ProviderNode>;
   listFolder(input: ListFolderInput): Promise<Page<ProviderNode>>;
   getChanges(input: ChangesInput): Promise<ChangesPage>;
   getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null>;
@@ -113,6 +119,7 @@ export interface ProviderAdapter {
 
 export type ProviderErrorCode =
   | "PROVIDER_BAD_RESPONSE"
+  | "PROVIDER_NOT_FOUND"
   | "PROVIDER_REAUTH_REQUIRED"
   | "PROVIDER_THROTTLED"
   | "PROVIDER_TIMEOUT"

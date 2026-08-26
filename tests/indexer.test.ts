@@ -443,7 +443,7 @@ async function seededRepository(): Promise<MemoryRepository> {
 
 function source(): Source {
   return {
-    id: "s1", householdId: "h1", provider: "google", providerAccountId: "account-1", accountLabel: "Family",
+    id: "s1", householdId: "h1", provider: "google", providerAccountId: "account-1", providerRootId: null, accountLabel: "Family",
     encryptedRefreshToken: { keyVersion: "1", iv: "iv", ciphertext: "refresh", authTag: "tag" },
     encryptedAccessToken: null, accessTokenExpiresAt: null, status: "syncing", deltaCursor: null,
     crawlCheckpoint: null, activeWorkflowRunId: null, syncGeneration: null, nextSyncAt: null,

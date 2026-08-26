@@ -57,6 +57,7 @@ export function createSourceService(
       householdId: input.householdId,
       provider: input.provider,
       providerAccountId: input.providerAccountId,
+      providerRootId: null,
       accountLabel: input.accountLabel,
       encryptedRefreshToken: encryptProviderToken(
         input.credentials.refreshToken,

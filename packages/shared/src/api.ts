@@ -67,6 +67,41 @@ export interface SourceDto {
   lastSyncErrorCode: string | null;
   indexProgress: { mode: IndexCheckpoint["mode"]; processedNodeCount: number; pendingFolderCount: number; reconciliationActive: boolean } | null;
   createdAt: string;
+  providerRootId: string | null;
+  indexState: SourceIndexStateDto;
+}
+
+export type SourceIndexStateKind =
+  | "unselected"
+  | "queued"
+  | "indexing"
+  | "reconciling"
+  | "healthy"
+  | "quota-exhausted"
+  | "reauth-required"
+  | "provider-error";
+
+export interface SourceIndexStateDto {
+  kind: SourceIndexStateKind;
+  processedNodeCount: number;
+  pendingFolderCount: number;
+  recoverable: boolean;
+  errorCode: string | null;
+}
+
+export interface ProviderFolderDto {
+  providerNodeId: string;
+  parentProviderId: string | null;
+  name: string;
+  assignedRootId: string | null;
+}
+
+export interface AdminProviderFolderPageResponse {
+  source: SourceDto;
+  current: ProviderFolderDto;
+  breadcrumbs: ProviderFolderDto[];
+  folders: ProviderFolderDto[];
+  nextCursor: string | null;
 }
 
 export interface AssignedRootDto {
@@ -214,7 +249,7 @@ export interface AdminFolderTreeResponse {
 }
 
 export interface CreateAssignedRootBody {
-  nodeId: string;
+  providerNodeId: string;
   displayName?: string;
 }
 
@@ -272,7 +307,7 @@ export function encodeDeviceDto(value: Device): DeviceDto {
   };
 }
 
-export function encodeSourceDto(value: Source): SourceDto {
+export function encodeSourceDto(value: Source, enabledRootCount: number): SourceDto {
   return {
     id: value.id,
     provider: value.provider,
@@ -289,8 +324,43 @@ export function encodeSourceDto(value: Source): SourceDto {
       pendingFolderCount: value.crawlCheckpoint.pendingProviderFolderIds?.length ?? 0,
       reconciliationActive: value.crawlCheckpoint.mode === "reconcile"
     } : null,
-    createdAt: iso(value.createdAt)
+    createdAt: iso(value.createdAt),
+    providerRootId: value.providerRootId,
+    indexState: encodeSourceIndexState(value, enabledRootCount)
   };
+}
+
+export function encodeSourceIndexState(
+  source: Source,
+  enabledRootCount: number
+): SourceIndexStateDto {
+  const checkpoint = source.crawlCheckpoint;
+  const processedNodeCount = checkpoint?.processedNodeCount ?? 0;
+  const pendingFolderCount = checkpoint?.pendingProviderFolderIds?.length ?? 0;
+  const errorCode = source.lastSyncErrorCode;
+
+  if (errorCode === "RESOURCE_EXHAUSTED") {
+    return { kind: "quota-exhausted", processedNodeCount, pendingFolderCount, recoverable: true, errorCode };
+  }
+  if (source.status === "reauth-required") {
+    return { kind: "reauth-required", processedNodeCount, pendingFolderCount, recoverable: true, errorCode };
+  }
+  if (source.status === "error") {
+    return { kind: "provider-error", processedNodeCount, pendingFolderCount, recoverable: true, errorCode };
+  }
+  if (enabledRootCount === 0) {
+    return { kind: "unselected", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
+  }
+  if (checkpoint?.mode === "reconcile") {
+    return { kind: "reconciling", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
+  }
+  if (checkpoint?.mode === "initial") {
+    return { kind: "indexing", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
+  }
+  if (source.activeWorkflowRunId || source.status === "syncing") {
+    return { kind: "queued", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
+  }
+  return { kind: "healthy", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
 }
 
 export function encodeAssignedRootDto(value: AssignedRoot): AssignedRootDto {
@@ -385,11 +455,21 @@ export function encodeBootstrapResponse(
 export function encodeAdminOverviewResponse(
   value: AdminOverviewDomainResponse
 ): AdminOverviewResponse {
+  const enabledRootCountBySource = new Map<string, number>();
+  for (const root of value.roots) {
+    if (!root.enabled) continue;
+    enabledRootCountBySource.set(
+      root.sourceId,
+      (enabledRootCountBySource.get(root.sourceId) ?? 0) + 1
+    );
+  }
   return {
     household: encodeHouseholdDto(value.household),
     pendingRequests: value.pendingRequests.map(encodeDeviceRequestDto),
     devices: value.devices.map(encodeDeviceDto),
-    sources: value.sources.map(encodeSourceDto),
+    sources: value.sources.map(source =>
+      encodeSourceDto(source, enabledRootCountBySource.get(source.id) ?? 0)
+    ),
     roots: value.roots.map(encodeAssignedRootDto)
   };
 }

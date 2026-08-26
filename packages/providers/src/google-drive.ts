@@ -3,6 +3,7 @@ import { ProviderError } from "./types";
 import type {
   AuthorizationCallback,
   ChangesPage,
+  GetNodeInput,
   ListFolderInput,
   MediaUrlInput,
   ProviderAccount,
@@ -99,6 +100,24 @@ export function createGoogleDriveAdapter(
         throw new ProviderError(
           "PROVIDER_BAD_RESPONSE",
           "Provider returned an invalid root folder.",
+          { retryable: false }
+        );
+      }
+      return node;
+    },
+
+    async getNode(input: GetNodeInput) {
+      const file = await googleJson<GoogleFile>(
+        fetch,
+        `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}?fields=${encodeURIComponent(GOOGLE_FILE_FIELDS)}&supportsAllDrives=true`,
+        input.credentials.accessToken,
+        now
+      );
+      const node = normalizeGoogleFile(file);
+      if (!node) {
+        throw new ProviderError(
+          "PROVIDER_NOT_FOUND",
+          "Provider item was not found.",
           { retryable: false }
         );
       }

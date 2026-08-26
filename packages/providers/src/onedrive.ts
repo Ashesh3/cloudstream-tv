@@ -3,6 +3,7 @@ import { ProviderError } from "./types";
 import type {
   AuthorizationCallback,
   ChangesPage,
+  GetNodeInput,
   ListFolderInput,
   MediaUrlInput,
   ProviderAccount,
@@ -105,6 +106,24 @@ export function createOneDriveAdapter(
         throw new ProviderError(
           "PROVIDER_BAD_RESPONSE",
           "Provider returned an invalid root folder.",
+          { retryable: false }
+        );
+      }
+      return node;
+    },
+
+    async getNode(input: GetNodeInput) {
+      const item = await graphJson<OneDriveItem>(
+        fetch,
+        `${GRAPH_ENDPOINT}/me/drive/items/${encodeURIComponent(input.providerNodeId)}?$select=${encodeURIComponent(ONEDRIVE_SELECT)}`,
+        input.credentials.accessToken,
+        now
+      );
+      const node = normalizeOneDriveItem(item);
+      if (!node) {
+        throw new ProviderError(
+          "PROVIDER_NOT_FOUND",
+          "Provider item was not found.",
           { retryable: false }
         );
       }

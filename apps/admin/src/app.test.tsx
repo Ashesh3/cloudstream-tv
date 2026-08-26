@@ -57,7 +57,9 @@ const source: SourceDto = {
   lastSyncCompletedAt: "2026-08-26T00:04:00.000Z",
   lastSyncErrorCode: null,
   indexProgress: { mode: "initial", processedNodeCount: 42, pendingFolderCount: 3, reconciliationActive: false },
-  createdAt: "2026-08-20T00:00:00.000Z"
+  createdAt: "2026-08-20T00:00:00.000Z",
+  providerRootId: "provider-root",
+  indexState: { kind: "indexing", processedNodeCount: 42, pendingFolderCount: 3, recoverable: false, errorCode: null }
 };
 
 const overview: AdminOverviewResponse = {

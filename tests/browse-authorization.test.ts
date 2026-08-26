@@ -137,7 +137,7 @@ function root(id: string, sourceId: string, providerNodeId: string): AssignedRoo
 }
 
 function source(id: string, householdId: string): Source {
-  return { id, householdId, provider: "google", providerAccountId: "account", accountLabel: id, encryptedRefreshToken: { keyVersion: "1", iv: "iv", ciphertext: "x", authTag: "tag" }, encryptedAccessToken: null, accessTokenExpiresAt: null, status: "healthy", deltaCursor: null, crawlCheckpoint: null, activeWorkflowRunId: null, syncGeneration: null, nextSyncAt: null, leaseOwner: null, leaseExpiresAt: null, lastSyncStartedAt: null, lastSyncCompletedAt: null, lastSyncErrorCode: null, createdAt: now };
+  return { id, householdId, provider: "google", providerAccountId: "account", providerRootId: null, accountLabel: id, encryptedRefreshToken: { keyVersion: "1", iv: "iv", ciphertext: "x", authTag: "tag" }, encryptedAccessToken: null, accessTokenExpiresAt: null, status: "healthy", deltaCursor: null, crawlCheckpoint: null, activeWorkflowRunId: null, syncGeneration: null, nextSyncAt: null, leaseOwner: null, leaseExpiresAt: null, lastSyncStartedAt: null, lastSyncCompletedAt: null, lastSyncErrorCode: null, createdAt: now };
 }
 
 function media(providerId: string, name: string, kind: MediaNode["kind"], parentNodeId: string | null, captured: string | null = "2026-01-01", sourceId = "s1", householdId = "h1", ancestorNodeIds?: string[]): MediaNode {

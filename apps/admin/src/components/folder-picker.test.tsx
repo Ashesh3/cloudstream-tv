@@ -7,7 +7,7 @@ import type { AdminApi } from "../api/client";
 import { FolderPicker } from "./folder-picker";
 
 afterEach(cleanup);
-const source: SourceDto = { id: "source-1", provider: "google", accountLabel: "Home Drive", status: "healthy", accessTokenExpiresAt: null, nextSyncAt: null, lastSyncStartedAt: null, lastSyncCompletedAt: null, lastSyncErrorCode: null, indexProgress: null, createdAt: "2026-08-20T00:00:00.000Z" };
+const source: SourceDto = { id: "source-1", provider: "google", accountLabel: "Home Drive", status: "healthy", accessTokenExpiresAt: null, nextSyncAt: null, lastSyncStartedAt: null, lastSyncCompletedAt: null, lastSyncErrorCode: null, indexProgress: null, createdAt: "2026-08-20T00:00:00.000Z", providerRootId: "provider-root", indexState: { kind: "healthy", processedNodeCount: 0, pendingFolderCount: 0, recoverable: false, errorCode: null } };
 const root: AssignedRootDto = { id: "root-1", sourceId: source.id, providerNodeId: "provider-albums", displayName: "Albums", ancestryProviderIds: [], enabled: true, createdAt: "2026-08-20T00:00:00.000Z" };
 const folder = (id: string, name: string, assignedRootId: string | null = null): AdminFolderTreeResponse["folders"][number] => ({ id, sourceId: source.id, provider: "google", parentNodeId: null, name, normalizedName: name.toLowerCase(), kind: "folder", mimeType: null, size: null, width: null, height: null, capturedAt: null, createdAtProvider: null, modifiedAtProvider: null, thumbnailRevision: null, hasPreview: true, folderCoverNodeIds: [`cover-${id}`], childFolderCount: 2, childMediaCount: 8, available: true, assignedRootId });
 
@@ -36,7 +36,7 @@ describe("indexed folder picker", () => {
     fireEvent.click(screen.getByRole("button", { name: "Up one level" }));
     await screen.findByRole("button", { name: "Open Trips" });
     fireEvent.click(within(screen.getByRole("button", { name: "Open Trips" }).closest("article")!).getByRole("button", { name: "Add root" }));
-    await waitFor(() => expect(api.createRoot).toHaveBeenCalledWith(source.id, { nodeId: "node-trips" }));
+    await waitFor(() => expect(api.createRoot).toHaveBeenCalledWith(source.id, { providerNodeId: "node-trips" }));
     expect(changed).toHaveBeenCalled();
   });
 

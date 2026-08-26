@@ -95,6 +95,7 @@ export interface Source extends StoredEntity {
   householdId: EntityId;
   provider: ProviderKind;
   providerAccountId: string | null;
+  providerRootId: string | null;
   accountLabel: string;
   encryptedRefreshToken: EncryptedSecret;
   encryptedAccessToken: EncryptedSecret | null;

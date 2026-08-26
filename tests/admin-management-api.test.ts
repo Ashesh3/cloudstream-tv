@@ -358,7 +358,7 @@ describe("admin management HTTP API", () => {
       jsonRequest(
         `/api/admin/sources/${source.id}/roots`,
         "POST",
-        { nodeId: folder.id, displayName: "Family photos" },
+        { providerNodeId: folder.id, displayName: "Family photos" },
         mutationHeaders(harness.origin, admin)
       )
     );
@@ -438,7 +438,7 @@ describe("admin management HTTP API", () => {
     const request = () => app(jsonRequest(
       `/api/admin/sources/${source.id}/roots`,
       "POST",
-      { nodeId: folder.id, displayName: "Photos" },
+      { providerNodeId: folder.id, displayName: "Photos" },
       mutationHeaders(harness.origin, admin)
     ));
 
@@ -534,6 +534,7 @@ function makeSource(householdId: string, now: Date): Source {
     householdId,
     provider: "google",
     providerAccountId: "account-1",
+    providerRootId: null,
     accountLabel: "Family drive",
     encryptedRefreshToken: { keyVersion: "v1", iv: "iv", ciphertext: "refresh-secret", authTag: "tag" },
     encryptedAccessToken: null,
