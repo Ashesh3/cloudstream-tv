@@ -19,7 +19,7 @@ export function Requests({ requests, roots, sources, disabled, pendingId, onAppr
   const sorted = [...requests].filter(request => request.status === "pending").sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return <section aria-labelledby="device-requests-title" className="flex flex-col gap-5">
     <PageHeader eyebrow="Enrollment" title="Device requests" description="Review new televisions and choose exactly which cloud folders each device can browse." />
-    {disabled && <Alert className="border-amber-200 bg-amber-50 text-amber-950"><ShieldAlertIcon /><AlertTitle>New requests are paused</AlertTitle><AlertDescription>Turn enrollment back on in Settings when you are ready to add another television.</AlertDescription></Alert>}
+    {disabled && <Alert className="ledger-warning"><ShieldAlertIcon /><AlertTitle>New requests are paused</AlertTitle><AlertDescription>Turn enrollment back on in Settings when you are ready to add another television.</AlertDescription></Alert>}
     {!sorted.length ? <Empty title="No pending requests" body="New televisions will appear here for 30 minutes after they request household access." icon={<MonitorIcon />} /> : <div className="request-ledger">{sorted.map(request => <Card data-testid="request-card" key={request.id} className="request-entry">
       <CardHeader className="items-start gap-3 sm:grid-cols-[auto_1fr]">
         <span className="request-cue row-span-2 flex size-11 items-center justify-center text-primary"><MonitorIcon /></span>

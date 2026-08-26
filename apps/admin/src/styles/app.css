@@ -74,6 +74,10 @@
   --sidebar-accent-foreground: var(--program);
   --sidebar-border: var(--hairline);
   --sidebar-ring: var(--focus);
+  --warning-surface: #2b2116;
+  --warning-border: #b88650;
+  --warning-foreground: #fff0da;
+  --warning-muted: #f1d0a7;
   --control-hit-target: 44px; /* Mirrors CONTROL_HIT_TARGET in design/ledger.ts. */
 }
 
@@ -106,6 +110,10 @@
 [data-slot="badge"] { border-radius: 999px; font-variant-numeric: tabular-nums; }
 [data-slot="input"], select { border-radius: var(--radius-md); background: #111314; }
 [data-slot="alert"] { border-radius: var(--radius-md); }
+.ledger-warning { border-color: var(--warning-border); background: var(--warning-surface); color: var(--warning-foreground); }
+.ledger-warning [data-slot="alert-title"] { color: var(--warning-foreground); }
+.ledger-warning [data-slot="alert-description"] { color: var(--warning-muted); }
+.ledger-warning > svg { color: var(--warning-foreground); }
 
 .admin-root { min-height: 100vh; background: var(--projection); }
 .admin-root::before { content: ""; pointer-events: none; position: fixed; inset: 0; z-index: 60; opacity: .026; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='80' height='80' viewBox='0 0 80 80'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.75' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='.45'/%3E%3C/svg%3E"); mix-blend-mode: screen; }
