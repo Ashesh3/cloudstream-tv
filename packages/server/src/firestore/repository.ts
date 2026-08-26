@@ -18,7 +18,11 @@ import type {
 } from "@cloudframe/shared";
 import type { Firestore, Query, Transaction, WriteBatch } from "@google-cloud/firestore";
 import { createHash } from "node:crypto";
-import { recomputeFolderMetadata, type IndexBatchCommitInput } from "@cloudframe/indexer";
+import {
+  applyIndexRemovals,
+  recomputeFolderMetadata,
+  type IndexBatchCommitInput
+} from "@cloudframe/indexer";
 import { decodeSourceDocument } from "./decode";
 
 export interface RateLimitConsumeInput {
@@ -628,15 +632,17 @@ export class FirestoreRepository implements AppRepository {
     const existingNodes = await this.listNodesForSource(input.sourceId);
     const byId = new Map(existingNodes.map(node => [node.id, node]));
     for (const node of input.nodes) byId.set(node.id, node);
-    for (const id of input.removedNodeIds) {
-      const node = byId.get(id);
-      if (node) byId.set(id, { ...node, available: false, indexedAt: input.completedAt ?? node.indexedAt });
-    }
-    recomputeAffectedFolders(byId, input.affectedAncestorNodeIds);
+    const removedIds = applyIndexRemovals(byId, input.removedNodeIds, input.committedAt);
+    const affectedIds = affectedFoldersForRemovals(
+      byId,
+      input.affectedAncestorNodeIds,
+      removedIds
+    );
+    recomputeAffectedFolders(byId, affectedIds);
     const changedIds = new Set([
       ...input.nodes.map(node => node.id),
-      ...input.removedNodeIds,
-      ...input.affectedAncestorNodeIds
+      ...removedIds,
+      ...affectedIds
     ]);
     const writes = [...changedIds]
       .map(id => byId.get(id))
@@ -652,11 +658,8 @@ export class FirestoreRepository implements AppRepository {
       validateIndexCommit(current, input);
       const liveNodes = new Map(existingNodes.map(node => [node.id, node]));
       for (const node of input.nodes) liveNodes.set(node.id, node);
-      for (const id of input.removedNodeIds) {
-        const node = liveNodes.get(id);
-        if (node) liveNodes.set(id, { ...node, available: false });
-      }
-      recomputeAffectedFolders(liveNodes, input.affectedAncestorNodeIds);
+      applyIndexRemovals(liveNodes, input.removedNodeIds, input.committedAt);
+      recomputeAffectedFolders(liveNodes, affectedIds);
       for (const node of writes) {
         transaction.set(
           this.firestore.collection(COLLECTIONS.nodes).doc(node.id),
@@ -1411,4 +1414,19 @@ function recomputeAffectedFolders(
     );
     nodes.set(id, recomputeFolderMetadata(folder, descendants));
   }
+}
+
+function affectedFoldersForRemovals(
+  nodes: ReadonlyMap<string, MediaNode>,
+  existingAffectedIds: readonly string[],
+  removedIds: readonly string[]
+): string[] {
+  const affected = new Set(existingAffectedIds);
+  for (const id of removedIds) {
+    const node = nodes.get(id);
+    if (!node) continue;
+    node.ancestorNodeIds.forEach(ancestorId => affected.add(ancestorId));
+    if (node.parentNodeId) affected.add(node.parentNodeId);
+  }
+  return [...affected];
 }

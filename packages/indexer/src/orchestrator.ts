@@ -61,10 +61,23 @@ export function createIndexOrchestrator(
       if (!source) throw new Error("Source not found");
       try {
         const mode = source.crawlCheckpoint?.mode ?? requestedMode;
-        const generation = source.crawlCheckpoint?.generation ?? createGeneration();
         const enabledRoots = (await dependencies.repository.listRootsForSource(sourceId))
           .filter(root => root.enabled);
-        if (enabledRoots.length === 0 && mode !== "reconcile") {
+        const roots = enabledRoots
+          .map(root => root.providerNodeId)
+          .sort((left, right) => left.localeCompare(right));
+        const restartInitial = mode === "initial" && (
+          source.crawlCheckpoint?.mode !== "initial" ||
+          !sameRootProviderIds(source.crawlCheckpoint.rootProviderIds, roots)
+        );
+        const generation = restartInitial
+          ? createGeneration()
+          : source.crawlCheckpoint?.generation ?? createGeneration();
+        if (
+          roots.length === 0 &&
+          mode !== "reconcile" &&
+          source.crawlCheckpoint?.mode !== "initial"
+        ) {
           await finishSource(dependencies.repository, sourceId, leaseOwner, now());
           return { complete: true };
         }
@@ -87,6 +100,17 @@ export function createIndexOrchestrator(
             );
           }
           return { complete: result.complete };
+        }
+
+        if (mode === "initial" && roots.length === 0) {
+          await transitionToReconcile(
+            dependencies.repository,
+            source,
+            initialCheckpoint(generation, roots),
+            leaseOwner,
+            now()
+          );
+          return { complete: false };
         }
 
         const credentials = await dependencies.getCredentials(sourceId, source.householdId);
@@ -124,11 +148,10 @@ export function createIndexOrchestrator(
           return { complete };
         }
 
-        const roots = enabledRoots.map(root => root.providerNodeId);
         const rootSeed = roots.map(rootProviderId =>
           syntheticRootProviderNode(source, rootProviderId)
         );
-        const checkpoint = source.crawlCheckpoint?.mode === "initial"
+        const checkpoint = !restartInitial && source.crawlCheckpoint?.mode === "initial"
           ? source.crawlCheckpoint
           : initialCheckpoint(generation, roots);
         const currentFolder = checkpoint.currentProviderFolderId ?? checkpoint.pendingProviderFolderIds?.[0];
@@ -150,9 +173,9 @@ export function createIndexOrchestrator(
         });
         const page = {
           ...providerPage,
-          items: source.crawlCheckpoint?.mode === "initial"
-            ? providerPage.items
-            : [...rootSeed, ...providerPage.items]
+          items: restartInitial
+            ? [...rootSeed, ...providerPage.items]
+            : providerPage.items
         };
         const folders = providerPage.items
           .filter(item => item.kind === "folder")
@@ -169,6 +192,7 @@ export function createIndexOrchestrator(
           complete: false,
           leaseOwner,
           checkpointPatch: {
+            rootProviderIds: roots,
             currentProviderFolderId: page.nextCursor ? currentFolder : pending[0] ?? null,
             pendingProviderFolderIds: pending
           }
@@ -301,9 +325,21 @@ function initialCheckpoint(generation: string, roots: string[]): IndexCheckpoint
     providerPageCursor: null,
     processedNodeCount: 0,
     generation,
+    rootProviderIds: roots,
     currentProviderFolderId: roots[0] ?? null,
     pendingProviderFolderIds: roots
   };
+}
+
+function sameRootProviderIds(
+  checkpointRoots: readonly string[] | undefined,
+  enabledRoots: readonly string[]
+): boolean {
+  return Boolean(
+    checkpointRoots &&
+    checkpointRoots.length === enabledRoots.length &&
+    checkpointRoots.every((root, index) => root === enabledRoots[index])
+  );
 }
 
 async function finishSource(

@@ -6,7 +6,7 @@ import {
   MemoryRepository,
   createBrowseService
 } from "@cloudframe/server";
-import { deterministicNodeId } from "@cloudframe/indexer";
+import { deterministicNodeId, runIndexBatch } from "@cloudframe/indexer";
 
 const now = new Date("2026-08-26T00:00:00.000Z");
 
@@ -93,6 +93,22 @@ describe("current device-root browse authorization", () => {
     const browse = createBrowseService({ repository, cursorSecret: "cursor-secret" });
     await expect(browse.authorizeNode(device, household, grandchild.id)).rejects.toMatchObject({ code: "NODE_NOT_FOUND" });
     await repository.putNode({ ...rootNode, available: false });
+    await expect(browse.authorizeNode(device, household, child.id)).rejects.toMatchObject({ code: "NODE_NOT_FOUND" });
+  });
+
+  it("rejects descendants after their indexed folder is removed", async () => {
+    const { repository, device, household, rootNode } = await fixture();
+    const folder = media("removed-folder", "Removed", "folder", rootNode.id, null, "s1", "h1", [rootNode.id]);
+    const child = media("removed-child", "Removed.jpg", "image", folder.id, "2026-01-01", "s1", "h1", [rootNode.id, folder.id]);
+    await repository.putNode(folder);
+    await repository.putNode(child);
+    await runIndexBatch({ repository, sourceId: "s1", mode: "delta", generation: "delta", now }, {
+      changes: [{ providerNodeId: folder.providerNodeId, removed: true, node: null }],
+      nextCursor: null,
+      deltaCursor: "next"
+    });
+    const browse = createBrowseService({ repository, cursorSecret: "cursor-secret" });
+
     await expect(browse.authorizeNode(device, household, child.id)).rejects.toMatchObject({ code: "NODE_NOT_FOUND" });
   });
 

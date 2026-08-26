@@ -20,6 +20,7 @@ import {
   MemoryRepository,
   type FirestoreClientSettings
 } from "@cloudframe/server";
+import { deterministicNodeId } from "@cloudframe/indexer";
 import type { Firestore } from "@google-cloud/firestore";
 
 const now = new Date("2026-08-26T00:00:00Z");
@@ -747,6 +748,44 @@ describe("FirestoreRepository device approval", () => {
 });
 
 describe("FirestoreRepository admin management transactions", () => {
+  it("atomically cascades removed folders to available descendants", async () => {
+    const writes: string[] = [];
+    const source = makeSource({
+      status: "syncing",
+      leaseOwner: "owner",
+      leaseExpiresAt: later
+    });
+    const root = repositoryNode("root", "folder", null, []);
+    const folder = repositoryNode("folder", "folder", root.id, [root.id]);
+    const child = repositoryNode("child", "image", folder.id, [root.id, folder.id]);
+    const firestore = createManagementFirestore({ writes, source, nodes: [root, folder, child] });
+    const repo = new FirestoreRepository(firestore);
+
+    await repo.commitIndexBatch({
+      sourceId: source.id,
+      mode: "delta",
+      generation: "generation-delta",
+      checkpoint: {
+        mode: "delta",
+        providerPageCursor: null,
+        processedNodeCount: 1,
+        generation: "generation-delta"
+      },
+      deltaCursor: "delta-next",
+      nodes: [],
+      removedNodeIds: [folder.id],
+      affectedAncestorNodeIds: [root.id],
+      completedAt: now,
+      expectedLeaseOwner: "owner",
+      expectedPreviousCheckpoint: null,
+      committedAt: now
+    });
+
+    expect(await repo.getNode(folder.id)).toMatchObject({ available: false });
+    expect(await repo.getNode(child.id)).toMatchObject({ available: false });
+    expect(writes.filter(value => value.startsWith("set:nodes/"))).toHaveLength(3);
+  });
+
   it("connects a source atomically without creating a root", async () => {
     const writes: string[] = [];
     const firestore = createManagementFirestore({ writes });
@@ -1052,6 +1091,7 @@ function createManagementFirestore(options: {
   source?: Source;
   roots?: AssignedRoot[];
   devices?: Device[];
+  nodes?: MediaNode[];
 }): Firestore {
   type Ref = {
     key: string;
@@ -1076,6 +1116,7 @@ function createManagementFirestore(options: {
   if (options.source) documents.set(`sources/${options.source.id}`, options.source);
   for (const root of options.roots ?? []) documents.set(`roots/${root.id}`, root);
   for (const value of options.devices ?? []) documents.set(`devices/${value.id}`, value);
+  for (const value of options.nodes ?? []) documents.set(`nodes/${value.id}`, value);
   const snapshot = (reference: Ref) => ({
     id: reference.id,
     ref: reference,
@@ -1127,6 +1168,11 @@ function createManagementFirestore(options: {
         },
         update(reference: Ref, patch: unknown) {
           options.writes.push(`update:${reference.key}:${JSON.stringify(patch)}`);
+          const current = documents.get(reference.key);
+          documents.set(reference.key, {
+            ...(typeof current === "object" && current !== null ? current : {}),
+            ...(typeof patch === "object" && patch !== null ? patch : {})
+          });
         },
         delete(reference: Ref) {
           options.writes.push(`delete:${reference.key}`);
@@ -1347,5 +1393,40 @@ function makeSource(overrides: Partial<Source> = {}): Source {
     lastSyncErrorCode: null,
     createdAt: now,
     ...overrides
+  };
+}
+
+function repositoryNode(
+  providerNodeId: string,
+  kind: MediaNode["kind"],
+  parentNodeId: string | null,
+  ancestorNodeIds: string[]
+): MediaNode {
+  return {
+    id: deterministicNodeId("s1", providerNodeId),
+    householdId: "h1",
+    sourceId: "s1",
+    provider: "google",
+    providerNodeId,
+    parentNodeId,
+    ancestorNodeIds,
+    name: providerNodeId,
+    normalizedName: providerNodeId,
+    kind,
+    mimeType: kind === "folder" ? null : "image/jpeg",
+    size: kind === "folder" ? null : 1,
+    width: kind === "folder" ? null : 1,
+    height: kind === "folder" ? null : 1,
+    capturedAt: null,
+    createdAtProvider: now,
+    modifiedAtProvider: now,
+    thumbnailRevision: kind === "folder" ? null : "r",
+    hasPreview: kind !== "folder",
+    folderCoverNodeIds: [],
+    childFolderCount: 0,
+    childMediaCount: 0,
+    available: true,
+    indexedAt: now,
+    syncGeneration: "generation-old"
   };
 }

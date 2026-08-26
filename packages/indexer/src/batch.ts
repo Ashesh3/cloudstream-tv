@@ -52,6 +52,41 @@ export interface IndexBatchResult {
   affectedAncestorNodeIds: string[];
 }
 
+export function applyIndexRemovals(
+  nodes: Map<string, MediaNode>,
+  removedNodeIds: readonly string[],
+  indexedAt?: Date
+): string[] {
+  const removed = new Set<string>();
+  const removedFolderIds = new Set<string>();
+  for (const id of removedNodeIds) {
+    const node = nodes.get(id);
+    if (!node) continue;
+    nodes.set(id, {
+      ...node,
+      available: false,
+      ...(indexedAt ? { indexedAt } : {})
+    });
+    removed.add(id);
+    if (node.kind === "folder") removedFolderIds.add(id);
+  }
+  if (removedFolderIds.size === 0) return [...removed];
+  for (const node of nodes.values()) {
+    if (
+      node.available &&
+      node.ancestorNodeIds.some(id => removedFolderIds.has(id))
+    ) {
+      nodes.set(node.id, {
+        ...node,
+        available: false,
+        ...(indexedAt ? { indexedAt } : {})
+      });
+      removed.add(node.id);
+    }
+  }
+  return [...removed];
+}
+
 export async function filterDeltaPageToEnabledRoots(
   page: ChangesPage,
   roots: Array<{ providerNodeId: string }>,

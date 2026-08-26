@@ -16,7 +16,11 @@ import type {
   UpdateHouseholdSettingsInput,
   WatchHistory
 } from "@cloudframe/shared";
-import { recomputeFolderMetadata, type IndexBatchCommitInput } from "@cloudframe/indexer";
+import {
+  applyIndexRemovals,
+  recomputeFolderMetadata,
+  type IndexBatchCommitInput
+} from "@cloudframe/indexer";
 import {
   RepositoryError,
   assignedRootDocumentId,
@@ -361,12 +365,20 @@ export class MemoryRepository implements AppRepository {
     }
     const nextNodes = new Map(this.nodes);
     for (const node of input.nodes) nextNodes.set(node.id, copy(node));
-    for (const id of input.removedNodeIds) {
-      const node = nextNodes.get(id);
-      if (node) nextNodes.set(id, copy({ ...node, available: false }));
-    }
+    const removedIds = applyIndexRemovals(
+      nextNodes,
+      input.removedNodeIds,
+      input.committedAt
+    );
     const all = [...nextNodes.values()];
-    for (const id of new Set(input.affectedAncestorNodeIds)) {
+    const affectedIds = new Set([
+      ...input.affectedAncestorNodeIds,
+      ...removedIds.flatMap(id => {
+        const node = nextNodes.get(id);
+        return node ? [...node.ancestorNodeIds, ...(node.parentNodeId ? [node.parentNodeId] : [])] : [];
+      })
+    ]);
+    for (const id of affectedIds) {
       const folder = nextNodes.get(id);
       if (!folder || folder.kind !== "folder") continue;
       const descendants = all.filter(node => node.id !== folder.id && (node.parentNodeId === folder.id || node.ancestorNodeIds.includes(folder.id)));

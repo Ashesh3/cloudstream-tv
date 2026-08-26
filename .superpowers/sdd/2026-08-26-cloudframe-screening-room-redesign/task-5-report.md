@@ -34,3 +34,11 @@
 - Failure recording re-reads the current source so quota after a successful page commit is guarded against the advanced checkpoint.
 - The durable workflow still executes exactly one orchestrator page per step and contains no quota-specific retry handling.
 - Protected product, plan, spec, and impeccable artifacts remain untouched and unstaged.
+
+## Fix Round 1
+
+- Reproduced an active two-root initial crawl continuing through a disabled root's queued descendant. Initial checkpoints now persist sorted `rootProviderIds`; every step compares that snapshot with current enabled roots. A changed or legacy missing snapshot restarts from current roots with a fresh generation while preserving the valid lease and workflow run. Removing the last root transitions directly to reconciliation without credentials or provider calls, so prior metadata becomes unavailable.
+- Reproduced folder delete and move-out leaving unchanged descendants available. The atomic batch boundary now derives cascade removals only for removed folders, includes every available descendant in the memory/Firestore write set, recomputes affected ancestor metadata, and counts cascaded writes before Firestore's bound. Non-folder removal does not cascade.
+- Added TV browse authorization and admin source-tree regressions proving cascaded descendants are inaccessible and omitted, plus availability-count coverage and a Firestore transaction regression.
+- Migration ruling: `rootProviderIds` is optional only for persisted compatibility; any legacy active initial checkpoint without it is unsafe and restarts. Delta and reconciliation checkpoints require no snapshot or backfill.
+- Verification: focused indexer/repository/browse/admin/workflow/API suites passed with 134 tests; full suite passed with 363 tests; typecheck and `git diff --check` passed.

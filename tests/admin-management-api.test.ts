@@ -13,6 +13,7 @@ import {
   ProviderError,
   verifyPassphrase
 } from "@cloudframe/server";
+import { runIndexBatch } from "@cloudframe/indexer";
 import type {
   ProviderAdapter,
   ProviderCredentials,
@@ -33,6 +34,51 @@ const PASSPHRASE = "correct horse battery staple";
 const NEW_PASSPHRASE = "a much longer replacement passphrase";
 
 describe("admin management HTTP API", () => {
+  it("omits descendants of a removed folder from admin source browsing", async () => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now);
+    await harness.repository.putSource(source);
+    const parent = makeFolderNode(harness.householdId, source.id, "parent", "parent", null);
+    const removed = {
+      ...makeFolderNode(harness.householdId, source.id, "removed", "removed", parent.id),
+      ancestorNodeIds: [parent.id]
+    };
+    const child = {
+      ...makeFolderNode(harness.householdId, source.id, "child", "child", removed.id),
+      ancestorNodeIds: [parent.id, removed.id]
+    };
+    await harness.repository.putNode(parent);
+    await harness.repository.putNode(removed);
+    await harness.repository.putNode(child);
+    await runIndexBatch({
+      repository: harness.repository,
+      sourceId: source.id,
+      mode: "delta",
+      generation: "delta",
+      now: harness.now
+    }, {
+      changes: [{ providerNodeId: removed.providerNodeId, removed: true, node: null }],
+      nextCursor: null,
+      deltaCursor: "next"
+    });
+    const admin = await login(harness.app);
+
+    const removedResponse = await harness.app(jsonRequest(
+      `/api/admin/sources/${source.id}/tree?parentNodeId=${removed.id}`,
+      "GET",
+      undefined,
+      admin.headers
+    ));
+    expect(removedResponse.status).toBe(404);
+    const parentResponse = await harness.app(jsonRequest(
+      `/api/admin/sources/${source.id}/tree?parentNodeId=${parent.id}`,
+      "GET",
+      undefined,
+      admin.headers
+    ));
+    await expect(parentResponse.json()).resolves.toMatchObject({ data: { folders: [] } });
+  });
+
   it("lets the indexing service derive manual sync mode from persisted state", async () => {
     const harness = await createTestApi();
     const source = makeSource(harness.householdId, harness.now);

@@ -78,6 +78,7 @@ export interface IndexCheckpoint {
   providerPageCursor: string | null;
   processedNodeCount: number;
   generation: string;
+  rootProviderIds?: string[];
   currentProviderFolderId?: string | null;
   pendingProviderFolderIds?: string[];
   reconciliationCursor?: string | null;

@@ -432,6 +432,165 @@ describe("bounded resumable indexing", () => {
     });
   });
 
+  it("restarts an active initial crawl when its enabled root set changes", async () => {
+    const repository = await seededRepository();
+    await repository.putRoot({
+      id: "root-removed",
+      householdId: "h1",
+      sourceId: "s1",
+      providerNodeId: "movies",
+      displayName: "Movies",
+      ancestryProviderIds: [],
+      enabled: true,
+      createdAt: now
+    });
+    const keptRoot = indexedNode("root-provider", "folder", null, []);
+    const removedRoot = indexedNode("movies", "folder", null, []);
+    await repository.putNode(keptRoot);
+    await repository.putNode(removedRoot);
+    await repository.putNode(indexedNode(
+      "removed-child",
+      "folder",
+      removedRoot.id,
+      [removedRoot.id]
+    ));
+    await repository.putNode(indexedNode(
+      "removed-photo",
+      "image",
+      deterministicNodeId("s1", "removed-child"),
+      [removedRoot.id, deterministicNodeId("s1", "removed-child")]
+    ));
+    const active = (await repository.getSource("s1"))!;
+    await repository.putSource({
+      ...active,
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: null,
+        processedNodeCount: 12,
+        generation: "generation-old",
+        currentProviderFolderId: "removed-child",
+        pendingProviderFolderIds: ["removed-child", "root-provider"],
+        rootProviderIds: ["movies", "root-provider"]
+      },
+      activeWorkflowRunId: "run-1"
+    });
+    await repository.disableRoot({ householdId: "h1", rootId: "root-removed" });
+    const listedFolders: string[] = [];
+    const orchestrator = createIndexOrchestrator({
+      repository,
+      providers: {
+        get: () => ({
+          async listFolder(input: { folderId: string }) {
+            listedFolders.push(input.folderId);
+            return {
+              items: input.folderId === "root-provider"
+                ? [image("kept-photo", "Kept.jpg", "root-provider")]
+                : [],
+              nextCursor: null
+            };
+          }
+        } as unknown as ProviderAdapter)
+      },
+      getCredentials: async () => ({ accessToken: "a", refreshToken: "r", accessTokenExpiresAt: later() }),
+      now: () => now,
+      createGeneration: () => "generation-restarted"
+    });
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await expect(orchestrator.runNext("s1", "initial", "owner")).resolves.toEqual({ complete: false });
+    expect(listedFolders).toEqual(["root-provider"]);
+    expect(await repository.getSource("s1")).toMatchObject({
+      crawlCheckpoint: {
+        mode: "reconcile",
+        generation: "generation-restarted"
+      },
+      leaseOwner: "owner",
+      activeWorkflowRunId: "run-1"
+    });
+    await expect(orchestrator.runNext("s1", "initial", "owner")).resolves.toEqual({ complete: true });
+    expect(await repository.getNodeByProviderId("s1", "removed-child")).toMatchObject({ available: false });
+    expect(await repository.getNodeByProviderId("s1", "removed-photo")).toMatchObject({ available: false });
+  });
+
+  it("restarts legacy initial checkpoints that lack an enabled-root snapshot", async () => {
+    const repository = await seededRepository();
+    const active = (await repository.getSource("s1"))!;
+    await repository.putSource({
+      ...active,
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: null,
+        processedNodeCount: 7,
+        generation: "generation-legacy",
+        currentProviderFolderId: "legacy-child",
+        pendingProviderFolderIds: ["legacy-child"]
+      }
+    });
+    const listedFolders: string[] = [];
+    const orchestrator = createIndexOrchestrator({
+      repository,
+      providers: {
+        get: () => ({
+          async listFolder(input: { folderId: string }) {
+            listedFolders.push(input.folderId);
+            return { items: [], nextCursor: null };
+          }
+        } as unknown as ProviderAdapter)
+      },
+      getCredentials: async () => ({ accessToken: "a", refreshToken: "r", accessTokenExpiresAt: later() }),
+      now: () => now,
+      createGeneration: () => "generation-restarted"
+    });
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await orchestrator.runNext("s1", "initial", "owner");
+    expect(listedFolders).toEqual(["root-provider"]);
+    expect(await repository.getSource("s1")).toMatchObject({
+      crawlCheckpoint: { mode: "reconcile", generation: "generation-restarted" }
+    });
+  });
+
+  it("reconciles all prior metadata without provider work when the last root is disabled mid-initial", async () => {
+    const repository = await seededRepository();
+    const rootNode = indexedNode("root-provider", "folder", null, []);
+    await repository.putNode(rootNode);
+    await repository.putNode(indexedNode("old-photo", "image", rootNode.id, [rootNode.id]));
+    const active = (await repository.getSource("s1"))!;
+    await repository.putSource({
+      ...active,
+      syncGeneration: "generation-old",
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: null,
+        processedNodeCount: 3,
+        generation: "generation-old",
+        currentProviderFolderId: "root-provider",
+        pendingProviderFolderIds: ["root-provider"],
+        rootProviderIds: ["root-provider"]
+      }
+    });
+    await repository.disableRoot({ householdId: "h1", rootId: "root-1" });
+    const listFolder = vi.fn();
+    const getCredentials = vi.fn();
+    const orchestrator = createIndexOrchestrator({
+      repository,
+      providers: { get: () => ({ listFolder } as unknown as ProviderAdapter) },
+      getCredentials,
+      now: () => now,
+      createGeneration: () => "generation-empty"
+    });
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await expect(orchestrator.runNext("s1", "initial", "owner")).resolves.toEqual({ complete: false });
+    expect(await repository.getSource("s1")).toMatchObject({
+      crawlCheckpoint: { mode: "reconcile", generation: "generation-empty" }
+    });
+    await expect(orchestrator.runNext("s1", "initial", "owner")).resolves.toEqual({ complete: true });
+    expect(listFolder).not.toHaveBeenCalled();
+    expect(getCredentials).not.toHaveBeenCalled();
+    expect(await repository.getNodeByProviderId("s1", "old-photo")).toMatchObject({ available: false });
+  });
+
   it("performs no provider crawl when a source has no enabled roots", async () => {
     const repository = await seededRepository();
     await repository.disableRoot({ householdId: "h1", rootId: "root-1" });
@@ -540,6 +699,48 @@ describe("bounded resumable indexing", () => {
     expect(await repository.getNodeByProviderId("s1", "removed-parent")).toMatchObject({ available: false });
   });
 
+  it("cascades a removed folder to all available descendants and availability counts", async () => {
+    const repository = await seededRepository();
+    await runIndexBatch(batchContext(repository, "initial", "generation-old"), {
+      items: [
+        folder("album", "Album"),
+        folder("nested", "Nested", "album"),
+        image("nested-photo", "Nested.jpg", "nested"),
+        image("root-photo", "Root.jpg", "root-provider")
+      ],
+      nextCursor: null
+    });
+
+    await runIndexBatch(batchContext(repository, "delta", "generation-delta"), {
+      changes: [{ providerNodeId: "album", removed: true, node: null }],
+      nextCursor: null,
+      deltaCursor: "delta-next"
+    });
+
+    expect(await repository.getNodeByProviderId("s1", "album")).toMatchObject({ available: false });
+    expect(await repository.getNodeByProviderId("s1", "nested")).toMatchObject({ available: false });
+    expect(await repository.getNodeByProviderId("s1", "nested-photo")).toMatchObject({ available: false });
+    expect(await repository.getNodeByProviderId("s1", "root-photo")).toMatchObject({ available: true });
+    expect(await repository.countNodesForHousehold("h1")).toEqual({ total: 4, available: 1 });
+  });
+
+  it("does not cascade removal of a non-folder node", async () => {
+    const repository = await seededRepository();
+    const imageNode = indexedNode("image-parent", "image", null, []);
+    const malformedChild = indexedNode("malformed-child", "image", imageNode.id, [imageNode.id]);
+    await repository.putNode(imageNode);
+    await repository.putNode(malformedChild);
+
+    await runIndexBatch(batchContext(repository, "delta", "generation-delta"), {
+      changes: [{ providerNodeId: "image-parent", removed: true, node: null }],
+      nextCursor: null,
+      deltaCursor: "delta-next"
+    });
+
+    expect(await repository.getNodeByProviderId("s1", "image-parent")).toMatchObject({ available: false });
+    expect(await repository.getNodeByProviderId("s1", "malformed-child")).toMatchObject({ available: true });
+  });
+
   it("does not trust an available indexed parent outside selected-root ancestry", async () => {
     const repository = await seededRepository();
     await repository.putNode(indexedNode("outside-parent", "folder", null, []));
@@ -574,6 +775,26 @@ describe("bounded resumable indexing", () => {
       parentNodeId: rootNode.id,
       available: false
     });
+  });
+
+  it("cascades descendants when a folder moves out of every selected root", async () => {
+    const repository = await seededRepository();
+    const rootNode = indexedNode("root-provider", "folder", null, []);
+    const movedFolder = indexedNode("moved-folder", "folder", rootNode.id, [rootNode.id]);
+    const child = indexedNode("moved-child", "image", movedFolder.id, [rootNode.id, movedFolder.id]);
+    await repository.putNode(rootNode);
+    await repository.putNode(movedFolder);
+    await repository.putNode(child);
+    const orchestrator = deltaOrchestrator(repository, async () => ({
+      changes: [change(folder("moved-folder", "Moved", "outside-parent"))],
+      nextCursor: null,
+      deltaCursor: "next"
+    }));
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await orchestrator.runNext("s1", "delta", "owner");
+    expect(await repository.getNodeByProviderId("s1", "moved-folder")).toMatchObject({ available: false });
+    expect(await repository.getNodeByProviderId("s1", "moved-child")).toMatchObject({ available: false });
   });
 
   it("marks nodes from a removed root unavailable during reconciliation", async () => {
