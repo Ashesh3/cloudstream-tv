@@ -52,6 +52,78 @@ export interface IndexBatchResult {
   affectedAncestorNodeIds: string[];
 }
 
+export async function filterDeltaPageToEnabledRoots(
+  page: ChangesPage,
+  roots: Array<{ providerNodeId: string }>,
+  repository: Pick<IndexBatchRepository, "getNodeByProviderId">,
+  sourceId: string
+): Promise<ChangesPage> {
+  const rootIds = new Set(roots.map(root => root.providerNodeId));
+  const rootNodeIds = new Set(
+    roots.map(root => deterministicNodeId(sourceId, root.providerNodeId))
+  );
+  const changesById = new Map(
+    page.changes
+      .filter(change => !change.removed && change.node)
+      .map(change => [change.providerNodeId, change])
+  );
+  const removedIds = new Set(
+    page.changes.filter(change => change.removed).map(change => change.providerNodeId)
+  );
+  const accepted = new Map<string, boolean>();
+
+  async function belongsToEnabledRoot(
+    providerNodeId: string,
+    visiting: Set<string>
+  ): Promise<boolean> {
+    if (rootIds.has(providerNodeId)) return true;
+    if (removedIds.has(providerNodeId)) return false;
+    const cached = accepted.get(providerNodeId);
+    if (cached !== undefined) return cached;
+    if (visiting.has(providerNodeId)) return false;
+    visiting.add(providerNodeId);
+
+    const changed = changesById.get(providerNodeId);
+    const parentProviderId = changed?.node?.parentProviderId ?? null;
+    let belongs = false;
+    if (parentProviderId !== null) {
+      if (
+        changesById.has(parentProviderId) ||
+        removedIds.has(parentProviderId) ||
+        rootIds.has(parentProviderId)
+      ) {
+        belongs = await belongsToEnabledRoot(parentProviderId, visiting);
+      } else {
+        const indexedParent = await repository.getNodeByProviderId(sourceId, parentProviderId);
+        belongs = Boolean(
+          indexedParent?.available && (
+            rootNodeIds.has(indexedParent.id) ||
+            indexedParent.ancestorNodeIds.some(id => rootNodeIds.has(id))
+          )
+        );
+      }
+    }
+    visiting.delete(providerNodeId);
+    accepted.set(providerNodeId, belongs);
+    return belongs;
+  }
+
+  const filtered: ChangesPage["changes"] = [];
+  for (const change of page.changes) {
+    const existing = await repository.getNodeByProviderId(sourceId, change.providerNodeId);
+    if (change.removed) {
+      if (existing) filtered.push(change);
+      continue;
+    }
+    if (await belongsToEnabledRoot(change.providerNodeId, new Set())) {
+      filtered.push(change);
+    } else if (existing) {
+      filtered.push({ providerNodeId: change.providerNodeId, removed: true, node: null });
+    }
+  }
+  return { ...page, changes: filtered };
+}
+
 export function deterministicNodeId(
   sourceId: string,
   providerNodeId: string

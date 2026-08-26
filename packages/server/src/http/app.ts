@@ -118,7 +118,7 @@ export interface ApiAppDependencies {
   };
   indexing?: {
     startDueSources(authorization: string | null, limit?: number): Promise<unknown>;
-    startSource(sourceId: string, mode: "initial" | "delta" | "reconcile"): Promise<unknown>;
+    startSource(sourceId: string, requestedMode?: "initial" | "delta" | "reconcile"): Promise<unknown>;
   };
   providerFolders?: ProviderFolderService;
 }
@@ -394,7 +394,7 @@ async function manualSourceSync(request: Request, dependencies: ApiAppDependenci
   if (!source || source.householdId !== dependencies.config.householdId) {
     throw new HttpError(404, "SOURCE_NOT_FOUND", "Source not found.");
   }
-  return ok(await dependencies.indexing.startSource(sourceId, "delta"), {
+  return ok(await dependencies.indexing.startSource(sourceId), {
     headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken)
   });
 }

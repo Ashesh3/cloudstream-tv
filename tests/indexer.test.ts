@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   MAX_INDEX_BATCH_SIZE,
@@ -11,8 +11,13 @@ import {
   runReconciliationBatch
 } from "@cloudframe/indexer";
 import { createIndexingService, MemoryRepository } from "@cloudframe/server";
-import type { AssignedRoot, Source } from "@cloudframe/shared";
-import { ProviderError, type ProviderAdapter, type ProviderNode } from "@cloudframe/providers";
+import { sourceIndexStateKind, type AssignedRoot, type Source } from "@cloudframe/shared";
+import {
+  ProviderError,
+  type ChangesPage,
+  type ProviderAdapter,
+  type ProviderNode
+} from "@cloudframe/providers";
 
 const now = new Date("2026-08-26T00:00:00.000Z");
 
@@ -179,6 +184,91 @@ describe("bounded resumable indexing", () => {
     expect([first, second].filter(Boolean)).toHaveLength(1);
   });
 
+  it("normalizes source index state independently of API encoding", () => {
+    expect(sourceIndexStateKind(source(), 0)).toBe("unselected");
+    expect(sourceIndexStateKind(source(), 1)).toBe("queued");
+    expect(sourceIndexStateKind({ ...source(), activeWorkflowRunId: "run-1" }, 1)).toBe("indexing");
+    expect(sourceIndexStateKind({ ...source(), status: "healthy", deltaCursor: "delta-1" }, 1)).toBe("healthy");
+  });
+
+  it.each([
+    ["initial", { status: "healthy" as const, deltaCursor: null, crawlCheckpoint: null }],
+    ["reconcile", {
+      status: "syncing" as const,
+      deltaCursor: "delta-1",
+      crawlCheckpoint: {
+        mode: "reconcile" as const,
+        providerPageCursor: null,
+        processedNodeCount: 4,
+        generation: "generation-reconcile",
+        reconciliationCursor: "node-4"
+      }
+    }],
+    ["delta", { status: "error" as const, deltaCursor: "delta-1", crawlCheckpoint: null }]
+  ])("manual Sync now selects %s from persisted source state", async (expectedMode, patch) => {
+    const repository = await seededRepository();
+    const current = (await repository.getSource("s1"))!;
+    await repository.putSource({ ...current, ...patch });
+    const launches: string[] = [];
+    const indexing = createIndexingService({
+      repository,
+      workflowLauncher: {
+        async start(_sourceId, mode) {
+          launches.push(mode);
+          return { runId: `run-${mode}` };
+        }
+      },
+      householdId: "h1",
+      cronSecret: "cron",
+      now: () => now,
+      createOwner: () => `manual-${expectedMode}`
+    });
+
+    await expect(indexing.startSource("s1")).resolves.toMatchObject({ started: true });
+    expect(launches).toEqual([expectedMode]);
+  });
+
+  it.each([
+    ["initial", { status: "healthy" as const, deltaCursor: null, crawlCheckpoint: null }],
+    ["reconcile", {
+      status: "syncing" as const,
+      deltaCursor: "delta-1",
+      crawlCheckpoint: {
+        mode: "reconcile" as const,
+        providerPageCursor: null,
+        processedNodeCount: 4,
+        generation: "generation-reconcile",
+        reconciliationCursor: "node-4"
+      }
+    }],
+    ["delta", { status: "error" as const, deltaCursor: "delta-1", crawlCheckpoint: null }]
+  ])("due-source launch selects %s from persisted source state", async (expectedMode, patch) => {
+    const repository = await seededRepository();
+    const current = (await repository.getSource("s1"))!;
+    await repository.putSource({ ...current, ...patch });
+    const launches: string[] = [];
+    const indexing = createIndexingService({
+      repository,
+      workflowLauncher: {
+        async start(_sourceId, mode) {
+          launches.push(mode);
+          return { runId: `run-${mode}` };
+        }
+      },
+      householdId: "h1",
+      cronSecret: "cron",
+      now: () => now,
+      createOwner: () => `due-${expectedMode}`
+    });
+
+    await expect(indexing.startDueSources("Bearer cron", 1)).resolves.toEqual({
+      leased: 1,
+      started: 1,
+      failed: 0
+    });
+    expect(launches).toEqual([expectedMode]);
+  });
+
   it("uses an injected workflow launcher and leases only a bounded due-source set", async () => {
     const repository = await seededRepository();
     const starts: string[] = [];
@@ -197,7 +287,7 @@ describe("bounded resumable indexing", () => {
     });
     const result = await indexing.startDueSources("Bearer cron-secret", 1);
     expect(result).toEqual({ leased: 1, started: 1, failed: 0 });
-    expect(starts).toEqual(["s1:delta"]);
+    expect(starts).toEqual(["s1:initial"]);
     expect((await repository.getSource("s1"))?.activeWorkflowRunId).toBe("run-s1");
   });
 
@@ -342,6 +432,267 @@ describe("bounded resumable indexing", () => {
     });
   });
 
+  it("performs no provider crawl when a source has no enabled roots", async () => {
+    const repository = await seededRepository();
+    await repository.disableRoot({ householdId: "h1", rootId: "root-1" });
+    const listFolder = vi.fn(async () => ({ items: [], nextCursor: null }));
+    const getCredentials = vi.fn(async () => ({
+      accessToken: "a",
+      refreshToken: "r",
+      accessTokenExpiresAt: later()
+    }));
+    const orchestrator = createIndexOrchestrator({
+      repository,
+      providers: { get: () => ({ listFolder } as unknown as ProviderAdapter) },
+      getCredentials,
+      now: () => now
+    });
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await expect(orchestrator.runNext("s1", "initial", "owner")).resolves.toEqual({ complete: true });
+    expect(listFolder).not.toHaveBeenCalled();
+    expect(getCredentials).not.toHaveBeenCalled();
+  });
+
+  it("stops an already-launched delta workflow without provider work after its last root is disabled", async () => {
+    const repository = await seededRepository();
+    const current = (await repository.getSource("s1"))!;
+    await repository.putSource({ ...current, deltaCursor: "delta-1" });
+    await repository.disableRoot({ householdId: "h1", rootId: "root-1" });
+    const getChanges = vi.fn(async () => ({ changes: [], nextCursor: null, deltaCursor: "delta-2" }));
+    const getCredentials = vi.fn(async () => ({
+      accessToken: "a",
+      refreshToken: "r",
+      accessTokenExpiresAt: later()
+    }));
+    const orchestrator = createIndexOrchestrator({
+      repository,
+      providers: { get: () => ({ getChanges } as unknown as ProviderAdapter) },
+      getCredentials,
+      now: () => now
+    });
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await expect(orchestrator.runNext("s1", "delta", "owner")).resolves.toEqual({ complete: true });
+    expect(getChanges).not.toHaveBeenCalled();
+    expect(getCredentials).not.toHaveBeenCalled();
+  });
+
+  it("drops delta nodes outside every enabled root", async () => {
+    const repository = await seededRepository();
+    await repository.putNode(indexedNode("root-provider", "folder", null, []));
+    const getChanges = vi.fn(async () => ({
+      changes: [
+        change(image("inside", "Inside.jpg", "root-provider")),
+        change(image("outside", "Outside.jpg", "unselected"))
+      ],
+      nextCursor: null,
+      deltaCursor: "next"
+    }));
+    const orchestrator = deltaOrchestrator(repository, getChanges);
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await orchestrator.runNext("s1", "delta", "owner");
+    expect(await repository.getNodeByProviderId("s1", "inside")).not.toBeNull();
+    expect(await repository.getNodeByProviderId("s1", "outside")).toBeNull();
+  });
+
+  it("resolves delta ancestry independently of provider change ordering", async () => {
+    const repository = await seededRepository();
+    await repository.putNode(indexedNode("root-provider", "folder", null, []));
+    const getChanges = vi.fn(async () => ({
+      changes: [
+        change(image("child", "Child.jpg", "new-parent")),
+        change(folder("new-parent", "New parent"))
+      ],
+      nextCursor: null,
+      deltaCursor: "next"
+    }));
+    const orchestrator = deltaOrchestrator(repository, getChanges);
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await orchestrator.runNext("s1", "delta", "owner");
+    expect(await repository.getNodeByProviderId("s1", "child")).toMatchObject({
+      parentNodeId: deterministicNodeId("s1", "new-parent"),
+      available: true
+    });
+  });
+
+  it("does not admit a delta child through a parent removed in the same page", async () => {
+    const repository = await seededRepository();
+    const rootNode = indexedNode("root-provider", "folder", null, []);
+    const removedParent = indexedNode("removed-parent", "folder", rootNode.id, [rootNode.id]);
+    await repository.putNode(rootNode);
+    await repository.putNode(removedParent);
+    const getChanges = vi.fn(async () => ({
+      changes: [
+        change(image("orphan", "Orphan.jpg", "removed-parent")),
+        { providerNodeId: "removed-parent", removed: true, node: null }
+      ],
+      nextCursor: null,
+      deltaCursor: "next"
+    }));
+    const orchestrator = deltaOrchestrator(repository, getChanges);
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await orchestrator.runNext("s1", "delta", "owner");
+    expect(await repository.getNodeByProviderId("s1", "orphan")).toBeNull();
+    expect(await repository.getNodeByProviderId("s1", "removed-parent")).toMatchObject({ available: false });
+  });
+
+  it("does not trust an available indexed parent outside selected-root ancestry", async () => {
+    const repository = await seededRepository();
+    await repository.putNode(indexedNode("outside-parent", "folder", null, []));
+    const getChanges = vi.fn(async () => ({
+      changes: [change(image("outside-child", "Outside child.jpg", "outside-parent"))],
+      nextCursor: null,
+      deltaCursor: "next"
+    }));
+    const orchestrator = deltaOrchestrator(repository, getChanges);
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await orchestrator.runNext("s1", "delta", "owner");
+    expect(await repository.getNodeByProviderId("s1", "outside-child")).toBeNull();
+  });
+
+  it("treats a move out of every selected root as a removal", async () => {
+    const repository = await seededRepository();
+    const rootNode = indexedNode("root-provider", "folder", null, []);
+    const photo = indexedNode("photo", "image", rootNode.id, [rootNode.id]);
+    await repository.putNode(rootNode);
+    await repository.putNode(photo);
+    const getChanges = vi.fn(async () => ({
+      changes: [change(image("photo", "Moved.jpg", "outside-parent"))],
+      nextCursor: null,
+      deltaCursor: "next"
+    }));
+    const orchestrator = deltaOrchestrator(repository, getChanges);
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await orchestrator.runNext("s1", "delta", "owner");
+    expect(await repository.getNodeByProviderId("s1", "photo")).toMatchObject({
+      parentNodeId: rootNode.id,
+      available: false
+    });
+  });
+
+  it("marks nodes from a removed root unavailable during reconciliation", async () => {
+    const repository = await seededRepository();
+    await repository.putRoot({
+      id: "root-removed",
+      householdId: "h1",
+      sourceId: "s1",
+      providerNodeId: "movies",
+      displayName: "Movies",
+      ancestryProviderIds: [],
+      enabled: true,
+      createdAt: now
+    });
+    const keptRoot = indexedNode("root-provider", "folder", null, []);
+    const removedRoot = indexedNode("movies", "folder", null, []);
+    await repository.putNode(keptRoot);
+    await repository.putNode(indexedNode("kept-child", "image", keptRoot.id, [keptRoot.id]));
+    await repository.putNode(removedRoot);
+    await repository.putNode(indexedNode("removed-child", "image", removedRoot.id, [removedRoot.id]));
+    await repository.disableRoot({ householdId: "h1", rootId: "root-removed" });
+    const listFolder = vi.fn(async () => ({
+      items: [image("kept-child", "Kept.jpg", "root-provider")],
+      nextCursor: null
+    }));
+    const orchestrator = createIndexOrchestrator({
+      repository,
+      providers: { get: () => ({ listFolder } as unknown as ProviderAdapter) },
+      getCredentials: async () => ({ accessToken: "a", refreshToken: "r", accessTokenExpiresAt: later() }),
+      now: () => now,
+      createGeneration: () => "generation-new"
+    });
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await expect(orchestrator.runNext("s1", "initial", "owner")).resolves.toEqual({ complete: false });
+    await expect(orchestrator.runNext("s1", "initial", "owner")).resolves.toEqual({ complete: true });
+    expect(await repository.getNodeByProviderId("s1", "removed-child")).toMatchObject({ available: false });
+  });
+
+  it("records Firestore quota exhaustion as a recoverable terminal index state", async () => {
+    const repository = await seededRepository();
+    const quotaError = Object.assign(new Error("Quota exceeded"), { code: 8 });
+    vi.spyOn(repository, "commitIndexBatch").mockRejectedValueOnce(quotaError);
+    const recordFailure = vi.spyOn(repository, "recordSyncFailure");
+    const orchestrator = createIndexOrchestrator({
+      repository,
+      providers: {
+        get: () => ({
+          listFolder: async () => ({ items: [], nextCursor: null })
+        } as unknown as ProviderAdapter)
+      },
+      getCredentials: async () => ({ accessToken: "a", refreshToken: "r", accessTokenExpiresAt: later() }),
+      now: () => now
+    });
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await expect(orchestrator.runNext("s1", "initial", "owner")).rejects.toThrow("Quota exceeded");
+    expect(recordFailure).toHaveBeenCalledWith(expect.objectContaining({
+      sourceId: "s1",
+      status: "error",
+      errorCode: "RESOURCE_EXHAUSTED",
+      nextSyncAt: null
+    }));
+    expect(await repository.getSource("s1")).toMatchObject({
+      status: "error",
+      lastSyncErrorCode: "RESOURCE_EXHAUSTED",
+      nextSyncAt: null,
+      leaseOwner: null,
+      leaseExpiresAt: null
+    });
+  });
+
+  it("records quota exhaustion against a checkpoint advanced earlier in the same step", async () => {
+    const repository = await seededRepository();
+    const current = (await repository.getSource("s1"))!;
+    await repository.putSource({ ...current, deltaCursor: "delta-1" });
+    await repository.putNode(indexedNode("root-provider", "folder", null, []));
+    const quotaError = Object.assign(new Error("Completion quota exceeded"), { code: "RESOURCE_EXHAUSTED" });
+    vi.spyOn(repository, "completeSyncRun").mockRejectedValueOnce(quotaError);
+    const orchestrator = deltaOrchestrator(repository, async () => ({
+      changes: [],
+      nextCursor: null,
+      deltaCursor: "delta-2"
+    }));
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await expect(orchestrator.runNext("s1", "delta", "owner")).rejects.toBe(quotaError);
+    expect(await repository.getSource("s1")).toMatchObject({
+      status: "error",
+      deltaCursor: "delta-2",
+      crawlCheckpoint: { mode: "delta", generation: "generation-delta" },
+      lastSyncErrorCode: "RESOURCE_EXHAUSTED",
+      nextSyncAt: null,
+      leaseOwner: null
+    });
+  });
+
+  it("does not mask the original quota error when quota-state persistence also fails", async () => {
+    const repository = await seededRepository();
+    const quotaError = Object.assign(new Error("Original quota exceeded"), { code: 8 });
+    vi.spyOn(repository, "commitIndexBatch").mockRejectedValueOnce(quotaError);
+    vi.spyOn(repository, "recordSyncFailure").mockRejectedValueOnce(
+      Object.assign(new Error("Failure-state write also exhausted quota"), { code: 8 })
+    );
+    const orchestrator = createIndexOrchestrator({
+      repository,
+      providers: {
+        get: () => ({
+          listFolder: async () => ({ items: [], nextCursor: null })
+        } as unknown as ProviderAdapter)
+      },
+      getCredentials: async () => ({ accessToken: "a", refreshToken: "r", accessTokenExpiresAt: later() }),
+      now: () => now
+    });
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await expect(orchestrator.runNext("s1", "initial", "owner")).rejects.toBe(quotaError);
+  });
+
   it("records throttling cadence and reauthentication without deleting metadata", async () => {
     const repository = await seededRepository();
     const throttled = createIndexOrchestrator({
@@ -462,6 +813,58 @@ function indexedFixtureNode() {
     folderCoverNodeIds: [], childFolderCount: 0, childMediaCount: 0, available: true, indexedAt: now,
     syncGeneration: "old"
   };
+}
+
+function indexedNode(
+  providerNodeId: string,
+  kind: "folder" | "image",
+  parentNodeId: string | null,
+  ancestorNodeIds: string[]
+) {
+  return {
+    id: deterministicNodeId("s1", providerNodeId),
+    householdId: "h1",
+    sourceId: "s1",
+    provider: "google" as const,
+    providerNodeId,
+    parentNodeId,
+    ancestorNodeIds,
+    name: providerNodeId,
+    normalizedName: providerNodeId,
+    kind,
+    mimeType: kind === "folder" ? null : "image/jpeg",
+    size: kind === "folder" ? null : 1,
+    width: kind === "folder" ? null : 1,
+    height: kind === "folder" ? null : 1,
+    capturedAt: null,
+    createdAtProvider: now,
+    modifiedAtProvider: now,
+    thumbnailRevision: kind === "folder" ? null : "r",
+    hasPreview: kind !== "folder",
+    folderCoverNodeIds: [],
+    childFolderCount: 0,
+    childMediaCount: 0,
+    available: true,
+    indexedAt: now,
+    syncGeneration: "generation-old"
+  };
+}
+
+function change(value: ProviderNode) {
+  return { providerNodeId: value.providerNodeId, removed: false, node: value };
+}
+
+function deltaOrchestrator(
+  repository: MemoryRepository,
+  getChanges: () => Promise<ChangesPage>
+) {
+  return createIndexOrchestrator({
+    repository,
+    providers: { get: () => ({ getChanges } as unknown as ProviderAdapter) },
+    getCredentials: async () => ({ accessToken: "a", refreshToken: "r", accessTokenExpiresAt: later() }),
+    now: () => now,
+    createGeneration: () => "generation-delta"
+  });
 }
 
 async function seededRepository(): Promise<MemoryRepository> {

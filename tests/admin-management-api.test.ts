@@ -33,6 +33,33 @@ const PASSPHRASE = "correct horse battery staple";
 const NEW_PASSPHRASE = "a much longer replacement passphrase";
 
 describe("admin management HTTP API", () => {
+  it("lets the indexing service derive manual sync mode from persisted state", async () => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now);
+    await harness.repository.putSource(source);
+    const startSource = vi.fn(async () => ({ started: true, sourceId: source.id, runId: "run-1" }));
+    const admin = await login(harness.app);
+    const app = createApiApp({
+      repository: harness.repository,
+      indexing: {
+        startDueSources: vi.fn(async () => ({ leased: 0, started: 0, failed: 0 })),
+        startSource
+      },
+      config: apiConfig(harness),
+      now: () => harness.now
+    });
+
+    const response = await app(jsonRequest(
+      `/api/admin/sources/${source.id}/sync`,
+      "POST",
+      {},
+      mutationHeaders(harness.origin, admin)
+    ));
+
+    expect(response.status).toBe(200);
+    expect(startSource).toHaveBeenCalledWith(source.id);
+  });
+
   it("browses live provider folders before any metadata is indexed", async () => {
     const harness = await createTestApi();
     const source = makeSource(harness.householdId, harness.now, {

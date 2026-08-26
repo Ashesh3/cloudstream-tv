@@ -8,6 +8,10 @@ import type {
   Source,
   WatchHistory
 } from "./contracts";
+import {
+  sourceIndexStateKind,
+  type SourceIndexStateKind
+} from "./index-state";
 
 export interface ApiError {
   code: string;
@@ -70,16 +74,6 @@ export interface SourceDto {
   providerRootId: string | null;
   indexState: SourceIndexStateDto;
 }
-
-export type SourceIndexStateKind =
-  | "unselected"
-  | "queued"
-  | "indexing"
-  | "reconciling"
-  | "healthy"
-  | "quota-exhausted"
-  | "reauth-required"
-  | "provider-error";
 
 export interface SourceIndexStateDto {
   kind: SourceIndexStateKind;
@@ -338,35 +332,20 @@ export function encodeSourceIndexState(
   const processedNodeCount = checkpoint?.processedNodeCount ?? 0;
   const pendingFolderCount = checkpoint?.pendingProviderFolderIds?.length ?? 0;
   const errorCode = source.lastSyncErrorCode;
-
-  if (errorCode === "RESOURCE_EXHAUSTED") {
-    return { kind: "quota-exhausted", processedNodeCount, pendingFolderCount, recoverable: true, errorCode };
-  }
-  if (source.status === "reauth-required") {
-    return { kind: "reauth-required", processedNodeCount, pendingFolderCount, recoverable: true, errorCode };
-  }
-  if (source.status === "error") {
-    return { kind: "provider-error", processedNodeCount, pendingFolderCount, recoverable: true, errorCode };
-  }
-  if (enabledRootCount === 0) {
-    return { kind: "unselected", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
-  }
-  if (checkpoint?.mode === "reconcile") {
-    return { kind: "reconciling", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
-  }
-  if (checkpoint?.mode === "initial") {
-    return { kind: "indexing", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
-  }
-  if (source.activeWorkflowRunId || source.status === "syncing") {
-    return {
-      kind: "queued",
-      processedNodeCount,
-      pendingFolderCount,
-      recoverable: source.activeWorkflowRunId === null,
-      errorCode: null
-    };
-  }
-  return { kind: "healthy", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
+  const kind = sourceIndexStateKind(source, enabledRootCount);
+  return {
+    kind,
+    processedNodeCount,
+    pendingFolderCount,
+    recoverable:
+      kind === "quota-exhausted" ||
+      kind === "reauth-required" ||
+      kind === "provider-error" ||
+      (kind === "queued" && source.activeWorkflowRunId === null),
+    errorCode: kind === "quota-exhausted" || kind === "reauth-required" || kind === "provider-error"
+      ? errorCode
+      : null
+  };
 }
 
 export function encodeAssignedRootDto(value: AssignedRoot): AssignedRootDto {
