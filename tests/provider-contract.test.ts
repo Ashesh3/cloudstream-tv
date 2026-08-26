@@ -52,6 +52,11 @@ function createHarness(provider: ProviderKind): ContractHarness {
     requests.push(url);
 
     if (provider === "google") {
+      if (url.pathname.endsWith("/files/root")) return jsonResponse({
+        id: "g-root-actual",
+        name: "My Drive",
+        mimeType: "application/vnd.google-apps.folder"
+      });
       if (url.pathname.endsWith("/files")) return jsonResponse(fixture(provider, "folder-page"));
       if (url.pathname.endsWith("/changes")) return jsonResponse(fixture(provider, "changes-page"));
       if (url.pathname.endsWith("/g-image-a")) {
@@ -62,6 +67,11 @@ function createHarness(provider: ProviderKind): ContractHarness {
         });
       }
     } else {
+      if (url.pathname.endsWith("/drive/root")) return jsonResponse({
+        id: "o-root-actual",
+        name: "OneDrive",
+        folder: { childCount: 4 }
+      });
       if (url.pathname.endsWith("/children")) return jsonResponse(fixture(provider, "folder-page"));
       if (url.pathname.endsWith("/delta")) return jsonResponse(fixture(provider, "changes-page"));
       if (url.pathname.endsWith("/thumbnails/0/c720x720")) {
@@ -162,6 +172,23 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     });
     expect(page.nextCursor).toBeTruthy();
     expect(JSON.stringify(page)).not.toContain("synthetic.invalid");
+  });
+
+  it("resolves the provider's actual root folder identity", async () => {
+    const { adapter, requests } = createHarness(provider);
+    const root = await adapter.getRoot(credentials);
+
+    expect(root).toMatchObject({
+      providerNodeId: provider === "google" ? "g-root-actual" : "o-root-actual",
+      parentProviderId: null,
+      kind: "folder",
+      name: provider === "google" ? "My Drive" : "OneDrive"
+    });
+    expect(requests.at(-1)?.pathname).toBe(
+      provider === "google"
+        ? "/drive/v3/files/root"
+        : "/v1.0/me/drive/root"
+    );
   });
 
   it("normalizes deletes and moves from change pages", async () => {

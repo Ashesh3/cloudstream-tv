@@ -87,6 +87,24 @@ export function createGoogleDriveAdapter(
       return tokenCredentials(token, now(), source.credentials.refreshToken);
     },
 
+    async getRoot(credentials) {
+      const file = await googleJson<GoogleFile>(
+        fetch,
+        `${DRIVE_ENDPOINT}/files/root?fields=${encodeURIComponent(GOOGLE_FILE_FIELDS)}`,
+        credentials.accessToken,
+        now
+      );
+      const node = normalizeGoogleFile(file);
+      if (!node || node.kind !== "folder") {
+        throw new ProviderError(
+          "PROVIDER_BAD_RESPONSE",
+          "Provider returned an invalid root folder.",
+          { retryable: false }
+        );
+      }
+      return node;
+    },
+
     async listFolder(input: ListFolderInput) {
       const url = new URL(`${DRIVE_ENDPOINT}/files`);
       url.searchParams.set("q", `'${input.folderId.replaceAll("'", "\\'")}' in parents and trashed = false`);

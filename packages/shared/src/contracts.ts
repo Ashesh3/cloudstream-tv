@@ -193,3 +193,25 @@ export interface RotateAdminPassphraseInput {
   adminPassphraseHash: string;
   revokedAt: Date;
 }
+
+export interface UpdateHouseholdSettingsInput {
+  householdId: EntityId;
+  allowNewDeviceRequests: boolean;
+  defaultMediaOrder: MediaOrder;
+  defaultSlideshowSeconds: number;
+}
+
+export interface ConnectSourceInput {
+  source: Source;
+  root: AssignedRoot;
+}
+
+export interface RemoveSourceInput {
+  householdId: EntityId;
+  sourceId: EntityId;
+}
+
+export interface DisableRootInput {
+  householdId: EntityId;
+  rootId: EntityId;
+}

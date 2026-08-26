@@ -5,6 +5,7 @@ import {
   createFirestoreClient,
   createIndexingService,
   createMediaUrlService,
+  createOAuthService,
   createSourceService,
   IndexingUnavailableError
 } from "@cloudframe/server";
@@ -86,18 +87,31 @@ const indexing = createIndexingService({
   householdId: required("HOUSEHOLD_ID"),
   cronSecret: required("CRON_SECRET")
 });
+const appOrigin = required("APP_ORIGIN").replace(/\/$/, "");
+const oauth = createOAuthService({
+  repository,
+  providers,
+  keyring: { currentVersion: tokenKeyVersion, keys: { [tokenKeyVersion]: tokenKey } },
+  now: () => new Date(),
+  createId: () => crypto.randomUUID(),
+  createRootId: () => crypto.randomUUID(),
+  startInitialSync: async sourceId => {
+    await indexing.startSource(sourceId, "initial");
+  }
+});
 
 const app = createApiApp({
   repository,
   browse,
   mediaUrls,
   indexing,
+  oauth,
   config: {
     householdId: required("HOUSEHOLD_ID"),
     adminInitialPassphrase: process.env.ADMIN_INITIAL_PASSPHRASE,
     passphrasePepper: required("ADMIN_PASSPHRASE_PEPPER"),
     csrfSecret: required("CSRF_SECRET"),
-    allowedOrigin: required("APP_ORIGIN")
+    allowedOrigin: appOrigin
   }
 });
 

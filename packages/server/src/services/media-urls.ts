@@ -34,6 +34,37 @@ export interface MediaUrlServiceDependencies {
 }
 
 export function createMediaUrlService(dependencies: MediaUrlServiceDependencies) {
+  async function adminThumbnails(
+    householdId: string,
+    nodeIds: string[],
+    maxDimension: number
+  ) {
+    validateThumbnailBatch(nodeIds, maxDimension);
+    const items = [];
+    for (const nodeId of nodeIds) {
+      const node = await dependencies.repository.getNode(nodeId);
+      if (!node || !node.available || node.householdId !== householdId || node.kind === "folder" || !node.hasPreview) {
+        items.push({ nodeId, status: "unavailable" as const });
+        continue;
+      }
+      const source = await requireSource(node.sourceId, householdId);
+      const credentials = await dependencies.sourceService.getUsableCredentials(source.id, householdId);
+      const temporary = await dependencies.providers.get(source.provider).getThumbnailUrl({
+        credentials,
+        providerNodeId: node.providerNodeId,
+        maxDimension
+      });
+      items.push(temporary ? {
+        nodeId,
+        status: "ready" as const,
+        url: temporary.url,
+        expiresAt: temporary.expiresAt,
+        revision: node.thumbnailRevision
+      } : { nodeId, status: "unavailable" as const });
+    }
+    return { items, responseHeaders: RESPONSE_HEADERS };
+  }
+
   async function media(device: Device, household: Household, nodeId: string) {
     const node = await dependencies.browse.authorizeNode(device, household, nodeId);
     if (node.kind === "folder") {
@@ -67,18 +98,7 @@ export function createMediaUrlService(dependencies: MediaUrlServiceDependencies)
     nodeIds: string[],
     maxDimension: number
   ) {
-    if (
-      nodeIds.length > MAX_THUMBNAIL_BATCH ||
-      new Set(nodeIds).size !== nodeIds.length ||
-      !Number.isInteger(maxDimension) ||
-      maxDimension < 64 ||
-      maxDimension > 4096
-    ) {
-      throw new MediaUrlServiceError(
-        "THUMBNAIL_BATCH_TOO_LARGE",
-        "Thumbnail request is invalid."
-      );
-    }
+    validateThumbnailBatch(nodeIds, maxDimension);
     const items = [];
     for (const nodeId of nodeIds) {
       try {
@@ -127,7 +147,22 @@ export function createMediaUrlService(dependencies: MediaUrlServiceDependencies)
     return source;
   }
 
-  return { media, thumbnails };
+  return { media, thumbnails, adminThumbnails };
+}
+
+function validateThumbnailBatch(nodeIds: string[], maxDimension: number): void {
+  if (
+    nodeIds.length > MAX_THUMBNAIL_BATCH ||
+    new Set(nodeIds).size !== nodeIds.length ||
+    !Number.isInteger(maxDimension) ||
+    maxDimension < 64 ||
+    maxDimension > 4096
+  ) {
+    throw new MediaUrlServiceError(
+      "THUMBNAIL_BATCH_TOO_LARGE",
+      "Thumbnail request is invalid."
+    );
+  }
 }
 
 function isSafeUnavailable(error: unknown): boolean {

@@ -104,6 +104,7 @@ export interface ProviderAdapter {
   beginAuthorization(input: AuthorizationInput): Promise<AuthorizationStart>;
   completeAuthorization(input: AuthorizationCallback): Promise<ProviderAccount>;
   refreshCredentials(source: Source): Promise<RefreshedCredentials>;
+  getRoot(credentials: ProviderCredentials): Promise<ProviderNode>;
   listFolder(input: ListFolderInput): Promise<Page<ProviderNode>>;
   getChanges(input: ChangesInput): Promise<ChangesPage>;
   getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null>;

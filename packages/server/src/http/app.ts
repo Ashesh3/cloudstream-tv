@@ -1,18 +1,24 @@
 import type {
+  AssignedRoot,
   ApproveDeviceRequestBody,
   Device,
   Household,
+  MediaNode,
+  ProviderKind,
   UpdateDeviceBody
 } from "@cloudframe/shared";
 import {
+  encodeAdminOverviewResponse,
+  encodeAssignedRootDto,
   encodeBootstrapResponse,
   encodeDeviceDto,
   encodeDeviceRequestDto,
   encodeMediaNodeDto,
+  encodeSourceDto,
   encodeWatchHistoryDto
 } from "@cloudframe/shared";
 import { clearSessionCookie, createSessionCookie } from "../auth/cookies";
-import { verifyPassphrase } from "../auth/passphrase";
+import { hashPassphrase, verifyPassphrase } from "../auth/passphrase";
 import { issueOpaqueToken, type OpaqueToken } from "../auth/tokens";
 import {
   RepositoryError,
@@ -28,6 +34,8 @@ import { authenticateDevice } from "../services/device-auth";
 import { BrowseServiceError } from "../services/browse";
 import { IndexingServiceError } from "../services/indexing";
 import { MediaUrlServiceError } from "../services/media-urls";
+import { OAuthServiceError } from "../services/oauth";
+import { ProviderError } from "@cloudframe/providers";
 import {
   approveRequest,
   requestFromToken,
@@ -74,6 +82,11 @@ export interface ApiAppDependencies {
   mediaUrls?: {
     media(device: Device, household: Household, nodeId: string): Promise<{ url: string; expiresAt: Date; revision: string | null; responseHeaders: HeadersInit }>;
     thumbnails(device: Device, household: Household, nodeIds: string[], maxDimension: number): Promise<{ items: unknown[]; responseHeaders: HeadersInit }>;
+    adminThumbnails(householdId: string, nodeIds: string[], maxDimension: number): Promise<{ items: unknown[]; responseHeaders: HeadersInit }>;
+  };
+  oauth?: {
+    beginAuthorization(input: { householdId: string; adminSessionId: string; provider: ProviderKind; redirectUri: string; reconnectSourceId?: string }): Promise<{ authorizationUrl: string }>;
+    completeAuthorization(input: { householdId: string; adminSessionId: string; provider: ProviderKind; redirectUri: string; state: string; code?: string; providerError?: string }): Promise<{ sourceId: string; status: "connected" }>;
   };
   indexing?: {
     startDueSources(authorization: string | null, limit?: number): Promise<unknown>;
@@ -132,6 +145,61 @@ async function routeRequest(
   if (path === "/api/admin/logout") {
     requireMethod(request, "POST");
     return adminLogout(request, dependencies, now);
+  }
+  if (path === "/api/admin/overview") {
+    requireMethod(request, "GET");
+    return adminOverview(request, dependencies, now);
+  }
+  if (path === "/api/admin/settings") {
+    requireOneMethod(request, ["GET", "PATCH"]);
+    return adminSettings(request, dependencies, now);
+  }
+  if (path === "/api/admin/settings/passphrase") {
+    requireMethod(request, "POST");
+    return rotatePassphrase(request, dependencies, now);
+  }
+  if (path === "/api/admin/sources") {
+    requireMethod(request, "GET");
+    return adminSources(request, dependencies, now);
+  }
+  const authorizeMatch = /^\/api\/admin\/sources\/(google|onedrive)\/authorize$/.exec(path);
+  if (authorizeMatch) {
+    requireMethod(request, "POST");
+    return oauthAuthorize(request, dependencies, now, authorizeMatch[1] as ProviderKind);
+  }
+  const callbackMatch = /^\/api\/admin\/oauth\/(google|onedrive)\/callback$/.exec(path);
+  if (callbackMatch) {
+    requireMethod(request, "GET");
+    return oauthCallback(request, dependencies, now, callbackMatch[1] as ProviderKind);
+  }
+  const sourceImpactMatch = /^\/api\/admin\/sources\/([^/]+)\/impact$/.exec(path);
+  if (sourceImpactMatch) {
+    requireMethod(request, "GET");
+    return sourceImpact(request, dependencies, now, decodeURIComponent(sourceImpactMatch[1]!));
+  }
+  const sourceTreeMatch = /^\/api\/admin\/sources\/([^/]+)\/tree$/.exec(path);
+  if (sourceTreeMatch) {
+    requireMethod(request, "GET");
+    return sourceTree(request, dependencies, now, decodeURIComponent(sourceTreeMatch[1]!));
+  }
+  const sourceRootsMatch = /^\/api\/admin\/sources\/([^/]+)\/roots$/.exec(path);
+  if (sourceRootsMatch) {
+    requireMethod(request, "POST");
+    return createRoot(request, dependencies, now, decodeURIComponent(sourceRootsMatch[1]!));
+  }
+  const sourceMatch = /^\/api\/admin\/sources\/([^/]+)$/.exec(path);
+  if (sourceMatch) {
+    requireMethod(request, "DELETE");
+    return removeSource(request, dependencies, now, decodeURIComponent(sourceMatch[1]!));
+  }
+  const rootMatch = /^\/api\/admin\/roots\/([^/]+)$/.exec(path);
+  if (rootMatch) {
+    requireMethod(request, "DELETE");
+    return removeRoot(request, dependencies, now, decodeURIComponent(rootMatch[1]!));
+  }
+  if (path === "/api/admin/thumbnail-urls") {
+    requireMethod(request, "POST");
+    return adminThumbnailUrls(request, dependencies, now);
   }
   if (path === "/api/device-requests") {
     requireMethod(request, "POST");
@@ -218,9 +286,229 @@ async function manualSourceSync(request: Request, dependencies: ApiAppDependenci
   const authenticated = await authenticateAdmin(request, dependencies, now);
   verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
   await enforceRateLimit(dependencies, "manual-sync", authenticated.session.id, now);
+  const source = await dependencies.repository.getSource(sourceId);
+  if (!source || source.householdId !== dependencies.config.householdId) {
+    throw new HttpError(404, "SOURCE_NOT_FOUND", "Source not found.");
+  }
   return ok(await dependencies.indexing.startSource(sourceId, "delta"), {
     headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken)
   });
+}
+
+async function adminOverview(request: Request, dependencies: ApiAppDependencies, now: Date) {
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  const household = await ensureHousehold(dependencies, now);
+  const [requests, devices, sources] = await Promise.all([
+    dependencies.repository.listDeviceRequests(dependencies.config.householdId),
+    dependencies.repository.listDevices(dependencies.config.householdId),
+    dependencies.repository.listSources(dependencies.config.householdId)
+  ]);
+  const roots = (await Promise.all(sources.map(source => dependencies.repository.listRootsForSource(source.id)))).flat()
+    .filter(root => root.householdId === dependencies.config.householdId);
+  return ok(encodeAdminOverviewResponse({
+    household,
+    pendingRequests: requests.filter(value => value.status === "pending").sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()),
+    devices,
+    sources,
+    roots
+  }), { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+}
+
+async function adminSettings(request: Request, dependencies: ApiAppDependencies, now: Date) {
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  const household = await ensureHousehold(dependencies, now);
+  if (request.method === "GET") {
+    return ok(settingsDto(household), { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+  }
+  verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
+  await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
+  const body = await readJsonObject(request);
+  const allowNewDeviceRequests = body.allowNewDeviceRequests ?? household.allowNewDeviceRequests;
+  const defaultMediaOrder = body.defaultMediaOrder ?? household.defaultMediaOrder;
+  const defaultSlideshowSeconds = body.defaultSlideshowSeconds ?? household.defaultSlideshowSeconds;
+  if (
+    typeof allowNewDeviceRequests !== "boolean" ||
+    !["captured-desc", "captured-asc", "name-asc"].includes(String(defaultMediaOrder)) ||
+    typeof defaultSlideshowSeconds !== "number" ||
+    !Number.isInteger(defaultSlideshowSeconds) ||
+    defaultSlideshowSeconds < 1 ||
+    defaultSlideshowSeconds > 3600 ||
+    Object.keys(body).some(key => !["allowNewDeviceRequests", "defaultMediaOrder", "defaultSlideshowSeconds"].includes(key))
+  ) throw new HttpError(400, "INVALID_SETTINGS", "Settings are invalid.");
+  const updated = await dependencies.repository.updateHouseholdSettings({
+    householdId: dependencies.config.householdId,
+    allowNewDeviceRequests,
+    defaultMediaOrder: defaultMediaOrder as Household["defaultMediaOrder"],
+    defaultSlideshowSeconds
+  });
+  return ok(settingsDto(updated), { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+}
+
+async function rotatePassphrase(request: Request, dependencies: ApiAppDependencies, now: Date) {
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  const household = await ensureHousehold(dependencies, now);
+  verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
+  await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
+  const body = await readJsonObject(request);
+  if (typeof body.currentPassphrase !== "string" || typeof body.newPassphrase !== "string" || body.newPassphrase.length < 16 || body.newPassphrase.length > 1024) {
+    throw new HttpError(400, "INVALID_PASSPHRASE", "The passphrase is invalid.");
+  }
+  if (!(await verifyPassphrase(household.adminPassphraseHash, body.currentPassphrase, dependencies.config.passphrasePepper))) {
+    throw new HttpError(401, "INVALID_CREDENTIALS", "The current passphrase is incorrect.");
+  }
+  const adminPassphraseHash = await hashPassphrase(body.newPassphrase, dependencies.config.passphrasePepper);
+  await dependencies.repository.rotateAdminPassphrase({ householdId: dependencies.config.householdId, adminPassphraseHash, revokedAt: now });
+  const headers = withCsrf(authenticated.responseHeaders, authenticated.csrfToken);
+  headers.append("set-cookie", clearSessionCookie("admin"));
+  return ok({ authenticated: false }, { headers });
+}
+
+async function adminSources(request: Request, dependencies: ApiAppDependencies, now: Date) {
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  const sources = await dependencies.repository.listSources(dependencies.config.householdId);
+  const values = await Promise.all(sources.map(async source => ({
+    ...encodeSourceDto(source),
+    roots: (await dependencies.repository.listRootsForSource(source.id))
+      .filter(root => root.householdId === dependencies.config.householdId)
+      .map(encodeAssignedRootDto)
+  })));
+  return ok({ sources: values }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+}
+
+async function oauthAuthorize(request: Request, dependencies: ApiAppDependencies, now: Date, provider: ProviderKind) {
+  if (!dependencies.oauth) throw unavailableService();
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
+  await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
+  const body = await readJsonObject(request);
+  if (body.reconnectSourceId !== undefined && typeof body.reconnectSourceId !== "string") {
+    throw new HttpError(400, "INVALID_SOURCE", "Source request is invalid.");
+  }
+  const result = await dependencies.oauth.beginAuthorization({
+    householdId: dependencies.config.householdId,
+    adminSessionId: authenticated.session.id,
+    provider,
+    redirectUri: `${dependencies.config.allowedOrigin}/api/admin/oauth/${provider}/callback`,
+    ...(body.reconnectSourceId ? { reconnectSourceId: body.reconnectSourceId } : {})
+  });
+  return ok(result, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+}
+
+async function oauthCallback(request: Request, dependencies: ApiAppDependencies, now: Date, provider: ProviderKind) {
+  if (!dependencies.oauth) throw unavailableService();
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  const url = new URL(request.url);
+  const state = url.searchParams.get("state");
+  if (!state || state.length > 1024) return oauthRedirect("invalid");
+  try {
+    await dependencies.oauth.completeAuthorization({
+      householdId: dependencies.config.householdId,
+      adminSessionId: authenticated.session.id,
+      provider,
+      redirectUri: `${dependencies.config.allowedOrigin}/api/admin/oauth/${provider}/callback`,
+      state,
+      ...(url.searchParams.get("code") ? { code: url.searchParams.get("code")! } : {}),
+      ...(url.searchParams.get("error") ? { providerError: url.searchParams.get("error")! } : {})
+    });
+    return oauthRedirect("connected");
+  } catch (error) {
+    if (error instanceof OAuthServiceError || error instanceof ProviderError) {
+      return oauthRedirect(error instanceof OAuthServiceError && error.code === "OAUTH_CANCELLED" ? "cancelled" : "failed");
+    }
+    throw error;
+  }
+}
+
+function oauthRedirect(status: "connected" | "failed" | "invalid" | "cancelled") {
+  return new Response(null, { status: 303, headers: { location: `/admin?section=sources&oauth=${status}`, "cache-control": "no-store" } });
+}
+
+async function sourceImpact(request: Request, dependencies: ApiAppDependencies, now: Date, sourceId: string) {
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  const impact = await dependencies.repository.getSourceImpact(dependencies.config.householdId, sourceId);
+  return ok({ roots: impact.roots.map(encodeAssignedRootDto), devices: impact.devices.map(encodeDeviceDto) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+}
+
+async function removeSource(request: Request, dependencies: ApiAppDependencies, now: Date, sourceId: string) {
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
+  await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
+  const body = await readJsonObject(request);
+  if (body.confirm !== true) throw new HttpError(400, "CONFIRMATION_REQUIRED", "Confirmation is required.");
+  const impact = await dependencies.repository.removeSource({ householdId: dependencies.config.householdId, sourceId });
+  return ok({ removed: true, roots: impact.roots.map(encodeAssignedRootDto), devices: impact.devices.map(encodeDeviceDto) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+}
+
+async function sourceTree(request: Request, dependencies: ApiAppDependencies, now: Date, sourceId: string) {
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  const source = await dependencies.repository.getSource(sourceId);
+  if (!source || source.householdId !== dependencies.config.householdId || source.status === "disabled") throw new HttpError(404, "SOURCE_NOT_FOUND", "Source not found.");
+  const parentNodeId = new URL(request.url).searchParams.get("parentNodeId");
+  let parent: MediaNode | null = null;
+  let children: MediaNode[];
+  if (parentNodeId) {
+    parent = await dependencies.repository.getNode(parentNodeId);
+    if (!parent || !parent.available || parent.householdId !== dependencies.config.householdId || parent.sourceId !== sourceId || parent.kind !== "folder") throw new HttpError(404, "FOLDER_NOT_FOUND", "Folder not found.");
+    children = await dependencies.repository.listChildNodes(parent.id, [sourceId]);
+  } else {
+    children = (await dependencies.repository.listNodesForSource(sourceId)).filter(node => node.parentNodeId === null);
+  }
+  return ok({ source: encodeSourceDto(source), parent: parent ? encodeMediaNodeDto(parent) : null, folders: children.filter(node => node.available && node.kind === "folder" && node.householdId === dependencies.config.householdId).map(encodeMediaNodeDto) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+}
+
+async function createRoot(request: Request, dependencies: ApiAppDependencies, now: Date, sourceId: string) {
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
+  await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
+  const body = await readJsonObject(request);
+  if (typeof body.nodeId !== "string" || (body.displayName !== undefined && typeof body.displayName !== "string")) throw new HttpError(400, "INVALID_ROOT", "Root request is invalid.");
+  const [source, node] = await Promise.all([dependencies.repository.getSource(sourceId), dependencies.repository.getNode(body.nodeId)]);
+  if (!source || source.householdId !== dependencies.config.householdId || !node || !node.available || node.kind !== "folder" || node.householdId !== dependencies.config.householdId || node.sourceId !== sourceId) throw new HttpError(404, "FOLDER_NOT_FOUND", "Folder not found.");
+  const ancestryProviderIds = await providerAncestry(dependencies.repository, node);
+  const displayName = typeof body.displayName === "string" && body.displayName.trim() ? body.displayName.trim().slice(0, 120) : node.name;
+  const root: AssignedRoot = { id: dependencies.createId!("root"), householdId: dependencies.config.householdId, sourceId, providerNodeId: node.providerNodeId, displayName, ancestryProviderIds, enabled: true, createdAt: now };
+  const saved = await dependencies.repository.createOrEnableRoot(root);
+  return ok({ root: encodeAssignedRootDto(saved) }, { status: 201, headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+}
+
+async function removeRoot(request: Request, dependencies: ApiAppDependencies, now: Date, rootId: string) {
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
+  await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
+  const body = await readJsonObject(request);
+  if (body.confirm !== true) throw new HttpError(400, "CONFIRMATION_REQUIRED", "Confirmation is required.");
+  const impact = await dependencies.repository.disableRoot({ householdId: dependencies.config.householdId, rootId });
+  return ok({ removed: true, roots: impact.roots.map(encodeAssignedRootDto), devices: impact.devices.map(encodeDeviceDto) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+}
+
+async function adminThumbnailUrls(request: Request, dependencies: ApiAppDependencies, now: Date) {
+  if (!dependencies.mediaUrls) throw unavailableService();
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
+  await enforceRateLimit(dependencies, "url-vending", authenticated.session.id, now);
+  const body = await readJsonObject(request);
+  if (!Array.isArray(body.nodeIds) || !body.nodeIds.every(value => typeof value === "string") || typeof (body.maxDimension ?? 720) !== "number") throw new HttpError(400, "INVALID_THUMBNAIL_REQUEST", "Thumbnail request is invalid.");
+  const maxDimension = typeof body.maxDimension === "number" ? body.maxDimension : 720;
+  const result = await dependencies.mediaUrls.adminThumbnails(dependencies.config.householdId, body.nodeIds as string[], maxDimension);
+  return ok({ items: serializeTemporaryItems(result.items) }, { headers: mergeHeaders(withCsrf(authenticated.responseHeaders, authenticated.csrfToken), result.responseHeaders) });
+}
+
+function settingsDto(household: Household) {
+  return { allowNewDeviceRequests: household.allowNewDeviceRequests, defaultMediaOrder: household.defaultMediaOrder, defaultSlideshowSeconds: household.defaultSlideshowSeconds };
+}
+
+async function providerAncestry(repository: AppRepository, node: MediaNode): Promise<string[]> {
+  const reversed: string[] = [];
+  let parentId = node.parentNodeId;
+  const seen = new Set<string>();
+  while (parentId && !seen.has(parentId) && seen.size < 256) {
+    seen.add(parentId);
+    const parent = await repository.getNode(parentId);
+    if (!parent || !parent.available || parent.sourceId !== node.sourceId || parent.householdId !== node.householdId) throw new HttpError(409, "ROOT_ANCESTRY_INVALID", "Folder ancestry is invalid.");
+    reversed.push(parent.providerNodeId);
+    parentId = parent.parentNodeId;
+  }
+  return reversed.reverse();
 }
 
 async function tvHome(request: Request, dependencies: ApiAppDependencies, now: Date) {
@@ -768,6 +1056,29 @@ function normalizeHttpError(error: unknown): HttpError {
       error.code,
       error.message
     );
+  }
+  if (error instanceof OAuthServiceError) {
+    const status = error.code === "SOURCE_NOT_FOUND"
+      ? 404
+      : error.code === "OAUTH_ACCOUNT_MISMATCH"
+        ? 409
+        : error.code === "OAUTH_STATE_INVALID"
+          ? 400
+          : 502;
+    return new HttpError(status, error.code, error.message);
+  }
+  if (error instanceof ProviderError) {
+    return new HttpError(
+      error.code === "PROVIDER_REAUTH_REQUIRED" ? 409 : 502,
+      error.code,
+      "The cloud provider request failed.",
+      error.retryAfterSeconds ?? undefined
+    );
+  }
+  if (error instanceof RepositoryError) {
+    if (error.code === "SOURCE_NOT_FOUND") return new HttpError(404, error.code, "Source not found.");
+    if (error.code === "ROOT_NOT_FOUND") return new HttpError(404, error.code, "Root not found.");
+    if (error.code === "ROOT_CONFLICT") return new HttpError(409, error.code, "Root already exists.");
   }
   return new HttpError(500, "INTERNAL_ERROR", "An unexpected error occurred.");
 }

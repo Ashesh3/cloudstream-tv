@@ -182,6 +182,39 @@ export interface AdminOverviewResponse {
   roots: AssignedRootDto[];
 }
 
+export interface AdminSettingsResponse {
+  allowNewDeviceRequests: boolean;
+  defaultMediaOrder: Household["defaultMediaOrder"];
+  defaultSlideshowSeconds: number;
+}
+
+export interface UpdateAdminSettingsBody {
+  allowNewDeviceRequests?: boolean;
+  defaultMediaOrder?: Household["defaultMediaOrder"];
+  defaultSlideshowSeconds?: number;
+}
+
+export interface RotateAdminPassphraseBody {
+  currentPassphrase: string;
+  newPassphrase: string;
+}
+
+export interface SourceImpactResponse {
+  roots: AssignedRootDto[];
+  devices: DeviceDto[];
+}
+
+export interface AdminFolderTreeResponse {
+  source: SourceDto;
+  parent: MediaNodeDto | null;
+  folders: MediaNodeDto[];
+}
+
+export interface CreateAssignedRootBody {
+  nodeId: string;
+  displayName?: string;
+}
+
 export interface AdminOverviewDomainResponse {
   household: Household;
   pendingRequests: DeviceRequest[];

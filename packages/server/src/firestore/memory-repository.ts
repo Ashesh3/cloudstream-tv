@@ -2,15 +2,19 @@ import type {
   AdminSession,
   ApproveDeviceRequestInput,
   AssignedRoot,
+  ConnectSourceInput,
   Device,
   DeviceRequest,
   DeviceSession,
   Household,
   MediaNode,
   OAuthState,
+  DisableRootInput,
+  RemoveSourceInput,
   RotateAdminPassphraseInput,
   Source,
   SyncLeaseInput,
+  UpdateHouseholdSettingsInput,
   WatchHistory
 } from "@cloudframe/shared";
 import { recomputeFolderMetadata, type IndexBatchCommitInput } from "@cloudframe/indexer";
@@ -95,8 +99,38 @@ export class MemoryRepository implements AppRepository {
     return { session: copy(updatedSession), device: copy(updatedDevice), household: copy(household), renewed };
   }
   async putSource(value: Source) { this.set(this.sources, value); }
+  async connectSourceWithRoot(input: ConnectSourceInput) {
+    if (this.sources.has(input.source.id) || this.roots.has(input.root.id)) {
+      throw new RepositoryError("ROOT_CONFLICT", "Source connection conflicts with existing data");
+    }
+    this.sources.set(input.source.id, copy(input.source));
+    this.roots.set(input.root.id, copy(input.root));
+  }
   async getSource(id: string) { return this.get(this.sources, id); }
   async listSources(householdId: string) { return this.filter(this.sources, value => value.householdId === householdId); }
+  async getSourceImpact(householdId: string, sourceId: string) {
+    const source = this.sources.get(sourceId);
+    if (!source || source.householdId !== householdId) {
+      throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
+    }
+    const roots = [...this.roots.values()].filter(root => root.householdId === householdId && root.sourceId === sourceId);
+    const ids = new Set(roots.map(root => root.id));
+    const devices = [...this.devices.values()].filter(device => device.householdId === householdId && device.assignedRootIds.some(id => ids.has(id)));
+    return { roots: roots.map(copy), devices: devices.map(copy) };
+  }
+  async removeSource(input: RemoveSourceInput) {
+    const impact = await this.getSourceImpact(input.householdId, input.sourceId);
+    this.sources.delete(input.sourceId);
+    const rootIds = new Set(impact.roots.map(root => root.id));
+    for (const root of impact.roots) this.roots.set(root.id, copy({ ...root, enabled: false }));
+    for (const device of impact.devices) {
+      this.devices.set(device.id, copy({
+        ...device,
+        assignedRootIds: device.assignedRootIds.filter(id => !rootIds.has(id))
+      }));
+    }
+    return impact;
+  }
   async createOAuthState(value: OAuthState) { this.create(this.oauthStates, value, "OAuth state"); }
   async listOAuthStates(householdId: string) { return this.filter(this.oauthStates, value => value.householdId === householdId); }
   async consumeOAuthState(input: ConsumeOAuthStateInput): Promise<OAuthState | null> {
@@ -117,6 +151,30 @@ export class MemoryRepository implements AppRepository {
     return copy(consumed);
   }
   async putRoot(value: AssignedRoot) { this.set(this.roots, value); }
+  async createOrEnableRoot(value: AssignedRoot) {
+    const duplicate = [...this.roots.values()].find(root =>
+      root.householdId === value.householdId &&
+      root.sourceId === value.sourceId &&
+      root.providerNodeId === value.providerNodeId
+    );
+    if (duplicate) {
+      const enabled = copy({ ...duplicate, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true });
+      this.roots.set(enabled.id, enabled);
+      return copy(enabled);
+    }
+    this.roots.set(value.id, copy(value));
+    return copy(value);
+  }
+  async disableRoot(input: DisableRootInput) {
+    const root = this.roots.get(input.rootId);
+    if (!root || root.householdId !== input.householdId) {
+      throw new RepositoryError("ROOT_NOT_FOUND", "Root not found");
+    }
+    const devices = [...this.devices.values()].filter(device => device.householdId === input.householdId && device.assignedRootIds.includes(root.id));
+    this.roots.set(root.id, copy({ ...root, enabled: false }));
+    for (const device of devices) this.devices.set(device.id, copy({ ...device, assignedRootIds: device.assignedRootIds.filter(id => id !== root.id) }));
+    return { roots: [copy(root)], devices: devices.map(copy) };
+  }
   async getRoot(id: string) { return this.get(this.roots, id); }
   async listRootsForSource(sourceId: string) { return this.filter(this.roots, value => value.sourceId === sourceId); }
   async listRootsByIds(rootIds: string[]) { return rootIds.map(id => this.roots.get(id)).filter((value): value is AssignedRoot => Boolean(value)).map(copy); }
@@ -382,6 +440,14 @@ export class MemoryRepository implements AppRepository {
     for (const [id, session] of this.adminSessions) {
       if (session.householdId === input.householdId) this.adminSessions.set(id, copy({ ...session, revokedAt: input.revokedAt }));
     }
+    return copy(updated);
+  }
+
+  async updateHouseholdSettings(input: UpdateHouseholdSettingsInput): Promise<Household> {
+    const household = this.households.get(input.householdId);
+    if (!household) throw new Error("Household not found");
+    const updated = copy({ ...household, ...input });
+    this.households.set(household.id, updated);
     return copy(updated);
   }
 

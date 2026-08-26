@@ -93,6 +93,24 @@ export function createOneDriveAdapter(
       );
     },
 
+    async getRoot(credentials) {
+      const item = await graphJson<OneDriveItem>(
+        fetch,
+        `${GRAPH_ENDPOINT}/me/drive/root?$select=${encodeURIComponent(ONEDRIVE_SELECT)}`,
+        credentials.accessToken,
+        now
+      );
+      const node = normalizeOneDriveItem(item);
+      if (!node || node.kind !== "folder") {
+        throw new ProviderError(
+          "PROVIDER_BAD_RESPONSE",
+          "Provider returned an invalid root folder.",
+          { retryable: false }
+        );
+      }
+      return node;
+    },
+
     async listFolder(input: ListFolderInput) {
       const url = input.cursor
         ? requireGraphCursor(input.cursor)

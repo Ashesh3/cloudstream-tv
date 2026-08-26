@@ -46,6 +46,21 @@ function adapter(provider: "google" | "onedrive" = "google"): ProviderAdapter {
       accessToken: "synthetic-refreshed-access",
       accessTokenExpiresAt: new Date(now.getTime() + 2 * 60 * 60 * 1000)
     })),
+    getRoot: vi.fn(async () => ({
+      providerNodeId: "provider-root",
+      parentProviderId: null,
+      name: "Family cloud",
+      kind: "folder" as const,
+      mimeType: null,
+      size: null,
+      width: null,
+      height: null,
+      capturedAt: null,
+      createdAt: null,
+      modifiedAt: null,
+      thumbnailRevision: null,
+      hasPreview: false
+    })),
     listFolder: vi.fn(),
     getChanges: vi.fn(),
     getThumbnailUrl: vi.fn(),
@@ -77,6 +92,7 @@ async function setup() {
     keyring,
     now: () => currentNow,
     createId: () => `source-${++id}`,
+    createRootId: () => `root-${id}`,
     randomBytes: size => new Uint8Array(size).fill(++random),
     startInitialSync
   });
@@ -201,6 +217,15 @@ describe("OAuth state and encrypted source lifecycle", () => {
     });
     expect(JSON.stringify(source)).not.toContain("synthetic-access-token");
     expect(JSON.stringify(source)).not.toContain("synthetic-refresh-token");
+    expect(await repository.listRootsForSource("source-1")).toEqual([
+      expect.objectContaining({
+        id: "root-1",
+        providerNodeId: "provider-root",
+        displayName: "Family cloud",
+        ancestryProviderIds: [],
+        enabled: true
+      })
+    ]);
     expect(startInitialSync).toHaveBeenCalledWith("source-1");
   });
 
@@ -407,6 +432,84 @@ describe("OAuth state and encrypted source lifecycle", () => {
     ).rejects.toMatchObject({ code: "OAUTH_ACCOUNT_MISMATCH" });
 
     expect(await repository.getSource("source-existing")).toEqual(original);
+    expect(startInitialSync).not.toHaveBeenCalled();
+  });
+
+  it("preserves every existing root while reconnecting the same account", async () => {
+    const { repository, service } = await setup();
+    const sourceService = createSourceService({
+      repository,
+      providers: registry(),
+      keyring,
+      now: () => now
+    });
+    await repository.putSource(sourceService.encryptSource({
+      id: "source-existing",
+      householdId: household.id,
+      provider: "google",
+      providerAccountId: "synthetic-account-a",
+      accountLabel: "Old label",
+      credentials: {
+        accessToken: "synthetic-old-access",
+        refreshToken: "synthetic-old-refresh",
+        accessTokenExpiresAt: now
+      },
+      createdAt: now
+    }));
+    await repository.putRoot({
+      id: "root-existing",
+      householdId: household.id,
+      sourceId: "source-existing",
+      providerNodeId: "folder-existing",
+      displayName: "Existing folder",
+      ancestryProviderIds: ["provider-root"],
+      enabled: true,
+      createdAt: now
+    });
+    const before = await repository.listRootsForSource("source-existing");
+    const start = await service.beginAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      reconnectSourceId: "source-existing"
+    });
+
+    await service.completeAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      state: new URL(start.authorizationUrl).searchParams.get("state")!,
+      code: "synthetic-code"
+    });
+
+    expect(await repository.listRootsForSource("source-existing")).toEqual(before);
+  });
+
+  it("does not persist either source or root when the atomic connection write fails", async () => {
+    const { repository, service, startInitialSync } = await setup();
+    repository.connectSourceWithRoot = async () => {
+      throw new Error("simulated transaction failure");
+    };
+    const start = await service.beginAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri
+    });
+
+    await expect(service.completeAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      state: new URL(start.authorizationUrl).searchParams.get("state")!,
+      code: "synthetic-code"
+    })).rejects.toThrow(/transaction failure/);
+
+    expect(await repository.listSources(household.id)).toEqual([]);
+    expect(await repository.listRootsForSource("source-1")).toEqual([]);
     expect(startInitialSync).not.toHaveBeenCalled();
   });
 

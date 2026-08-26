@@ -1,6 +1,6 @@
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
 
-import type { OAuthState, ProviderKind, Source } from "@cloudframe/shared";
+import type { AssignedRoot, OAuthState, ProviderKind, Source } from "@cloudframe/shared";
 import type { ProviderRegistry } from "@cloudframe/providers";
 import {
   decryptProviderToken,
@@ -39,6 +39,7 @@ export interface OAuthServiceDependencies {
   keyring: ProviderTokenKeyring;
   now: () => Date;
   createId: () => string;
+  createRootId?: () => string;
   randomBytes?: (size: number) => Uint8Array;
   startInitialSync: (sourceId: string) => Promise<void>;
   logger?: (event: { code: string; provider: ProviderKind }) => void;
@@ -147,6 +148,7 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
     });
 
     let source: Source;
+    let initialRoot: AssignedRoot | null = null;
     if (consumed.reconnectSourceId) {
       const existing = await repository.getSource(consumed.reconnectSourceId);
       if (
@@ -195,9 +197,29 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
         credentials: account.credentials,
         createdAt: now()
       });
+      const providerRoot = await providers
+        .get(consumed.provider)
+        .getRoot(account.credentials);
+      if (providerRoot.kind !== "folder" || providerRoot.parentProviderId !== null) {
+        throw new OAuthServiceError("OAUTH_PROVIDER_ERROR", "Cloud authorization failed.");
+      }
+      initialRoot = {
+        id: dependencies.createRootId?.() ?? createId(),
+        householdId: consumed.householdId,
+        sourceId: source.id,
+        providerNodeId: providerRoot.providerNodeId,
+        displayName: providerRoot.name || account.accountLabel,
+        ancestryProviderIds: [],
+        enabled: true,
+        createdAt: now()
+      };
     }
 
-    await repository.putSource(source);
+    if (initialRoot) {
+      await repository.connectSourceWithRoot({ source, root: initialRoot });
+    } else {
+      await repository.putSource(source);
+    }
     await startInitialSync(source.id);
     return { sourceId: source.id, status: "connected" as const };
   }

@@ -598,6 +598,83 @@ describe("FirestoreRepository device approval", () => {
   });
 });
 
+describe("FirestoreRepository admin management transactions", () => {
+  it("creates source and initial root in one transaction", async () => {
+    const writes: string[] = [];
+    const firestore = createManagementFirestore({ writes });
+    const repo = new FirestoreRepository(firestore);
+    const source = makeSource();
+    const root = makeRoot();
+
+    await repo.connectSourceWithRoot({ source, root });
+
+    expect(writes).toEqual(["create:sources/s1", "create:roots/root-1"]);
+  });
+
+  it("removes source, disables roots, and detaches devices in one transaction", async () => {
+    const writes: string[] = [];
+    const firestore = createManagementFirestore({
+      writes,
+      source: makeSource(),
+      roots: [makeRoot()],
+      devices: [{ ...device, assignedRootIds: ["root-1", "root-other"] }]
+    });
+    const repo = new FirestoreRepository(firestore);
+
+    const impact = await repo.removeSource({ householdId: "h1", sourceId: "s1" });
+
+    expect(impact).toMatchObject({ roots: [{ id: "root-1" }], devices: [{ id: "d1" }] });
+    expect(writes).toContain("delete:sources/s1");
+    expect(writes).toContain("update:roots/root-1:{\"enabled\":false}");
+    expect(writes).toContain("update:devices/d1:{\"assignedRootIds\":[\"root-other\"]}");
+  });
+
+  it("detaches devices from roots that were already disabled before source removal", async () => {
+    const writes: string[] = [];
+    const firestore = createManagementFirestore({
+      writes,
+      source: makeSource(),
+      roots: [{ ...makeRoot(), enabled: false }],
+      devices: [{ ...device, assignedRootIds: ["root-1"] }]
+    });
+    const repo = new FirestoreRepository(firestore);
+
+    const impact = await repo.removeSource({ householdId: "h1", sourceId: "s1" });
+
+    expect(impact.roots).toMatchObject([{ id: "root-1", enabled: false }]);
+    expect(writes).toContain("update:devices/d1:{\"assignedRootIds\":[]}");
+  });
+
+  it("disables a root and permits a device to have no roots", async () => {
+    const writes: string[] = [];
+    const firestore = createManagementFirestore({
+      writes,
+      roots: [makeRoot()],
+      devices: [{ ...device, assignedRootIds: ["root-1"] }]
+    });
+    const repo = new FirestoreRepository(firestore);
+
+    await repo.disableRoot({ householdId: "h1", rootId: "root-1" });
+
+    expect(writes).toContain("update:roots/root-1:{\"enabled\":false}");
+    expect(writes).toContain("update:devices/d1:{\"assignedRootIds\":[]}");
+  });
+
+  it("re-enables a unique source/provider root instead of creating a duplicate", async () => {
+    const writes: string[] = [];
+    const firestore = createManagementFirestore({
+      writes,
+      roots: [{ ...makeRoot(), enabled: false, displayName: "Old" }]
+    });
+    const repo = new FirestoreRepository(firestore);
+
+    const root = await repo.createOrEnableRoot({ ...makeRoot(), id: "root-new", displayName: "New" });
+
+    expect(root).toMatchObject({ id: "root-1", displayName: "New", enabled: true });
+    expect(writes).toEqual([expect.stringMatching(/^set:roots\/root-1:/)]);
+  });
+});
+
 function createApprovalFirestore(
   request: DeviceRequest,
   duplicateTokenHash: boolean
@@ -659,6 +736,100 @@ function createApprovalFirestore(
   } as unknown as Firestore;
 
   return { firestore, writes, readTokenClaimIds };
+}
+
+function makeRoot(): AssignedRoot {
+  return {
+    id: "root-1",
+    householdId: "h1",
+    sourceId: "s1",
+    providerNodeId: "provider-root",
+    displayName: "Family",
+    ancestryProviderIds: [],
+    enabled: true,
+    createdAt: now
+  };
+}
+
+function createManagementFirestore(options: {
+  writes: string[];
+  source?: Source;
+  roots?: AssignedRoot[];
+  devices?: Device[];
+}): Firestore {
+  type Ref = { key: string; id: string };
+  type QueryLike = { collection: string; filters: Array<[string, unknown]>; limit?: number };
+  const refs = new Map<string, Ref>();
+  const ref = (collection: string, id: string): Ref => {
+    const key = `${collection}/${id}`;
+    const current = refs.get(key);
+    if (current) return current;
+    const value = { key, id };
+    refs.set(key, value);
+    return value;
+  };
+  const documents = new Map<string, unknown>();
+  if (options.source) documents.set(`sources/${options.source.id}`, options.source);
+  for (const root of options.roots ?? []) documents.set(`roots/${root.id}`, root);
+  for (const value of options.devices ?? []) documents.set(`devices/${value.id}`, value);
+  const snapshot = (reference: Ref) => ({
+    id: reference.id,
+    ref: reference,
+    exists: documents.has(reference.key),
+    data: () => documents.get(reference.key) as Record<string, unknown> | undefined
+  });
+  const querySnapshots = (query: QueryLike) => {
+    const docs = [...documents.entries()]
+      .filter(([key]) => key.startsWith(`${query.collection}/`))
+      .map(([key, value]) => ({ reference: ref(query.collection, key.split("/")[1]!), value }))
+      .filter(({ value }) => query.filters.every(([field, expected]) => (value as Record<string, unknown>)[field] === expected))
+      .slice(0, query.limit ?? Number.POSITIVE_INFINITY)
+      .map(({ reference }) => snapshot(reference));
+    return { docs };
+  };
+  return {
+    collection(collection: string) {
+      const query: QueryLike = { collection, filters: [] };
+      const builder = {
+        doc(id: string) { return ref(collection, id); },
+        where(field: string, _operator: string, value: unknown) {
+          const next: QueryLike = { ...query, filters: [...query.filters, [field, value]] };
+          return queryBuilder(next);
+        }
+      };
+      const queryBuilder = (current: QueryLike): unknown => ({
+        where(field: string, _operator: string, value: unknown) { return queryBuilder({ ...current, filters: [...current.filters, [field, value]] }); },
+        limit(value: number) { return queryBuilder({ ...current, limit: value }); },
+        __query: current
+      });
+      return builder;
+    },
+    async runTransaction(operation: (transaction: unknown) => Promise<unknown>) {
+      return operation({
+        async get(target: Ref | { __query?: QueryLike }) {
+          if ("key" in target) return snapshot(target);
+          const query = target.__query;
+          if (!query) throw new Error("Unexpected management query");
+          return querySnapshots(query);
+        },
+        create(reference: Ref, value: unknown) {
+          options.writes.push(`create:${reference.key}`);
+          documents.set(reference.key, value);
+        },
+        set(reference: Ref, value: unknown) {
+          options.writes.push(`set:${reference.key}:${JSON.stringify(value)}`);
+          documents.set(reference.key, value);
+        },
+        update(reference: Ref, patch: unknown) {
+          options.writes.push(`update:${reference.key}:${JSON.stringify(patch)}`);
+        },
+        delete(reference: Ref) {
+          options.writes.push(`delete:${reference.key}`);
+          documents.delete(reference.key);
+        }
+      });
+    }
+  } as unknown as Firestore;
 }
 
 function createConcurrentApprovalFirestore(): {
