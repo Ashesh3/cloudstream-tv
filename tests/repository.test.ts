@@ -333,6 +333,15 @@ describe("MemoryRepository domain storage", () => {
 });
 
 describe("Firestore client authentication boundary", () => {
+  it("supplies the Vercel OIDC token from the active Web API request", async () => {
+    const { requestOidcTokenSupplier } = await import("@cloudframe/server");
+    const supplier = requestOidcTokenSupplier(new Request("https://app.test/api/bootstrap", {
+      headers: { "x-vercel-oidc-token": "synthetic-request-oidc" }
+    }));
+    await expect(supplier()).resolves.toBe("synthetic-request-oidc");
+    await expect(requestOidcTokenSupplier(new Request("https://app.test"))()).rejects.toThrow(/unavailable/i);
+  });
+
   it("uses Vercel OIDC workload identity federation in production", async () => {
     let captured: FirestoreClientSettings | undefined;
     const client = createFirestoreClient(

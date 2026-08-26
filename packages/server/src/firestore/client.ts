@@ -1,5 +1,5 @@
 import { Firestore } from "@google-cloud/firestore";
-import { getVercelOidcToken } from "@vercel/oidc";
+import { getVercelOidcTokenSync } from "@vercel/oidc";
 
 export type FirestoreEnvironment = "local" | "staging" | "production";
 
@@ -16,6 +16,7 @@ export interface FirestoreClientConfig {
   explicitCredentials?: ExplicitFirestoreCredentials;
   workloadIdentityProvider?: string;
   serviceAccountEmail?: string;
+  oidcTokenSupplier?: () => Promise<string>;
 }
 
 export interface WorkloadIdentityCredentials {
@@ -45,11 +46,19 @@ export interface FirestoreClientDependencies<TClient = Firestore> {
   getVercelOidcToken(): Promise<string>;
 }
 
+export function requestOidcTokenSupplier(request: Request): () => Promise<string> {
+  return async () => {
+    const token = request.headers.get("x-vercel-oidc-token");
+    if (!token) throw new Error("Vercel OIDC token is unavailable");
+    return token;
+  };
+}
+
 const defaultDependencies: FirestoreClientDependencies = {
   createClient(settings) {
     return new Firestore(settings as ConstructorParameters<typeof Firestore>[0]);
   },
-  getVercelOidcToken
+  getVercelOidcToken: async () => getVercelOidcTokenSync()
 };
 
 export function createFirestoreClient<TClient = Firestore>(
@@ -78,7 +87,7 @@ export function createFirestoreClient<TClient = Firestore>(
       credentials: buildWorkloadIdentityCredentials(
         config.workloadIdentityProvider,
         config.serviceAccountEmail,
-        dependencies.getVercelOidcToken
+        config.oidcTokenSupplier ?? dependencies.getVercelOidcToken
       )
     });
   }
@@ -101,7 +110,7 @@ export function createFirestoreClient<TClient = Firestore>(
       credentials: buildWorkloadIdentityCredentials(
         config.workloadIdentityProvider,
         config.serviceAccountEmail,
-        dependencies.getVercelOidcToken
+        config.oidcTokenSupplier ?? dependencies.getVercelOidcToken
       )
     });
   }

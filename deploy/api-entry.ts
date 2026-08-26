@@ -3,6 +3,7 @@ import {
   createApiApp,
   createBrowseService,
   createFirestoreClient,
+  requestOidcTokenSupplier,
   createIndexingService,
   createMediaUrlService,
   createOAuthService,
@@ -26,16 +27,14 @@ function required(name: string): string {
   return value;
 }
 
-const firestore = createFirestoreClient({
+const firestoreConfig = {
   environment: process.env.VERCEL_ENV === "production" ? "production" : "staging",
   projectId: required("FIRESTORE_PROJECT_ID"),
   databaseId: process.env.FIRESTORE_DATABASE_ID,
   emulatorHost: process.env.FIRESTORE_EMULATOR_HOST,
   workloadIdentityProvider: process.env.GCP_WORKLOAD_IDENTITY_PROVIDER,
   serviceAccountEmail: process.env.GCP_SERVICE_ACCOUNT_EMAIL
-});
-
-const repository = new FirestoreRepository(firestore);
+} as const;
 const providers = createProviderRegistry({
   google: createGoogleDriveAdapter({
     clientId: required("GOOGLE_CLIENT_ID"),
@@ -55,60 +54,24 @@ const tokenKey = Buffer.from(
   required(`PROVIDER_TOKEN_KEY_${tokenKeyVersion.toUpperCase()}`),
   "base64url"
 );
-const sourceService = createSourceService({
-  repository,
-  providers,
-  keyring: { currentVersion: tokenKeyVersion, keys: { [tokenKeyVersion]: tokenKey } },
-  now: () => new Date()
-});
-const browse = createBrowseService({
-  repository,
-  cursorSecret: required("BROWSE_CURSOR_SECRET")
-});
-const mediaUrls = createMediaUrlService({
-  repository,
-  browse,
-  providers,
-  sourceService
-});
 const workflowLauncher = createWorkflowApiLauncher(__SYNC_SOURCE_WORKFLOW_ID__, (workflow, args) =>
   startWorkflow(workflow, args)
 );
-const indexing = createIndexingService({
-  repository,
-  workflowLauncher,
-  householdId: required("HOUSEHOLD_ID"),
-  cronSecret: required("CRON_SECRET")
-});
 const appOrigin = required("APP_ORIGIN").replace(/\/$/, "");
-const oauth = createOAuthService({
-  repository,
-  providers,
-  keyring: { currentVersion: tokenKeyVersion, keys: { [tokenKeyVersion]: tokenKey } },
-  now: () => new Date(),
-  createId: () => crypto.randomUUID(),
-  startInitialSync: async sourceId => {
-    await indexing.startSource(sourceId, "initial");
-  }
-});
-
-const app = createApiApp({
-  repository,
-  browse,
-  mediaUrls,
-  indexing,
-  oauth,
-  config: {
-    householdId: required("HOUSEHOLD_ID"),
-    adminInitialPassphrase: process.env.ADMIN_INITIAL_PASSPHRASE,
-    passphrasePepper: required("ADMIN_PASSPHRASE_PEPPER"),
-    csrfSecret: required("CSRF_SECRET"),
-    allowedOrigin: appOrigin
-  }
-});
 
 export default {
   fetch(request: Request): Promise<Response> {
-    return app(request);
+    return createRequestApp(request)(request);
   }
 };
+
+function createRequestApp(request: Request) {
+  const firestore = createFirestoreClient({ ...firestoreConfig, oidcTokenSupplier: requestOidcTokenSupplier(request) });
+  const repository = new FirestoreRepository(firestore);
+  const sourceService = createSourceService({ repository, providers, keyring: { currentVersion: tokenKeyVersion, keys: { [tokenKeyVersion]: tokenKey } }, now: () => new Date() });
+  const browse = createBrowseService({ repository, cursorSecret: required("BROWSE_CURSOR_SECRET") });
+  const mediaUrls = createMediaUrlService({ repository, browse, providers, sourceService });
+  const indexing = createIndexingService({ repository, workflowLauncher, householdId: required("HOUSEHOLD_ID"), cronSecret: required("CRON_SECRET") });
+  const oauth = createOAuthService({ repository, providers, keyring: { currentVersion: tokenKeyVersion, keys: { [tokenKeyVersion]: tokenKey } }, now: () => new Date(), createId: () => crypto.randomUUID(), startInitialSync: async sourceId => { await indexing.startSource(sourceId, "initial"); } });
+  return createApiApp({ repository, browse, mediaUrls, indexing, oauth, config: { householdId: required("HOUSEHOLD_ID"), adminInitialPassphrase: process.env.ADMIN_INITIAL_PASSPHRASE, passphrasePepper: required("ADMIN_PASSPHRASE_PEPPER"), csrfSecret: required("CSRF_SECRET"), allowedOrigin: appOrigin } });
+}
