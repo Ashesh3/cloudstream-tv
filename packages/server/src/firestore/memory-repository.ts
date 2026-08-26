@@ -2,7 +2,6 @@ import type {
   AdminSession,
   ApproveDeviceRequestInput,
   AssignedRoot,
-  ConnectSourceInput,
   Device,
   DeviceRequest,
   DeviceSession,
@@ -36,6 +35,7 @@ import type {
   UpdateDeviceInput
 } from "./repository";
 import type { DueSourceLeaseInput, ListWatchHistoryInput } from "./repository";
+import { decodeSourceDocument } from "./decode";
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -99,7 +99,7 @@ export class MemoryRepository implements AppRepository {
     this.devices.set(device.id, updatedDevice);
     return { session: copy(updatedSession), device: copy(updatedDevice), household: copy(household), renewed };
   }
-  async putSource(value: Source) { this.set(this.sources, value); }
+  async putSource(value: Source) { this.sources.set(value.id, decodeMemorySource(value)); }
   async updateSourceCredentialsIfCurrent(input: import("./repository").SourceCredentialMutationInput) {
     const current = this.sources.get(input.sourceId);
     if (!current) return null;
@@ -116,16 +116,21 @@ export class MemoryRepository implements AppRepository {
     this.sources.set(input.sourceId, copy(updated));
     return copy(updated);
   }
-  async connectSourceWithRoot(input: ConnectSourceInput) {
-    const rootId = assignedRootDocumentId(input.root.householdId, input.root.sourceId, input.root.providerNodeId);
-    if (this.sources.has(input.source.id) || this.roots.has(rootId)) {
-      throw new RepositoryError("ROOT_CONFLICT", "Source connection conflicts with existing data");
+  async connectSource(source: Source) {
+    if (this.sources.has(source.id)) {
+      throw new RepositoryError("ROOT_CONFLICT", "Source already exists");
     }
-    this.sources.set(input.source.id, copy(input.source));
-    this.roots.set(rootId, copy({ ...input.root, id: rootId }));
+    this.sources.set(source.id, copy(source));
   }
-  async getSource(id: string) { return this.get(this.sources, id); }
-  async listSources(householdId: string) { return this.filter(this.sources, value => value.householdId === householdId); }
+  async getSource(id: string) {
+    const value = this.sources.get(id);
+    return value ? decodeMemorySource(value) : null;
+  }
+  async listSources(householdId: string) {
+    return [...this.sources.values()]
+      .filter(value => value.householdId === householdId)
+      .map(decodeMemorySource);
+  }
   async getSourceImpact(householdId: string, sourceId: string) {
     const source = this.sources.get(sourceId);
     if (!source || source.householdId !== householdId) {
@@ -547,4 +552,8 @@ export class MemoryRepository implements AppRepository {
 
 function sameSecret(left: Source["encryptedRefreshToken"], right: Source["encryptedRefreshToken"]) {
   return left.keyVersion === right.keyVersion && left.iv === right.iv && left.ciphertext === right.ciphertext && left.authTag === right.authTag;
+}
+
+function decodeMemorySource(source: Source): Source {
+  return decodeSourceDocument(source.id, copy(source) as unknown as Record<string, unknown>);
 }

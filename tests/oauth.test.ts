@@ -1,6 +1,5 @@
 import type { Household } from "@cloudframe/shared";
 import {
-  assignedRootDocumentId,
   MemoryRepository,
   createOAuthService,
   createSourceService
@@ -82,9 +81,6 @@ async function setup() {
   const repository = new MemoryRepository();
   await repository.putHousehold(household);
   const google = adapter("google");
-  const startInitialSync = vi.fn(async (sourceId: string) => {
-    expect(await repository.getSource(sourceId)).toMatchObject({ status: "syncing" });
-  });
   let id = 0;
   let random = 0;
   let currentNow = now;
@@ -94,13 +90,11 @@ async function setup() {
     keyring,
     now: () => currentNow,
     createId: () => `source-${++id}`,
-    randomBytes: size => new Uint8Array(size).fill(++random),
-    startInitialSync
+    randomBytes: size => new Uint8Array(size).fill(++random)
   });
   return {
     repository,
     google,
-    startInitialSync,
     service,
     setNow(value: Date) {
       currentNow = value;
@@ -151,7 +145,6 @@ describe("OAuth state and encrypted source lifecycle", () => {
       now: () => now,
       createId: () => "source-a",
       randomBytes: size => new Uint8Array(size).fill(9),
-      startInitialSync: async () => undefined,
       logger
     });
 
@@ -169,8 +162,8 @@ describe("OAuth state and encrypted source lifecycle", () => {
     );
   });
 
-  it("atomically consumes state before exchange, encrypts credentials, persists, then starts sync", async () => {
-    const { repository, google, startInitialSync, service } = await setup();
+  it("stores provider root identity without assigning or indexing the whole drive", async () => {
+    const { repository, google, service } = await setup();
     const start = await service.beginAuthorization({
       householdId: household.id,
       adminSessionId: "admin-session-a",
@@ -214,20 +207,14 @@ describe("OAuth state and encrypted source lifecycle", () => {
       householdId: household.id,
       provider: "google",
       accountLabel: "Family cloud",
-      status: "syncing"
+      providerRootId: "provider-root",
+      status: "healthy",
+      crawlCheckpoint: null,
+      deltaCursor: null
     });
     expect(JSON.stringify(source)).not.toContain("synthetic-access-token");
     expect(JSON.stringify(source)).not.toContain("synthetic-refresh-token");
-    expect(await repository.listRootsForSource("source-1")).toEqual([
-      expect.objectContaining({
-        id: assignedRootDocumentId(household.id, "source-1", "provider-root"),
-        providerNodeId: "provider-root",
-        displayName: "Family cloud",
-        ancestryProviderIds: [],
-        enabled: true
-      })
-    ]);
-    expect(startInitialSync).toHaveBeenCalledWith("source-1");
+    expect(await repository.listRootsForSource("source-1")).toEqual([]);
   });
 
   it("rejects replay, expiry, provider mismatch, session mismatch, household mismatch, and redirect mismatch", async () => {
@@ -328,6 +315,7 @@ describe("OAuth state and encrypted source lifecycle", () => {
         householdId: household.id,
         provider: "google",
         providerAccountId: "synthetic-account-a",
+        providerRootId: "provider-root",
         accountLabel: "Old label",
         credentials: {
           accessToken: "synthetic-old-access",
@@ -365,7 +353,14 @@ describe("OAuth state and encrypted source lifecycle", () => {
 
     const updated = await repository.getSource("source-existing");
     const decrypted = sourceService.decryptSource(updated!);
-    expect(updated).toMatchObject({ accountLabel: "New label", status: "syncing" });
+    expect(updated).toMatchObject({
+      accountLabel: "New label",
+      providerRootId: "provider-root",
+      status: "healthy"
+    });
+    expect(google.getRoot).toHaveBeenCalledWith(expect.objectContaining({
+      accessToken: "synthetic-new-access"
+    }));
     expect(decrypted.credentials).toMatchObject({
       accessToken: "synthetic-new-access",
       refreshToken: "synthetic-old-refresh"
@@ -383,7 +378,7 @@ describe("OAuth state and encrypted source lifecycle", () => {
   });
 
   it("rejects a reconnect from a different provider account without mutating the source or starting sync", async () => {
-    const { repository, google, startInitialSync, service } = await setup();
+    const { repository, google, service } = await setup();
     const sourceService = createSourceService({
       repository,
       providers: registry(google),
@@ -395,6 +390,7 @@ describe("OAuth state and encrypted source lifecycle", () => {
       householdId: household.id,
       provider: "google",
       providerAccountId: "synthetic-account-a",
+      providerRootId: "provider-root",
       accountLabel: "Original label",
       credentials: {
         accessToken: "synthetic-old-access",
@@ -433,22 +429,22 @@ describe("OAuth state and encrypted source lifecycle", () => {
     ).rejects.toMatchObject({ code: "OAUTH_ACCOUNT_MISMATCH" });
 
     expect(await repository.getSource("source-existing")).toEqual(original);
-    expect(startInitialSync).not.toHaveBeenCalled();
   });
 
   it("preserves every existing root while reconnecting the same account", async () => {
-    const { repository, service } = await setup();
+    const { repository, google, service } = await setup();
     const sourceService = createSourceService({
       repository,
       providers: registry(),
       keyring,
       now: () => now
     });
-    await repository.putSource(sourceService.encryptSource({
+    await repository.putSource({ ...sourceService.encryptSource({
       id: "source-existing",
       householdId: household.id,
       provider: "google",
       providerAccountId: "synthetic-account-a",
+      providerRootId: "provider-root",
       accountLabel: "Old label",
       credentials: {
         accessToken: "synthetic-old-access",
@@ -456,7 +452,12 @@ describe("OAuth state and encrypted source lifecycle", () => {
         accessTokenExpiresAt: now
       },
       createdAt: now
-    }));
+    }), status: "syncing", crawlCheckpoint: {
+      mode: "initial",
+      providerPageCursor: "page-2",
+      processedNodeCount: 12,
+      generation: "generation-a"
+    } });
     await repository.putRoot({
       id: "root-existing",
       householdId: household.id,
@@ -486,11 +487,78 @@ describe("OAuth state and encrypted source lifecycle", () => {
     });
 
     expect(await repository.listRootsForSource("source-existing")).toEqual(before);
+    expect(await repository.getSource("source-existing")).toMatchObject({
+      providerRootId: "provider-root",
+      status: "syncing",
+      crawlCheckpoint: {
+        providerPageCursor: "page-2",
+        processedNodeCount: 12
+      }
+    });
+    expect(google.getRoot).toHaveBeenCalledOnce();
   });
 
-  it("does not persist either source or root when the atomic connection write fails", async () => {
-    const { repository, service, startInitialSync } = await setup();
-    repository.connectSourceWithRoot = async () => {
+  it("rejects a reconnect when the live provider root identity changes", async () => {
+    const { repository, google, service } = await setup();
+    const sourceService = createSourceService({
+      repository,
+      providers: registry(google),
+      keyring,
+      now: () => now
+    });
+    const original = sourceService.encryptSource({
+      id: "source-existing",
+      householdId: household.id,
+      provider: "google",
+      providerAccountId: "synthetic-account-a",
+      providerRootId: "provider-root",
+      accountLabel: "Family cloud",
+      credentials: {
+        accessToken: "old-access",
+        refreshToken: "old-refresh",
+        accessTokenExpiresAt: now
+      },
+      createdAt: now
+    });
+    await repository.putSource(original);
+    vi.mocked(google.getRoot).mockResolvedValueOnce({
+      providerNodeId: "different-root",
+      parentProviderId: null,
+      name: "Family cloud",
+      kind: "folder",
+      mimeType: null,
+      size: null,
+      width: null,
+      height: null,
+      capturedAt: null,
+      createdAt: null,
+      modifiedAt: null,
+      thumbnailRevision: null,
+      hasPreview: false
+    });
+    const start = await service.beginAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      reconnectSourceId: original.id
+    });
+
+    await expect(service.completeAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      state: new URL(start.authorizationUrl).searchParams.get("state")!,
+      code: "synthetic-code"
+    })).rejects.toMatchObject({ code: "OAUTH_ACCOUNT_MISMATCH" });
+
+    expect(await repository.getSource(original.id)).toEqual(original);
+  });
+
+  it("does not persist a source when the atomic connection write fails", async () => {
+    const { repository, service } = await setup();
+    repository.connectSource = async () => {
       throw new Error("simulated transaction failure");
     };
     const start = await service.beginAuthorization({
@@ -511,11 +579,10 @@ describe("OAuth state and encrypted source lifecycle", () => {
 
     expect(await repository.listSources(household.id)).toEqual([]);
     expect(await repository.listRootsForSource("source-1")).toEqual([]);
-    expect(startInitialSync).not.toHaveBeenCalled();
   });
 
   it("binds a verified account once for a reauth-required migrated source and preserves roots", async () => {
-    const { repository, google, startInitialSync, service } = await setup();
+    const { repository, google, service } = await setup();
     const sourceService = createSourceService({
       repository,
       providers: registry(google),
@@ -527,6 +594,7 @@ describe("OAuth state and encrypted source lifecycle", () => {
       householdId: household.id,
       provider: "google",
       providerAccountId: null,
+      providerRootId: null,
       accountLabel: "Legacy label",
       credentials: {
         accessToken: "synthetic-old-access",
@@ -560,11 +628,11 @@ describe("OAuth state and encrypted source lifecycle", () => {
     });
     expect(await repository.getSource("source-legacy")).toMatchObject({
       providerAccountId: "synthetic-account-a",
-      status: "syncing",
+      providerRootId: "provider-root",
+      status: "healthy",
       lastSyncErrorCode: null
     });
     expect(await repository.listRootsForSource(legacy.id)).toEqual(roots);
-    expect(startInitialSync).toHaveBeenCalledWith(legacy.id);
   });
 
   it("still rejects a different account after a migrated source is bound", async () => {
@@ -572,7 +640,7 @@ describe("OAuth state and encrypted source lifecycle", () => {
     const sourceService = createSourceService({ repository, providers: registry(google), keyring, now: () => now });
     const source = sourceService.encryptSource({
       id: "source-bound", householdId: household.id, provider: "google",
-      providerAccountId: "synthetic-account-a", accountLabel: "Bound account",
+      providerAccountId: "synthetic-account-a", providerRootId: "provider-root", accountLabel: "Bound account",
       credentials: { accessToken: "old", refreshToken: "refresh", accessTokenExpiresAt: now },
       createdAt: now
     });
@@ -607,6 +675,7 @@ describe("source credential refresh", () => {
       householdId: household.id,
       provider: "google",
       providerAccountId: "synthetic-account-a",
+      providerRootId: null,
       accountLabel: "Family cloud",
       credentials: {
         accessToken: "synthetic-stale-access",
@@ -654,6 +723,7 @@ describe("source credential refresh", () => {
         householdId: household.id,
         provider: "google",
         providerAccountId: "synthetic-account-a",
+        providerRootId: null,
         accountLabel: "Family cloud",
         credentials: {
           accessToken: "synthetic-stale-access",
@@ -687,7 +757,7 @@ describe("source credential refresh", () => {
     });
     const service = createSourceService({ repository, providers: registry(google), keyring, now: () => now });
     await repository.putSource(service.encryptSource({
-      id: "source-a", householdId: household.id, provider: "google", providerAccountId: "account-a", accountLabel: "Family cloud",
+      id: "source-a", householdId: household.id, provider: "google", providerAccountId: "account-a", providerRootId: null, accountLabel: "Family cloud",
       credentials: { accessToken: "stale", refreshToken: "rotating-old", accessTokenExpiresAt: new Date(now.getTime() - 1000) }, createdAt: now
     }));
 
@@ -699,7 +769,7 @@ describe("source credential refresh", () => {
     expect(google.refreshCredentials).toHaveBeenCalledTimes(2);
     expect(results.map(value => value.accessToken)).toEqual(["winner-access", "winner-access"]);
     const stored = await repository.getSource("source-a");
-    expect(stored).toMatchObject({ status: "syncing", lastSyncErrorCode: null });
+    expect(stored).toMatchObject({ status: "healthy", lastSyncErrorCode: null });
     expect(service.decryptSource(stored!).credentials).toMatchObject({ accessToken: "winner-access", refreshToken: "winner-refresh" });
   });
 
@@ -707,7 +777,7 @@ describe("source credential refresh", () => {
     const repository = new MemoryRepository();
     const google = adapter("google");
     const service = createSourceService({ repository, providers: registry(google), keyring, now: () => now });
-    const source = service.encryptSource({ id: "source-a", householdId: household.id, provider: "google", providerAccountId: "account-a", accountLabel: "Family cloud", credentials: { accessToken: "stale", refreshToken: "old-refresh", accessTokenExpiresAt: new Date(now.getTime() - 1000) }, createdAt: now });
+    const source = service.encryptSource({ id: "source-a", householdId: household.id, provider: "google", providerAccountId: "account-a", providerRootId: null, accountLabel: "Family cloud", credentials: { accessToken: "stale", refreshToken: "old-refresh", accessTokenExpiresAt: new Date(now.getTime() - 1000) }, createdAt: now });
     await repository.putSource(source);
     vi.mocked(google.refreshCredentials).mockImplementationOnce(async () => {
       await repository.putSource({ ...source, crawlCheckpoint: { mode: "initial", providerPageCursor: "page-2", processedNodeCount: 50, generation: "generation-2" }, leaseOwner: "worker-2" });

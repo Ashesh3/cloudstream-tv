@@ -15,6 +15,7 @@ import {
   assignedRootDocumentId,
   createFirestoreClient,
   decodeFirestoreDocument,
+  decodeSourceDocument,
   FirestoreRepository,
   MemoryRepository,
   type FirestoreClientSettings
@@ -445,6 +446,24 @@ describe("Firestore client authentication boundary", () => {
 });
 
 describe("Firestore document decoding", () => {
+  it("decodes a pre-redesign source with a null provider root identity", () => {
+    const legacy = { ...makeSource() } as Record<string, unknown>;
+    delete legacy.providerRootId;
+
+    expect(decodeSourceDocument("source-1", legacy).providerRootId).toBeNull();
+  });
+
+  it("normalizes pre-redesign sources seeded into the memory repository", async () => {
+    const repository = new MemoryRepository();
+    const legacy = { ...makeSource() } as Record<string, unknown>;
+    delete legacy.providerRootId;
+
+    await repository.putSource(legacy as unknown as Source);
+
+    expect((await repository.getSource("s1"))?.providerRootId).toBeNull();
+    expect((await repository.listSources("h1"))[0]?.providerRootId).toBeNull();
+  });
+
   it("converts nested Firestore timestamps into shared Date contracts", () => {
     const decoded = decodeFirestoreDocument("s1", {
       createdAt: { toDate: () => now },
@@ -609,19 +628,17 @@ describe("FirestoreRepository device approval", () => {
 });
 
 describe("FirestoreRepository admin management transactions", () => {
-  it("creates source and initial root in one transaction", async () => {
+  it("connects a source atomically without creating a root", async () => {
     const writes: string[] = [];
     const firestore = createManagementFirestore({ writes });
     const repo = new FirestoreRepository(firestore);
     const source = makeSource();
-    const root = makeRoot();
 
-    await repo.connectSourceWithRoot({ source, root });
+    await repo.connectSource(source);
 
-    expect(writes).toEqual([
-      "create:sources/s1",
-      `create:roots/${assignedRootDocumentId("h1", "s1", "provider-root")}`
-    ]);
+    expect(await repo.getSource(source.id)).toEqual(source);
+    expect(await repo.listRootsForSource(source.id)).toEqual([]);
+    expect(writes).toEqual(["create:sources/s1"]);
   });
 
   it("removes source, disables roots, and detaches devices in one transaction", async () => {
@@ -791,14 +808,22 @@ function createManagementFirestore(options: {
   roots?: AssignedRoot[];
   devices?: Device[];
 }): Firestore {
-  type Ref = { key: string; id: string };
+  type Ref = {
+    key: string;
+    id: string;
+    get(): Promise<ReturnType<typeof snapshot>>;
+  };
   type QueryLike = { collection: string; filters: Array<[string, unknown]>; limit?: number };
   const refs = new Map<string, Ref>();
   const ref = (collection: string, id: string): Ref => {
     const key = `${collection}/${id}`;
     const current = refs.get(key);
     if (current) return current;
-    const value = { key, id };
+    const value = {
+      key,
+      id,
+      async get() { return snapshot(value); }
+    };
     refs.set(key, value);
     return value;
   };
@@ -834,6 +859,7 @@ function createManagementFirestore(options: {
       const queryBuilder = (current: QueryLike): unknown => ({
         where(field: string, _operator: string, value: unknown) { return queryBuilder({ ...current, filters: [...current.filters, [field, value]] }); },
         limit(value: number) { return queryBuilder({ ...current, limit: value }); },
+        async get() { return querySnapshots(current); },
         __query: current
       });
       return builder;

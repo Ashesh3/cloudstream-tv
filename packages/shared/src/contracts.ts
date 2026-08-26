@@ -204,7 +204,6 @@ export interface UpdateHouseholdSettingsInput {
 
 export interface ConnectSourceInput {
   source: Source;
-  root: AssignedRoot;
 }
 
 export interface RemoveSourceInput {

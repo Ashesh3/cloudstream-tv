@@ -2,7 +2,6 @@ import type {
   AdminSession,
   ApproveDeviceRequestInput,
   AssignedRoot,
-  ConnectSourceInput,
   Device,
   DeviceRequest,
   DeviceSession,
@@ -20,6 +19,7 @@ import type {
 import type { Firestore, Query, Transaction, WriteBatch } from "@google-cloud/firestore";
 import { createHash } from "node:crypto";
 import { recomputeFolderMetadata, type IndexBatchCommitInput } from "@cloudframe/indexer";
+import { decodeSourceDocument } from "./decode";
 
 export interface RateLimitConsumeInput {
   bucket: string;
@@ -179,7 +179,7 @@ export interface AppRepository {
   putSource(source: Source): Promise<void>;
   updateSourceCredentialsIfCurrent(input: SourceCredentialMutationInput): Promise<Source | null>;
   markSourceReauthRequiredIfCurrent(input: Omit<SourceCredentialMutationInput, "credentials">): Promise<Source | null>;
-  connectSourceWithRoot(input: ConnectSourceInput): Promise<void>;
+  connectSource(source: Source): Promise<void>;
   getSource(id: string): Promise<Source | null>;
   listSources(householdId: string): Promise<Source[]>;
   getSourceImpact(householdId: string, sourceId: string): Promise<SourceImpact>;
@@ -275,7 +275,7 @@ export class FirestoreRepository implements AppRepository {
       const reference = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
       const snapshot = await transaction.get(reference);
       if (!snapshot.exists) return null;
-      const current = decodeFirestoreDocument<Source>(snapshot.id, snapshot.data());
+      const current = decodeSourceDocument(snapshot.id, snapshot.data());
       if (!sameEncryptedSecret(current.encryptedRefreshToken, input.expectedEncryptedRefreshToken)) return current;
       const updated: Source = {
         ...current,
@@ -292,26 +292,30 @@ export class FirestoreRepository implements AppRepository {
       const reference = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
       const snapshot = await transaction.get(reference);
       if (!snapshot.exists) return null;
-      const current = decodeFirestoreDocument<Source>(snapshot.id, snapshot.data());
+      const current = decodeSourceDocument(snapshot.id, snapshot.data());
       if (!sameEncryptedSecret(current.encryptedRefreshToken, input.expectedEncryptedRefreshToken)) return current;
       const updated = { ...current, status: "reauth-required" as const, lastSyncErrorCode: "PROVIDER_REAUTH_REQUIRED" };
       transaction.set(reference, updated);
       return updated;
     });
   }
-  async connectSourceWithRoot(input: ConnectSourceInput): Promise<void> {
+  async connectSource(source: Source): Promise<void> {
     await this.firestore.runTransaction(async transaction => {
-      const sourceRef = this.firestore.collection(COLLECTIONS.sources).doc(input.source.id);
-      const rootId = assignedRootDocumentId(input.root.householdId, input.root.sourceId, input.root.providerNodeId);
-      const rootRef = this.firestore.collection(COLLECTIONS.roots).doc(rootId);
-      const [source, root] = await Promise.all([transaction.get(sourceRef), transaction.get(rootRef)]);
-      if (source.exists || root.exists) throw new RepositoryError("ROOT_CONFLICT", "Source connection conflicts with existing data");
-      transaction.create(sourceRef, input.source);
-      transaction.create(rootRef, { ...input.root, id: rootId });
+      const reference = this.firestore.collection(COLLECTIONS.sources).doc(source.id);
+      if ((await transaction.get(reference)).exists) {
+        throw new RepositoryError("ROOT_CONFLICT", "Source already exists");
+      }
+      transaction.create(reference, source);
     });
   }
-  getSource(id: string) { return this.getById<Source>(COLLECTIONS.sources, id); }
-  listSources(householdId: string) { return this.getMany<Source>(this.query(COLLECTIONS.sources, "householdId", householdId)); }
+  async getSource(id: string): Promise<Source | null> {
+    const snapshot = await this.firestore.collection(COLLECTIONS.sources).doc(id).get();
+    return snapshot.exists ? decodeSourceDocument(snapshot.id, snapshot.data()) : null;
+  }
+  async listSources(householdId: string): Promise<Source[]> {
+    const snapshot = await this.query(COLLECTIONS.sources, "householdId", householdId).get();
+    return snapshot.docs.map(document => decodeSourceDocument(document.id, document.data()));
+  }
   async getSourceImpact(householdId: string, sourceId: string): Promise<SourceImpact> {
     const source = await this.getSource(sourceId);
     if (!source || source.householdId !== householdId) throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
@@ -324,7 +328,7 @@ export class FirestoreRepository implements AppRepository {
     const sourceRef = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
     return this.firestore.runTransaction(async transaction => {
       const sourceSnapshot = await transaction.get(sourceRef);
-      const source = sourceSnapshot.exists ? decodeFirestoreDocument<Source>(sourceSnapshot.id, sourceSnapshot.data()) : null;
+      const source = sourceSnapshot.exists ? decodeSourceDocument(sourceSnapshot.id, sourceSnapshot.data()) : null;
       if (!source || source.householdId !== input.householdId) throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
       const [rootSnapshots, deviceSnapshots] = await Promise.all([
         transaction.get(this.firestore.collection(COLLECTIONS.roots).where("sourceId", "==", input.sourceId)),
@@ -506,7 +510,7 @@ export class FirestoreRepository implements AppRepository {
     await this.firestore.runTransaction(async transaction => {
       const snapshot = await transaction.get(sourceRef);
       const current = snapshot.exists
-        ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data())
+        ? decodeSourceDocument(snapshot.id, snapshot.data())
         : null;
       validateIndexCommit(current, input);
       const liveNodes = new Map(existingNodes.map(node => [node.id, node]));
@@ -542,7 +546,7 @@ export class FirestoreRepository implements AppRepository {
     await this.firestore.runTransaction(async transaction => {
       const snapshot = await transaction.get(sourceRef);
       const source = snapshot.exists
-        ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data())
+        ? decodeSourceDocument(snapshot.id, snapshot.data())
         : null;
       if (
         !source ||
@@ -610,7 +614,7 @@ export class FirestoreRepository implements AppRepository {
     const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
     await this.firestore.runTransaction(async transaction => {
       const snapshot = await transaction.get(ref);
-      const source = snapshot.exists ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data()) : null;
+      const source = snapshot.exists ? decodeSourceDocument(snapshot.id, snapshot.data()) : null;
       if (
         !source ||
         source.leaseOwner !== input.leaseOwner ||
@@ -636,7 +640,7 @@ export class FirestoreRepository implements AppRepository {
     const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
     return this.firestore.runTransaction(async transaction => {
       const snapshot = await transaction.get(ref);
-      const source = snapshot.exists ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data()) : null;
+      const source = snapshot.exists ? decodeSourceDocument(snapshot.id, snapshot.data()) : null;
       if (!source || source.leaseOwner !== input.leaseOwner || !source.leaseExpiresAt || source.leaseExpiresAt <= input.startedAt) return false;
       transaction.update(ref, { status: "syncing", activeWorkflowRunId: input.runId, lastSyncStartedAt: input.startedAt, lastSyncErrorCode: null });
       return true;
@@ -655,7 +659,7 @@ export class FirestoreRepository implements AppRepository {
     const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
     return this.firestore.runTransaction(async transaction => {
       const snapshot = await transaction.get(ref);
-      const source = snapshot.exists ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data()) : null;
+      const source = snapshot.exists ? decodeSourceDocument(snapshot.id, snapshot.data()) : null;
       if (
         !source ||
         source.leaseOwner !== input.expectedLeaseOwner ||
@@ -959,7 +963,7 @@ export class FirestoreRepository implements AppRepository {
       const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
       const snapshot = await transaction.get(ref);
       const source = snapshot.exists
-        ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data())
+        ? decodeSourceDocument(snapshot.id, snapshot.data())
         : undefined;
       if (!source) throw new Error("Source not found");
       if (source.leaseOwner && source.leaseExpiresAt && source.leaseExpiresAt > input.now) return false;
@@ -973,7 +977,7 @@ export class FirestoreRepository implements AppRepository {
       const ref = this.firestore.collection(COLLECTIONS.sources).doc(sourceId);
       const snapshot = await transaction.get(ref);
       const source = snapshot.exists
-        ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data())
+        ? decodeSourceDocument(snapshot.id, snapshot.data())
         : undefined;
       if (!source) throw new Error("Source not found");
       if (source.leaseOwner !== owner) return false;
@@ -1152,7 +1156,7 @@ function isFirestoreTimestamp(value: unknown): value is FirestoreTimestampLike {
   );
 }
 
-function decodeFirestoreValue(value: unknown): unknown {
+export function decodeFirestoreValue(value: unknown): unknown {
   if (value instanceof Date) return value;
   if (isFirestoreTimestamp(value)) return value.toDate();
   if (Array.isArray(value)) return value.map(decodeFirestoreValue);
