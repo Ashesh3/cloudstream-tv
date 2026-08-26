@@ -242,6 +242,68 @@ export class MemoryRepository implements AppRepository {
     this.roots.set(deterministicId, created);
     return copy(created);
   }
+  async enableRootAndResetInitial(input: { root: AssignedRoot; sourceId: string; resetAt: Date }) {
+    const source = this.sources.get(input.sourceId);
+    if (
+      !source ||
+      source.householdId !== input.root.householdId ||
+      source.status === "disabled" ||
+      input.root.sourceId !== input.sourceId
+    ) {
+      throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
+    }
+    const deterministicId = assignedRootDocumentId(input.root.householdId, input.sourceId, input.root.providerNodeId);
+    const deterministic = this.roots.get(deterministicId);
+    const duplicate = deterministic ?? [...this.roots.values()].find(root =>
+      root.householdId === input.root.householdId &&
+      root.sourceId === input.sourceId &&
+      root.providerNodeId === input.root.providerNodeId
+    );
+    const enabled = copy({
+      ...(duplicate ?? input.root),
+      id: deterministicId,
+      displayName: input.root.displayName,
+      ancestryProviderIds: [...input.root.ancestryProviderIds],
+      enabled: true,
+      createdAt: duplicate?.createdAt ?? input.resetAt
+    });
+    if (duplicate && duplicate.id !== deterministicId) {
+      this.roots.delete(duplicate.id);
+      for (const [id, device] of this.devices) {
+        if (device.assignedRootIds.includes(duplicate.id)) {
+          this.devices.set(id, copy({
+            ...device,
+            assignedRootIds: device.assignedRootIds.map(rootId => rootId === duplicate.id ? deterministicId : rootId)
+          }));
+        }
+      }
+    }
+    this.roots.set(deterministicId, enabled);
+    const activeInitialLaunch =
+      source.status === "syncing" &&
+      source.deltaCursor === null &&
+      source.crawlCheckpoint === null &&
+      source.nextSyncAt === null &&
+      source.lastSyncErrorCode === null &&
+      source.leaseOwner !== null &&
+      source.leaseExpiresAt !== null &&
+      source.leaseExpiresAt > input.resetAt;
+    if (!activeInitialLaunch) {
+      this.sources.set(source.id, copy({
+        ...source,
+        status: "syncing",
+        deltaCursor: null,
+        crawlCheckpoint: null,
+        activeWorkflowRunId: null,
+        syncGeneration: null,
+        nextSyncAt: null,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        lastSyncErrorCode: null
+      }));
+    }
+    return copy(enabled);
+  }
   async disableRoot(input: DisableRootInput) {
     const root = this.roots.get(input.rootId);
     if (!root || root.householdId !== input.householdId) {

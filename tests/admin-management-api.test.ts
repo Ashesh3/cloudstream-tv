@@ -7,6 +7,7 @@ import type {
 import {
   assignedRootDocumentId,
   createApiApp,
+  createIndexingService,
   createProviderFolderService,
   hashOpaqueToken,
   ProviderError,
@@ -77,6 +78,168 @@ describe("admin management HTTP API", () => {
       pageSize: 100
     }));
     expect(await harness.repository.listNodesForSource(source.id)).toEqual([]);
+  });
+
+  it("creates a root from a live provider folder and launches initial indexing", async () => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, {
+      providerRootId: "root",
+      deltaCursor: "stale-delta",
+      lastSyncErrorCode: "PROVIDER_TIMEOUT",
+      nextSyncAt: new Date(harness.now.getTime() + 60_000)
+    });
+    await harness.repository.putSource(source);
+    const indexing = {
+      startSource: vi.fn(async () => {
+        await harness.repository.acquireSyncLease({
+          sourceId: source.id,
+          owner: "initial-owner",
+          now: harness.now,
+          expiresAt: new Date(harness.now.getTime() + 60_000)
+        });
+        await harness.repository.markSyncRunStarted({
+          sourceId: source.id,
+          leaseOwner: "initial-owner",
+          runId: "run-1",
+          startedAt: harness.now
+        });
+        return { started: true, sourceId: source.id, runId: "run-1" };
+      })
+    };
+    const providerFolders = makeProviderFolderService(harness, {
+      getNode: vi.fn(async ({ providerNodeId }: { providerNodeId: string }) =>
+        providerNodeId === "photos"
+          ? providerFolder("photos", "Photos", "root")
+          : providerFolder("root", "My Drive", null)
+      )
+    }, indexing);
+    const resolveAncestry = vi.spyOn(providerFolders, "resolveAncestry");
+    const admin = await login(harness.app);
+    const app = createApiApp({
+      repository: harness.repository,
+      providerFolders,
+      config: apiConfig(harness),
+      now: () => harness.now
+    });
+
+    const response = await app(jsonRequest(
+      `/api/admin/sources/${source.id}/roots`,
+      "POST",
+      { providerNodeId: "photos", displayName: "Family photos" },
+      mutationHeaders(harness.origin, admin)
+    ));
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        root: { providerNodeId: "photos", displayName: "Family photos" },
+        indexing: { started: true, runId: "run-1" }
+      }
+    });
+    expect(resolveAncestry).toHaveBeenCalledWith(expect.objectContaining({ providerNodeId: "photos" }));
+    expect(indexing.startSource).toHaveBeenCalledWith(source.id, "initial");
+    expect(await harness.repository.getRoot(
+      assignedRootDocumentId(harness.householdId, source.id, "photos")
+    )).toMatchObject({ enabled: true, ancestryProviderIds: ["root"] });
+    expect(await harness.repository.getSource(source.id)).toMatchObject({
+      status: "syncing",
+      deltaCursor: null,
+      crawlCheckpoint: null,
+      activeWorkflowRunId: "run-1",
+      lastSyncErrorCode: null,
+      nextSyncAt: null
+    });
+    expect(await harness.repository.listNodesForSource(source.id)).toEqual([]);
+  });
+
+  it("preserves a legacy whole-drive root when a selected folder is added", async () => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, { providerRootId: "root" });
+    await harness.repository.putSource(source);
+    await harness.repository.putRoot({
+      ...makeRoot(harness.householdId, source.id, harness.now),
+      id: "legacy-whole-drive",
+      providerNodeId: "root"
+    });
+    const providerFolders = makeProviderFolderService(harness, {}, {
+      startSource: vi.fn(async () => ({ started: true, sourceId: source.id, runId: "run-1" }))
+    });
+    const admin = await login(harness.app);
+    const app = createApiApp({
+      repository: harness.repository,
+      providerFolders,
+      config: apiConfig(harness),
+      now: () => harness.now
+    });
+
+    const response = await app(jsonRequest(
+      `/api/admin/sources/${source.id}/roots`,
+      "POST",
+      { providerNodeId: "photos" },
+      mutationHeaders(harness.origin, admin)
+    ));
+
+    expect(response.status).toBe(201);
+    expect(await harness.repository.listRootsForSource(source.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "legacy-whole-drive", providerNodeId: "root", enabled: true }),
+        expect.objectContaining({ providerNodeId: "photos", enabled: true })
+      ])
+    );
+  });
+
+  it("keeps a selected root queued when durable workflow launch fails", async () => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, { providerRootId: "root" });
+    await harness.repository.putSource(source);
+    const indexing = createIndexingService({
+      repository: harness.repository,
+      workflowLauncher: {
+        start: vi.fn(async () => { throw new Error("secret workflow backend detail"); })
+      },
+      householdId: harness.householdId,
+      cronSecret: "cron",
+      now: () => harness.now,
+      createOwner: () => "initial-owner"
+    });
+    const providerFolders = makeProviderFolderService(harness, {}, indexing);
+    const admin = await login(harness.app);
+    const app = createApiApp({
+      repository: harness.repository,
+      providerFolders,
+      config: apiConfig(harness),
+      now: () => harness.now
+    });
+
+    const response = await app(jsonRequest(
+      `/api/admin/sources/${source.id}/roots`,
+      "POST",
+      { providerNodeId: "photos" },
+      mutationHeaders(harness.origin, admin)
+    ));
+
+    expect(response.status).toBe(503);
+    const body = await response.text();
+    expect(body).toContain("INDEXING_LAUNCH_FAILED");
+    expect(body).toContain("Retry");
+    expect(body).not.toContain("secret workflow backend detail");
+    expect(await harness.repository.getRoot(
+      assignedRootDocumentId(harness.householdId, source.id, "photos")
+    )).toMatchObject({ enabled: true });
+    expect(await harness.repository.getSource(source.id)).toMatchObject({
+      status: "syncing",
+      activeWorkflowRunId: null,
+      leaseOwner: null,
+      leaseExpiresAt: null
+    });
+    await expect(providerFolders.browse({
+      householdId: harness.householdId,
+      sourceId: source.id,
+      cursor: null,
+      pageSize: 100
+    })).resolves.toMatchObject({
+      source: { indexState: { kind: "queued", recoverable: true } }
+    });
   });
 
   it("pages a nested live folder with server-resolved breadcrumbs", async () => {
@@ -604,7 +767,7 @@ describe("admin management HTTP API", () => {
 
   it("browses indexed folders, creates and disables roots, and vends admin thumbnails", async () => {
     const harness = await createTestApi();
-    const source = makeSource(harness.householdId, harness.now);
+    const source = makeSource(harness.householdId, harness.now, { providerRootId: "provider-root" });
     const providerRoot = makeFolderNode(harness.householdId, source.id, "node-root", "provider-root", null);
     const folder = makeFolderNode(harness.householdId, source.id, "node-folder", "provider-folder", providerRoot.id);
     const cover = makeCoverNode(harness.householdId, source.id, "node-cover", folder.id);
@@ -620,6 +783,16 @@ describe("admin management HTTP API", () => {
     }));
     const app = createApiApp({
       repository: harness.repository,
+      providerFolders: makeProviderFolderService(harness, {
+        getRoot: vi.fn(async () => providerFolder("provider-root", "Family drive", null)),
+        getNode: vi.fn(async ({ providerNodeId }: { providerNodeId: string }) =>
+          providerNodeId === "provider-folder"
+            ? providerFolder("provider-folder", "Photos", "provider-root")
+            : providerFolder("provider-root", "Family drive", null)
+        )
+      }, {
+        startSource: vi.fn(async () => ({ started: true, sourceId: source.id, runId: "run-created" }))
+      }),
       config: {
         householdId: harness.householdId,
         passphrasePepper: harness.pepper,
@@ -647,7 +820,7 @@ describe("admin management HTTP API", () => {
       jsonRequest(
         `/api/admin/sources/${source.id}/roots`,
         "POST",
-        { providerNodeId: folder.id, displayName: "Family photos" },
+        { providerNodeId: folder.providerNodeId, displayName: "Family photos" },
         mutationHeaders(harness.origin, admin)
       )
     );
@@ -705,7 +878,7 @@ describe("admin management HTTP API", () => {
 
   it("re-enables one unique root under concurrent creates and records current provider ancestry", async () => {
     const harness = await createTestApi();
-    const source = makeSource(harness.householdId, harness.now);
+    const source = makeSource(harness.householdId, harness.now, { providerRootId: "provider-root" });
     const providerRoot = makeFolderNode(harness.householdId, source.id, "node-root", "provider-root", null);
     const folder = makeFolderNode(harness.householdId, source.id, "node-folder", "provider-folder", providerRoot.id);
     await harness.repository.putSource(source);
@@ -713,8 +886,25 @@ describe("admin management HTTP API", () => {
     await harness.repository.putNode(folder);
     const admin = await login(harness.app);
     let id = 0;
+    const workflowStart = vi.fn(async () => ({ runId: "run-concurrent" }));
+    const indexing = createIndexingService({
+      repository: harness.repository,
+      workflowLauncher: { start: workflowStart },
+      householdId: harness.householdId,
+      cronSecret: "cron",
+      now: () => harness.now,
+      createOwner: () => `owner-${++id}`
+    });
     const app = createApiApp({
       repository: harness.repository,
+      providerFolders: makeProviderFolderService(harness, {
+        getRoot: vi.fn(async () => providerFolder("provider-root", "Family drive", null)),
+        getNode: vi.fn(async ({ providerNodeId }: { providerNodeId: string }) =>
+          providerNodeId === "provider-folder"
+            ? providerFolder("provider-folder", "Photos", "provider-root")
+            : providerFolder("provider-root", "Family drive", null)
+        )
+      }, indexing),
       config: {
         householdId: harness.householdId,
         passphrasePepper: harness.pepper,
@@ -727,7 +917,7 @@ describe("admin management HTTP API", () => {
     const request = () => app(jsonRequest(
       `/api/admin/sources/${source.id}/roots`,
       "POST",
-      { providerNodeId: folder.id, displayName: "Photos" },
+      { providerNodeId: folder.providerNodeId, displayName: "Photos" },
       mutationHeaders(harness.origin, admin)
     ));
 
@@ -742,6 +932,7 @@ describe("admin management HTTP API", () => {
       ancestryProviderIds: ["provider-root"],
       enabled: true
     });
+    expect(workflowStart).toHaveBeenCalledTimes(1);
   });
 
   it("maps only bounded OAuth failures while unexpected callback defects remain safe 500s", async () => {
@@ -855,7 +1046,10 @@ function apiConfig(harness: Awaited<ReturnType<typeof createTestApi>>) {
 
 function makeProviderFolderService(
   harness: Awaited<ReturnType<typeof createTestApi>>,
-  overrides: Partial<Pick<ProviderAdapter, "getRoot" | "getNode" | "listFolder">> = {}
+  overrides: Partial<Pick<ProviderAdapter, "getRoot" | "getNode" | "listFolder">> = {},
+  indexing: { startSource(sourceId: string, mode: "initial"): Promise<{ started: boolean; sourceId: string; runId?: string }> } = {
+    startSource: vi.fn(async sourceId => ({ started: false, sourceId }))
+  }
 ) {
   const credentials: ProviderCredentials = {
     accessToken: "access-secret",
@@ -876,6 +1070,8 @@ function makeProviderFolderService(
   return createProviderFolderService({
     repository: harness.repository,
     providers,
+    indexing,
+    now: () => harness.now,
     sourceService: {
       getUsableCredentials: vi.fn(async () => credentials)
     } as never

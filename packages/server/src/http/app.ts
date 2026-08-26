@@ -37,6 +37,7 @@ import { MediaUrlServiceError } from "../services/media-urls";
 import { OAuthServiceError } from "../services/oauth";
 import {
   ProviderFolderError,
+  ProviderFolderLaunchError,
   type ProviderFolderService
 } from "../services/provider-folders";
 import { ProviderError } from "@cloudframe/providers";
@@ -119,7 +120,7 @@ export interface ApiAppDependencies {
     startDueSources(authorization: string | null, limit?: number): Promise<unknown>;
     startSource(sourceId: string, mode: "initial" | "delta" | "reconcile"): Promise<unknown>;
   };
-  providerFolders?: Pick<ProviderFolderService, "browse" | "resolveAncestry">;
+  providerFolders?: ProviderFolderService;
 }
 
 const DEFAULT_RATE_LIMITS: Record<string, RateLimitPolicy> = {
@@ -597,18 +598,26 @@ async function browseProviderFolders(
 }
 
 async function createRoot(request: Request, dependencies: ApiAppDependencies, now: Date, sourceId: string) {
+  if (!dependencies.providerFolders) throw unavailableService();
   const authenticated = await authenticateAdmin(request, dependencies, now);
   verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
   await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
   const body = await readJsonObject(request);
-  if (typeof body.providerNodeId !== "string" || (body.displayName !== undefined && typeof body.displayName !== "string")) throw new HttpError(400, "INVALID_ROOT", "Root request is invalid.");
-  const [source, node] = await Promise.all([dependencies.repository.getSource(sourceId), dependencies.repository.getNode(body.providerNodeId)]);
-  if (!source || source.householdId !== dependencies.config.householdId || !node || !node.available || node.kind !== "folder" || node.householdId !== dependencies.config.householdId || node.sourceId !== sourceId) throw new HttpError(404, "FOLDER_NOT_FOUND", "Folder not found.");
-  const ancestryProviderIds = await providerAncestry(dependencies.repository, node);
-  const displayName = typeof body.displayName === "string" && body.displayName.trim() ? body.displayName.trim().slice(0, 120) : node.name;
-  const root: AssignedRoot = { id: dependencies.createId!("root"), householdId: dependencies.config.householdId, sourceId, providerNodeId: node.providerNodeId, displayName, ancestryProviderIds, enabled: true, createdAt: now };
-  const saved = await dependencies.repository.createOrEnableRoot(root);
-  return ok({ root: encodeAssignedRootDto(saved) }, { status: 201, headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+  if (
+    typeof body.providerNodeId !== "string" ||
+    !body.providerNodeId.trim() ||
+    (body.displayName !== undefined && typeof body.displayName !== "string")
+  ) throw new HttpError(400, "INVALID_ROOT", "Root request is invalid.");
+  const result = await dependencies.providerFolders.createRootFromProvider({
+    householdId: dependencies.config.householdId,
+    sourceId,
+    providerNodeId: body.providerNodeId,
+    ...(typeof body.displayName === "string" ? { displayName: body.displayName } : {})
+  });
+  return ok({
+    root: encodeAssignedRootDto(result.root),
+    indexing: { started: result.started, runId: result.runId ?? null }
+  }, { status: 201, headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
 }
 
 async function removeRoot(request: Request, dependencies: ApiAppDependencies, now: Date, rootId: string) {
@@ -651,20 +660,6 @@ async function settingsDto(household: Household, repository: AppRepository) {
     defaultSlideshowSeconds: household.defaultSlideshowSeconds,
     indexHealth: { totalNodeCount: nodeCounts.total, availableNodeCount: nodeCounts.available, indexingSourceCount: sources.filter(source => source.status === "syncing" || source.crawlCheckpoint !== null).length, estimatedFirestoreDocumentCount: 1 + sources.length + roots.length + devices.length + requests.length + nodeCounts.total }
   };
-}
-
-async function providerAncestry(repository: AppRepository, node: MediaNode): Promise<string[]> {
-  const reversed: string[] = [];
-  let parentId = node.parentNodeId;
-  const seen = new Set<string>();
-  while (parentId && !seen.has(parentId) && seen.size < 256) {
-    seen.add(parentId);
-    const parent = await repository.getNode(parentId);
-    if (!parent || !parent.available || parent.sourceId !== node.sourceId || parent.householdId !== node.householdId) throw new HttpError(409, "ROOT_ANCESTRY_INVALID", "Folder ancestry is invalid.");
-    reversed.push(parent.providerNodeId);
-    parentId = parent.parentNodeId;
-  }
-  return reversed.reverse();
 }
 
 async function tvHome(request: Request, dependencies: ApiAppDependencies, now: Date) {
@@ -1235,6 +1230,13 @@ function normalizeHttpError(error: unknown): HttpError {
           ? "Page size is invalid."
         : "This provider folder is unavailable for this source.";
     return new HttpError(status, error.code, message);
+  }
+  if (error instanceof ProviderFolderLaunchError) {
+    return new HttpError(
+      503,
+      "INDEXING_LAUNCH_FAILED",
+      "The folder was selected, but indexing could not start. Retry indexing."
+    );
   }
   if (error instanceof ProviderError) {
     const providerStatus = error.code === "PROVIDER_REAUTH_REQUIRED" ? 409

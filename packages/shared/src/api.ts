@@ -358,7 +358,13 @@ export function encodeSourceIndexState(
     return { kind: "indexing", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
   }
   if (source.activeWorkflowRunId || source.status === "syncing") {
-    return { kind: "queued", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
+    return {
+      kind: "queued",
+      processedNodeCount,
+      pendingFolderCount,
+      recoverable: source.activeWorkflowRunId === null,
+      errorCode: null
+    };
   }
   return { kind: "healthy", processedNodeCount, pendingFolderCount, recoverable: false, errorCode: null };
 }

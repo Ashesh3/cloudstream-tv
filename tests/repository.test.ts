@@ -331,6 +331,73 @@ describe("MemoryRepository domain storage", () => {
     expect(await repo.listChildNodes(null, ["s1"])).toEqual([folder]);
     expect(await repo.getWatchHistory("d1", "n1")).toEqual(history);
   });
+
+  it("atomically re-enables one deterministic root and resets initial source state", async () => {
+    const repo = new MemoryRepository();
+    const source = makeSource({
+      status: "error",
+      deltaCursor: "stale-delta",
+      crawlCheckpoint: {
+        mode: "delta",
+        providerPageCursor: "page-2",
+        processedNodeCount: 12,
+        generation: "old-generation"
+      },
+      activeWorkflowRunId: "old-run",
+      syncGeneration: "old-generation",
+      nextSyncAt: later,
+      leaseOwner: "old-owner",
+      leaseExpiresAt: later,
+      lastSyncErrorCode: "PROVIDER_TIMEOUT"
+    });
+    const disabled = { ...makeRoot(), enabled: false, displayName: "Old name" };
+    await repo.putSource(source);
+    await repo.putRoot(disabled);
+    const root = { ...disabled, id: "random-request-id", displayName: "Family photos", ancestryProviderIds: ["root"] };
+
+    const [first, second] = await Promise.all([
+      repo.enableRootAndResetInitial({ root, sourceId: source.id, resetAt: now }),
+      repo.enableRootAndResetInitial({ root, sourceId: source.id, resetAt: now })
+    ]);
+
+    const expectedId = assignedRootDocumentId("h1", "s1", "provider-root");
+    expect(first).toMatchObject({ id: expectedId, enabled: true, displayName: "Family photos", ancestryProviderIds: ["root"] });
+    expect(second.id).toBe(expectedId);
+    expect(await repo.listRootsForSource(source.id)).toHaveLength(1);
+    expect(await repo.getSource(source.id)).toEqual({
+      ...source,
+      status: "syncing",
+      deltaCursor: null,
+      crawlCheckpoint: null,
+      activeWorkflowRunId: null,
+      syncGeneration: null,
+      nextSyncAt: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      lastSyncErrorCode: null
+    });
+  });
+
+  it("does not clear an active initial lease when a duplicate selection arrives", async () => {
+    const repo = new MemoryRepository();
+    const source = makeSource({
+      status: "syncing",
+      deltaCursor: null,
+      crawlCheckpoint: null,
+      activeWorkflowRunId: "run-1",
+      nextSyncAt: null,
+      leaseOwner: "active-owner",
+      leaseExpiresAt: later,
+      lastSyncErrorCode: null
+    });
+    const root = makeRoot();
+    await repo.putSource(source);
+    await repo.putRoot(root);
+
+    await repo.enableRootAndResetInitial({ root, sourceId: source.id, resetAt: now });
+
+    expect(await repo.getSource(source.id)).toEqual(source);
+  });
 });
 
 describe("Firestore client authentication boundary", () => {
@@ -768,6 +835,31 @@ describe("FirestoreRepository admin management transactions", () => {
     expect(writes).toContain(`update:devices/d1:{"assignedRootIds":["${expectedId}"]}`);
   });
 
+  it("enables the deterministic root and resets its source in one Firestore transaction", async () => {
+    const writes: string[] = [];
+    const source = makeSource({
+      status: "error",
+      deltaCursor: "stale-delta",
+      nextSyncAt: later,
+      lastSyncErrorCode: "RESOURCE_EXHAUSTED"
+    });
+    const firestore = createManagementFirestore({ writes, source });
+    const repo = new FirestoreRepository(firestore);
+
+    const root = await repo.enableRootAndResetInitial({
+      root: { ...makeRoot(), id: "random-root", displayName: "Photos" },
+      sourceId: source.id,
+      resetAt: now
+    });
+
+    const expectedId = assignedRootDocumentId("h1", "s1", "provider-root");
+    expect(root).toMatchObject({ id: expectedId, displayName: "Photos", enabled: true });
+    expect(writes).toContain(`create:roots/${expectedId}`);
+    expect(writes).toContain(
+      "update:sources/s1:{\"status\":\"syncing\",\"deltaCursor\":null,\"crawlCheckpoint\":null,\"activeWorkflowRunId\":null,\"syncGeneration\":null,\"nextSyncAt\":null,\"leaseOwner\":null,\"leaseExpiresAt\":null,\"lastSyncErrorCode\":null}"
+    );
+  });
+
   it("serializes concurrent absent-root creates onto one deterministic document", async () => {
     const fake = createConcurrentRootFirestore();
     const repo = new FirestoreRepository(fake.firestore);
@@ -1133,7 +1225,7 @@ function createConcurrentRootFirestore(): {
   };
 }
 
-function makeSource(): Source {
+function makeSource(overrides: Partial<Source> = {}): Source {
   return {
     id: "s1",
     householdId: "h1",
@@ -1160,6 +1252,7 @@ function makeSource(): Source {
     lastSyncStartedAt: null,
     lastSyncCompletedAt: null,
     lastSyncErrorCode: null,
-    createdAt: now
+    createdAt: now,
+    ...overrides
   };
 }

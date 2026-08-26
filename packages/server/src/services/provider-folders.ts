@@ -1,5 +1,6 @@
 import type {
   AdminProviderFolderPageResponse,
+  AssignedRoot,
   ProviderFolderDto,
   Source
 } from "@cloudframe/shared";
@@ -12,6 +13,7 @@ import type {
 } from "@cloudframe/providers";
 import {
   RepositoryError,
+  assignedRootDocumentId,
   type AppRepository
 } from "../firestore/repository";
 import type { SourceService } from "./sources";
@@ -53,13 +55,28 @@ export interface ProviderFolderService {
     breadcrumbs: ProviderFolderDto[];
     ancestryProviderIds: string[];
   }>;
+  createRootFromProvider(input: {
+    householdId: string;
+    sourceId: string;
+    providerNodeId: string;
+    displayName?: string;
+  }): Promise<{ root: AssignedRoot; started: boolean; runId?: string }>;
 }
 
 export function createProviderFolderService(dependencies: {
   repository: AppRepository;
   providers: ProviderRegistry;
   sourceService: Pick<SourceService, "getUsableCredentials">;
+  indexing: {
+    startSource(sourceId: string, mode: "initial"): Promise<{
+      started: boolean;
+      sourceId: string;
+      runId?: string;
+    }>;
+  };
+  now?: () => Date;
 }): ProviderFolderService {
+  const now = dependencies.now ?? (() => new Date());
   async function requireContext(householdId: string, sourceId: string) {
     const source = await dependencies.repository.getSource(sourceId);
     if (!source || source.householdId !== householdId || source.status === "disabled") {
@@ -122,6 +139,41 @@ export function createProviderFolderService(dependencies: {
       : resolveWithContext(context, input.providerNodeId);
   }
 
+  async function createRootFromProvider(input: {
+    householdId: string;
+    sourceId: string;
+    providerNodeId: string;
+    displayName?: string;
+  }) {
+    const resolved = await service.resolveAncestry(input);
+    const createdAt = now();
+    const root: AssignedRoot = {
+      id: assignedRootDocumentId(input.householdId, input.sourceId, input.providerNodeId),
+      householdId: input.householdId,
+      sourceId: input.sourceId,
+      providerNodeId: input.providerNodeId,
+      displayName: input.displayName?.trim().slice(0, 120) || resolved.current.name,
+      ancestryProviderIds: [...resolved.ancestryProviderIds],
+      enabled: true,
+      createdAt
+    };
+    const saved = await dependencies.repository.enableRootAndResetInitial({
+      root,
+      sourceId: input.sourceId,
+      resetAt: createdAt
+    });
+    try {
+      const launch = await dependencies.indexing.startSource(input.sourceId, "initial");
+      return {
+        root: saved,
+        started: launch.started,
+        ...(launch.runId ? { runId: launch.runId } : {})
+      };
+    } catch (error) {
+      throw new ProviderFolderLaunchError(error);
+    }
+  }
+
   async function resolveProviderRoot(context: ProviderContext) {
     const root = await context.adapter.getRoot(context.credentials);
     if (root.providerNodeId !== context.source.providerRootId) {
@@ -172,7 +224,19 @@ export function createProviderFolderService(dependencies: {
     throw outsideSource();
   }
 
-  return { browse, resolveAncestry };
+  const service: ProviderFolderService = {
+    browse,
+    resolveAncestry,
+    createRootFromProvider
+  };
+  return service;
+}
+
+export class ProviderFolderLaunchError extends Error {
+  constructor(readonly cause: unknown) {
+    super("The folder was selected, but indexing could not start. Retry indexing.");
+    this.name = "ProviderFolderLaunchError";
+  }
 }
 
 interface ProviderContext {

@@ -203,6 +203,11 @@ export interface AppRepository {
   releaseSyncLease(sourceId: string, owner: string): Promise<boolean>;
   putRoot(root: AssignedRoot): Promise<void>;
   createOrEnableRoot(root: AssignedRoot): Promise<AssignedRoot>;
+  enableRootAndResetInitial(input: {
+    root: AssignedRoot;
+    sourceId: string;
+    resetAt: Date;
+  }): Promise<AssignedRoot>;
   disableRoot(input: DisableRootInput): Promise<SourceImpact>;
   getRoot(id: string): Promise<AssignedRoot | null>;
   listRootsForSource(sourceId: string): Promise<AssignedRoot[]>;
@@ -482,6 +487,69 @@ export class FirestoreRepository implements AppRepository {
       const deterministic = { ...value, id: deterministicId };
       transaction.create(deterministicRef, deterministic);
       return deterministic;
+    });
+  }
+  async enableRootAndResetInitial(input: {
+    root: AssignedRoot;
+    sourceId: string;
+    resetAt: Date;
+  }): Promise<AssignedRoot> {
+    if (input.root.sourceId !== input.sourceId) {
+      throw new RepositoryError("ROOT_CONFLICT", "Root source identity conflicts with the requested source");
+    }
+    return this.firestore.runTransaction(async transaction => {
+      const value = input.root;
+      const sourceRef = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+      const deterministicId = assignedRootDocumentId(value.householdId, value.sourceId, value.providerNodeId);
+      const deterministicRef = this.firestore.collection(COLLECTIONS.roots).doc(deterministicId);
+      const duplicateQuery = this.firestore.collection(COLLECTIONS.roots)
+        .where("sourceId", "==", value.sourceId)
+        .where("providerNodeId", "==", value.providerNodeId)
+        .limit(1);
+      const [sourceSnapshot, deterministicSnapshot, duplicateSnapshots, deviceSnapshots] = await Promise.all([
+        transaction.get(sourceRef),
+        transaction.get(deterministicRef),
+        transaction.get(duplicateQuery),
+        transaction.get(this.firestore.collection(COLLECTIONS.devices).where("householdId", "==", value.householdId))
+      ]);
+      const source = sourceSnapshot.exists
+        ? decodeSourceDocument(sourceSnapshot.id, sourceSnapshot.data())
+        : null;
+      if (!source || source.householdId !== value.householdId || source.status === "disabled") {
+        throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
+      }
+
+      let enabled: AssignedRoot;
+      if (deterministicSnapshot.exists) {
+        const current = decodeFirestoreDocument<AssignedRoot>(deterministicSnapshot.id, deterministicSnapshot.data());
+        if (current.householdId !== value.householdId || current.sourceId !== value.sourceId || current.providerNodeId !== value.providerNodeId) {
+          throw new RepositoryError("ROOT_CONFLICT", "Root identity conflicts with existing data");
+        }
+        enabled = { ...current, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true };
+        transaction.set(deterministicRef, enabled);
+      } else {
+        const duplicate = duplicateSnapshots.docs[0];
+        if (duplicate) {
+          const current = decodeFirestoreDocument<AssignedRoot>(duplicate.id, duplicate.data());
+          if (current.householdId !== value.householdId) throw new RepositoryError("ROOT_CONFLICT", "Root conflicts with another household");
+          enabled = { ...current, id: deterministicId, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true };
+          transaction.create(deterministicRef, enabled);
+          transaction.delete(duplicate.ref);
+          for (const snapshot of deviceSnapshots.docs) {
+            const device = decodeFirestoreDocument<Device>(snapshot.id, snapshot.data());
+            if (device.assignedRootIds.includes(current.id)) {
+              transaction.update(snapshot.ref, { assignedRootIds: device.assignedRootIds.map(id => id === current.id ? deterministicId : id) });
+            }
+          }
+        } else {
+          enabled = { ...value, id: deterministicId, enabled: true, createdAt: input.resetAt };
+          transaction.create(deterministicRef, enabled);
+        }
+      }
+      if (!hasActiveInitialLaunch(source, input.resetAt)) {
+        transaction.update(sourceRef, initialSourceReset());
+      }
+      return enabled;
     });
   }
   async disableRoot(input: DisableRootInput): Promise<SourceImpact> {
@@ -1114,6 +1182,44 @@ export class FirestoreRepository implements AppRepository {
 
 function sameEncryptedSecret(left: Source["encryptedRefreshToken"], right: Source["encryptedRefreshToken"]): boolean {
   return left.keyVersion === right.keyVersion && left.iv === right.iv && left.ciphertext === right.ciphertext && left.authTag === right.authTag;
+}
+
+function initialSourceReset(): Pick<
+  Source,
+  | "status"
+  | "deltaCursor"
+  | "crawlCheckpoint"
+  | "activeWorkflowRunId"
+  | "syncGeneration"
+  | "nextSyncAt"
+  | "leaseOwner"
+  | "leaseExpiresAt"
+  | "lastSyncErrorCode"
+> {
+  return {
+    status: "syncing",
+    deltaCursor: null,
+    crawlCheckpoint: null,
+    activeWorkflowRunId: null,
+    syncGeneration: null,
+    nextSyncAt: null,
+    leaseOwner: null,
+    leaseExpiresAt: null,
+    lastSyncErrorCode: null
+  };
+}
+
+function hasActiveInitialLaunch(source: Source, resetAt: Date): boolean {
+  return (
+    source.status === "syncing" &&
+    source.deltaCursor === null &&
+    source.crawlCheckpoint === null &&
+    source.nextSyncAt === null &&
+    source.lastSyncErrorCode === null &&
+    source.leaseOwner !== null &&
+    source.leaseExpiresAt !== null &&
+    source.leaseExpiresAt > resetAt
+  );
 }
 
 export type FirestoreAtomicWriter = Transaction | WriteBatch;

@@ -74,6 +74,6 @@ function createRequestApp(request: Request) {
   const mediaUrls = createMediaUrlService({ repository, browse, providers, sourceService });
   const indexing = createIndexingService({ repository, workflowLauncher, householdId: required("HOUSEHOLD_ID"), cronSecret: required("CRON_SECRET") });
   const oauth = createOAuthService({ repository, providers, keyring: { currentVersion: tokenKeyVersion, keys: { [tokenKeyVersion]: tokenKey } }, now: () => new Date(), createId: () => crypto.randomUUID() });
-  const providerFolders = createProviderFolderService({ repository, providers, sourceService });
+  const providerFolders = createProviderFolderService({ repository, providers, sourceService, indexing });
   return createApiApp({ repository, browse, mediaUrls, indexing, oauth, providerFolders, config: { householdId: required("HOUSEHOLD_ID"), adminInitialPassphrase: process.env.ADMIN_INITIAL_PASSPHRASE, passphrasePepper: required("ADMIN_PASSPHRASE_PEPPER"), csrfSecret: required("CSRF_SECRET"), allowedOrigin: appOrigin } });
 }

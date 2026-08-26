@@ -64,7 +64,8 @@ describe("API structured logging", () => {
             retryAfterSeconds: 19
           });
         },
-        resolveAncestry: async () => { throw new Error("unused"); }
+        resolveAncestry: async () => { throw new Error("unused"); },
+        createRootFromProvider: async () => { throw new Error("unused"); }
       },
       config: {
         householdId: harness.householdId,

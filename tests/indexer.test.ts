@@ -217,6 +217,36 @@ describe("bounded resumable indexing", () => {
     expect(await repository.getSource("s1")).toMatchObject({ status: "healthy", activeWorkflowRunId: null, leaseOwner: null });
   });
 
+  it("keeps a selected root in recoverable queued state when workflow launch fails", async () => {
+    const repository = await seededRepository();
+    await repository.enableRootAndResetInitial({
+      root: root(),
+      sourceId: "s1",
+      resetAt: now
+    });
+    const indexing = createIndexingService({
+      repository,
+      workflowLauncher: {
+        async start() { throw new Error("workflow unavailable"); }
+      },
+      householdId: "h1",
+      cronSecret: "cron",
+      now: () => now,
+      createOwner: () => "failed-owner"
+    });
+
+    await expect(indexing.startSource("s1", "initial")).rejects.toThrow("workflow unavailable");
+    expect(await repository.getSource("s1")).toMatchObject({
+      status: "syncing",
+      deltaCursor: null,
+      crawlCheckpoint: null,
+      activeWorkflowRunId: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      lastSyncErrorCode: null
+    });
+  });
+
   it("rejects invalid cron secrets without leasing work", async () => {
     const repository = await seededRepository();
     const indexing = createIndexingService({
