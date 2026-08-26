@@ -4,6 +4,8 @@ import {
   MAX_INDEX_BATCH_SIZE,
   createInjectedWorkflowLauncher,
   createIndexOrchestrator,
+  createWorkflowApiLauncher,
+  createWorkflowStep,
   deterministicNodeId,
   runIndexBatch,
   runReconciliationBatch
@@ -238,8 +240,32 @@ describe("bounded resumable indexing", () => {
     expect(launches).toEqual([["s1", "initial"]]);
   });
 
+  it("starts transformed workflows through workflow/api metadata", async () => {
+    const calls: Array<{ workflowId: string; args: unknown[] }> = [];
+    const launcher = createWorkflowApiLauncher("workflow//test//syncSourceWorkflow", async (workflow, args) => {
+      calls.push({ workflowId: workflow.workflowId, args });
+      return { runId: "wrun-1" };
+    });
+    await expect(launcher.start("s1", "delta", "lease-1")).resolves.toEqual({ runId: "wrun-1" });
+    expect(calls).toEqual([{
+      workflowId: expect.stringContaining("syncSourceWorkflow"),
+      args: ["s1", "delta", "lease-1"]
+    }]);
+  });
+
+  it("creates each durable step runner at the step execution boundary", async () => {
+    let factories = 0;
+    const step = createWorkflowStep(() => {
+      factories += 1;
+      return { runNext: async () => ({ complete: factories === 2 }) };
+    });
+    await expect(step("s1", "initial", "lease-1")).resolves.toEqual({ complete: false });
+    await expect(step("s1", "initial", "lease-1")).resolves.toEqual({ complete: true });
+    expect(factories).toBe(2);
+  });
+
   it("contains transformable workflow and step directives for Task 9 integration", async () => {
-    const source = await import("node:fs/promises").then(fs => fs.readFile("packages/indexer/src/workflow.ts", "utf8"));
+    const source = await import("node:fs/promises").then(fs => fs.readFile("workflows/sync-source.ts", "utf8"));
     expect(source).toContain('"use workflow"');
     expect(source).toContain('"use step"');
     expect(source).toMatch(/syncSourceWorkflow\(\s*sourceId: string/);

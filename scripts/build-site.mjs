@@ -11,3 +11,6 @@ await mkdir(resolve(output, "admin"), { recursive: true });
 await cp(resolve(root, "apps/admin/dist"), resolve(output, "admin"), {
   recursive: true
 });
+if (process.env.CLOUDFRAME_E2E_BUILD === "1") {
+  await cp(resolve(root, "e2e/fixtures/video.mp4"), resolve(output, "e2e-video.mp4"));
+}

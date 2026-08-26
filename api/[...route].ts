@@ -7,7 +7,6 @@ import {
   createMediaUrlService,
   createOAuthService,
   createSourceService,
-  IndexingUnavailableError
 } from "@cloudframe/server";
 import {
   createGoogleDriveAdapter,
@@ -15,10 +14,11 @@ import {
   createProviderRegistry
 } from "@cloudframe/providers";
 import {
-  configureSyncSourceWorkflow,
-  createIndexOrchestrator,
-  createInjectedWorkflowLauncher
+  createWorkflowApiLauncher,
 } from "@cloudframe/indexer";
+import { start as startWorkflow } from "workflow/api";
+
+declare const __SYNC_SOURCE_WORKFLOW_ID__: string;
 
 function required(name: string): string {
   const value = process.env[name];
@@ -71,16 +71,9 @@ const mediaUrls = createMediaUrlService({
   providers,
   sourceService
 });
-configureSyncSourceWorkflow(() => createIndexOrchestrator({
-  repository,
-  providers,
-  getCredentials: (sourceId, householdId) =>
-    sourceService.getUsableCredentials(sourceId, householdId),
-  now: () => new Date()
-}));
-const workflowLauncher = createInjectedWorkflowLauncher(async () => {
-  throw new IndexingUnavailableError();
-});
+const workflowLauncher = createWorkflowApiLauncher(__SYNC_SOURCE_WORKFLOW_ID__, (workflow, args) =>
+  startWorkflow(workflow, args)
+);
 const indexing = createIndexingService({
   repository,
   workflowLauncher,

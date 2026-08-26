@@ -55,3 +55,5 @@ firebase-adminsdk-*.json
 next-env.d.ts
 
 .vercel
+/.swc
+/.tmp-workflow-client

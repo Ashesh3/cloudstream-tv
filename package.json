@@ -9,6 +9,8 @@
   ],
   "scripts": {
     "build": "npm run build -w @cloudframe/tv && npm run build -w @cloudframe/admin && node scripts/build-site.mjs",
+    "build:e2e": "cross-env CLOUDFRAME_E2E_BUILD=1 npm run build",
+    "build:vercel": "npm run build && node scripts/build-vercel.mjs",
     "dev:tv": "npm run dev -w @cloudframe/tv",
     "dev:admin": "npm run dev -w @cloudframe/admin",
     "lint": "eslint .",
@@ -24,7 +26,8 @@
     "@google-cloud/firestore": "^9.0.0",
     "@node-rs/argon2": "^2.1.0",
     "@vercel/oidc": "^3.8.5",
-    "workflow": "^4.8.5",
+    "@workflow/builders": "4.1.10",
+    "workflow": "4.8.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -36,11 +39,17 @@
     "@types/node": "^22.19.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "cross-env": "^10.1.0",
+    "esbuild": "^0.28.2",
     "eslint": "^9.39.1",
     "jsdom": "^29.0.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4",
     "vitest": "^4.1.11"
+  },
+  "optionalDependencies": {
+    "@node-rs/argon2-linux-arm64-gnu": "2.1.0",
+    "@node-rs/argon2-linux-x64-gnu": "2.1.0"
   },
   "engines": {
     "node": ">=22"

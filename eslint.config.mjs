@@ -10,11 +10,24 @@ export default tseslint.config(
       ".superpowers/**",
       ".vercel/**",
       ".next/**",
+      "playwright-report/**",
+      "test-results/**",
       "src/**",
       "tests/**/*.mjs"
     ]
   },
   js.configs.recommended,
+  {
+    files: ["scripts/*.mjs"],
+    languageOptions: {
+      globals: {
+        Buffer: "readonly",
+        Response: "readonly",
+        console: "readonly",
+        process: "readonly"
+      }
+    }
+  },
   ...tseslint.configs.recommended,
   {
     files: ["**/*.ts", "**/*.tsx"],

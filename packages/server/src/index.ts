@@ -16,6 +16,7 @@ export * from "./services/oauth";
 export * from "./services/browse";
 export * from "./services/media-urls";
 export * from "./services/indexing";
+export * from "./runtime/sync-runner";
 export type {
   ProviderAdapter,
   ProviderCredentials,

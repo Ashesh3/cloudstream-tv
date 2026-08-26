@@ -3,6 +3,9 @@ import preact from "@preact/preset-vite";
 import { defineConfig } from "vite";
 
 export default defineConfig({
+  define: {
+    __CLOUDFRAME_E2E__: JSON.stringify(process.env.CLOUDFRAME_E2E_BUILD === "1")
+  },
   plugins: [
     preact(),
     legacy({

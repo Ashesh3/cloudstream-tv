@@ -1,131 +1,93 @@
-# CloudStream TV
+# Cloudframe
 
-> Deployment note: the `/api/internal/sync-due-sources` cron runs every 15 minutes and requires Vercel Pro.
+Cloudframe is a private household cloud-media browser built for televisions. The TV app is read-only and optimized for LG webOS 5+ (Chromium 68), while a separate mobile-first admin app controls enrollment, sources, roots, and household settings.
 
-A Next.js web app for smart TVs that connects to Google Drive and OneDrive, displays videos in a Netflix-style dark cinematic UI optimized for TV remote control navigation, and streams video directly from cloud CDNs with zero-buffer playback.
+## What it does
 
-<img width="1326" height="707" alt="image" src="https://github.com/user-attachments/assets/7bd4c378-eca9-4885-a145-43eb54cb6bfe" />
-<img width="1157" height="673" alt="image" src="https://github.com/user-attachments/assets/0e9fe562-6fef-41cd-b48c-1015ad043899" />
-<img width="595" height="487" alt="image" src="https://github.com/user-attachments/assets/beca2bf5-a220-4b00-9048-1c299cf4dea1" />
-<img width="1166" height="667" alt="image" src="https://github.com/user-attachments/assets/4b141d49-d6a2-45d5-bae9-d783af70d897" />
+- Connects Google Drive and OneDrive globally for one household.
+- Lets an administrator approve named TVs and assign specific folder roots.
+- Browses an indexed, folder-only library without provider round trips.
+- Opens images and videos in one remote-controlled fullscreen viewer.
+- Streams provider bytes directly to the browser; Vercel and Firebase never proxy media.
+- Stores metadata, sessions, settings, roots, and watch history in Firestore.
+- Uses secure rolling cookies only. The apps do not persist state in Web Storage, IndexedDB, Cache Storage, or service workers.
 
+## Repository
 
+```text
+apps/tv/        Preact TV app and Chromium 68 legacy build
+apps/admin/     React household admin app
+packages/       Shared contracts, server domain, providers, indexer, TV core
+api/            Same-origin Vercel Web API function
+workflows/      Vercel Workflow entrypoints and durable steps
+scripts/        Build, seed, migration, and compatibility tools
+e2e/            Synthetic Playwright acceptance journeys and screenshots
+```
 
-## Features
+## Local setup
 
-- **Cloud storage connections** -- Browse and play videos from Google Drive and OneDrive
-- **TV-optimized UI** -- Dark cinematic interface designed for large screens
-- **D-pad navigation** -- Full keyboard and remote control support with spatial focus management
-- **Direct CDN streaming** -- Videos stream straight from Google/Microsoft CDNs for zero-buffer playback
-- **Phone-based setup via QR code** -- Scan a code on your TV to complete setup from your phone
-- **Watch history and resume** -- Pick up where you left off across sessions
-- **Access code protection** -- Optional site-wide access code to restrict usage
+Requirements: Node.js 22+ (Vercel currently uses Node 24), npm, Java 21+ for the Firestore emulator, and Firebase CLI.
 
-## Tech Stack
-
-- [Next.js 16](https://nextjs.org/) with React 19
-- [TypeScript](https://www.typescriptlang.org/)
-- [Tailwind CSS v4](https://tailwindcss.com/)
-- [Framer Motion](https://www.framer.com/motion/) for animations
-- [Video.js](https://videojs.com/) for video playback
-- [Vercel KV](https://vercel.com/docs/storage/vercel-kv) for token and session storage
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18+
-- npm
-- A Vercel account (for KV storage)
-
-### Clone and Install
-
-```bash
-git clone <your-repo-url>
-cd tv-video-ui
+```powershell
 npm install
+Copy-Item .env.example .env.local
+firebase emulators:start --only firestore
+npm run dev:tv
+npm run dev:admin
 ```
 
-### Environment Variables
+Populate `.env.local` with development-only values. Never use a service-account key. For emulator work set `FIRESTORE_EMULATOR_HOST=127.0.0.1:8080`; for Vercel use OIDC Workload Identity Federation.
 
-Copy the example file and fill in your values:
+## Build and test
 
-```bash
-cp .env.example .env.local
+```powershell
+npm test
+npm run typecheck
+npm run lint
+npm run build
+node scripts/check-tv-bundle.mjs
+npm run build:vercel
+npx playwright test
 ```
 
-| Variable | Description |
-|---|---|
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID (server-side) |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
-| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Google OAuth client ID (client-side, used for OAuth redirects on the setup page) |
-| `ONEDRIVE_CLIENT_ID` | Microsoft/OneDrive OAuth client ID (server-side) |
-| `ONEDRIVE_CLIENT_SECRET` | Microsoft/OneDrive OAuth client secret |
-| `NEXT_PUBLIC_ONEDRIVE_CLIENT_ID` | OneDrive OAuth client ID (client-side, used for OAuth redirects on the setup page) |
-| `KV_REST_API_URL` | Vercel KV REST API endpoint |
-| `KV_REST_API_TOKEN` | Vercel KV REST API token |
-| `NEXT_PUBLIC_APP_URL` | Public app URL (default: `http://localhost:3000`) |
-| `ACCESS_CODE` | Optional site-wide access code; leave empty to disable |
+`build:vercel` assembles Build Output API v3 with both static SPAs, the API Web function, and transformed Workflow SDK flow/step/webhook functions. The exact generated workflow ID is injected into the API bundle from the manifest; it is never hand-maintained.
 
-### Google Cloud Console Setup
+The E2E build enables synthetic APIs only when `CLOUDFRAME_E2E_BUILD=1`. Ordinary production builds replace the test injection branch with `false` and do not expose the hook.
 
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (or select an existing one).
-3. Navigate to **APIs & Services > Credentials** and create an OAuth 2.0 Client ID.
-4. Set the authorized redirect URI to `<your-app-url>/api/auth/google/callback`.
-5. Enable the **Google Drive API** under **APIs & Services > Library**.
-6. Under **OAuth consent screen**, add the `drive.readonly` scope.
-7. Copy the client ID and client secret into your `.env.local`.
+## Development seed
 
-### Microsoft Azure Setup
+`ADMIN_INITIAL_PASSPHRASE` must be a long, non-default value of at least 16 characters.
 
-1. Go to the [Azure Portal](https://portal.azure.com/) and navigate to **App registrations**.
-2. Register a new application.
-3. Under **Authentication**, add a redirect URI: `<your-app-url>/api/auth/onedrive/callback`.
-4. Under **API permissions**, add **Microsoft Graph > Files.Read.All** (delegated).
-5. Under **Certificates & secrets**, create a new client secret.
-6. Copy the Application (client) ID and client secret into your `.env.local`.
-
-### Vercel KV Setup
-
-1. In your [Vercel dashboard](https://vercel.com/dashboard), go to **Storage** and create a new KV database.
-2. Copy the `KV_REST_API_URL` and `KV_REST_API_TOKEN` into your `.env.local`.
-
-### Run Locally
-
-```bash
-npm run dev
+```powershell
+node scripts/seed-dev.mjs --dry-run
+node scripts/seed-dev.mjs
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+The seed is idempotent: it creates the household only when absent and verifies the supplied passphrase if the household already exists. The generated dev bootstrap passphrase is handed off outside git at `C:\Users\Ashesh\.cloudframe-tv-dev-bootstrap.txt`; sign in once, rotate it in **Settings**, then remove that local handoff file.
 
 ## Deployment
 
-Deploy to Vercel:
+The checked-in Vercel cron is daily (`02:00 UTC`) because the current project is on Hobby. Manual **Sync now** remains available. The approved 15-minute reconciliation schedule requires Vercel Pro or an equivalent external scheduler.
 
-```bash
-vercel deploy
+Detailed Firebase, WIF, OAuth, deployment, migration, rollback, and observability procedures are in [docs/operations/firebase-vercel-setup.md](docs/operations/firebase-vercel-setup.md). Real LG webOS acceptance is in [docs/operations/webos-acceptance.md](docs/operations/webos-acceptance.md).
+
+## Security boundaries
+
+- Firestore browser rules deny all reads and writes.
+- Only the server talks to Firestore and provider APIs.
+- Provider refresh/access tokens are AES-256-GCM encrypted at rest.
+- Temporary provider URLs are no-store/no-referrer and never persisted or logged.
+- TV authorization revalidates the session, device, assigned root, source, and current ancestry on every browse/media request.
+- Vercel OIDC impersonates a dedicated least-privilege Google service account; no user-managed keys exist.
+- Workflow SDK 4.8.5 is exact-pinned. Its stable 4.x runtime cannot safely use queue namespaces, so `WORKFLOW_QUEUE_NAMESPACE` must remain absent and the default `__wkf_*` topics are contract-tested.
+
+## Migration
+
+The legacy Vercel Blob migration is dry-run by default:
+
+```powershell
+node scripts/migrate-vercel-blob.mjs
+node scripts/migrate-vercel-blob.mjs --apply
 ```
 
-Set all environment variables in the Vercel dashboard under your project's **Settings > Environment Variables**. Make sure `NEXT_PUBLIC_APP_URL` points to your production URL and that your OAuth redirect URIs match.
-
-## Usage
-
-1. Set an `ACCESS_CODE` in your environment variables if you want to restrict access.
-2. Open the app on your TV browser.
-3. Scan the QR code displayed on the TV with your phone.
-4. On your phone, connect your Google Drive and/or OneDrive accounts through the setup flow.
-5. Browse your video library on the TV using the remote control.
-6. Select a video to start streaming. Playback resumes from where you left off.
-
-## Architecture
-
-CloudStream TV separates concerns between server and client to keep credentials secure and playback fast:
-
-1. **Server-side listing** -- The Next.js backend uses stored OAuth tokens to fetch folder and file listings from Google Drive and OneDrive APIs. Tokens are stored in Vercel KV and never sent to the client.
-2. **Client-side streaming** -- When a user selects a video, the server returns a short-lived CDN URL. The client streams video directly from Google or Microsoft CDNs, bypassing the application server entirely.
-3. **Token isolation** -- OAuth tokens and secrets remain on the server. The client only receives opaque session identifiers and temporary playback URLs.
-
-## License
-
-[MIT](LICENSE)
+It reads legacy aggregate and split records, honors tombstones, prefers split token records, redacts all values, and never migrates browser sessions. Legacy sources have no verifiable stable provider account ID, so they are intentionally imported as `reauth-required` with disabled roots until a verified reconnect.

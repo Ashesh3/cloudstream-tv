@@ -1,0 +1,6 @@
+{
+  "projects": {
+    "default": "cloudframe-tv-dev",
+    "dev": "cloudframe-tv-dev"
+  }
+}

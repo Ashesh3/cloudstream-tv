@@ -16,35 +16,17 @@ export interface SyncWorkflowRunner {
   ): Promise<{ complete: boolean }>;
 }
 
-let createRunner: (() => SyncWorkflowRunner) | null = null;
+export type WorkflowStep = (
+  sourceId: string,
+  mode: SyncMode,
+  leaseOwner: string
+) => Promise<{ complete: boolean }>;
 
-export function configureSyncSourceWorkflow(
+export function createWorkflowStep(
   factory: () => SyncWorkflowRunner
-): void {
-  createRunner = factory;
-}
-
-export async function syncSourceWorkflow(
-  sourceId: string,
-  mode: SyncMode,
-  leaseOwner: string
-): Promise<void> {
-  "use workflow";
-  while (!(await runSyncStep(sourceId, mode, leaseOwner)).complete) {
-    // Each loop is one bounded provider page persisted by the injected runner.
-  }
-}
-
-async function runSyncStep(
-  sourceId: string,
-  mode: SyncMode,
-  leaseOwner: string
-) {
-  "use step";
-  if (!createRunner) {
-    throw new Error("Sync workflow runner is not configured.");
-  }
-  return createRunner().runNext(sourceId, mode, leaseOwner);
+): WorkflowStep {
+  return (sourceId, mode, leaseOwner) =>
+    factory().runNext(sourceId, mode, leaseOwner);
 }
 
 export function createInjectedWorkflowLauncher(
@@ -55,4 +37,25 @@ export function createInjectedWorkflowLauncher(
   ) => Promise<{ runId: string }>
 ): WorkflowLauncher {
   return { start: launch };
+}
+
+export interface WorkflowStartApi {
+  (
+    workflow: { workflowId: string },
+    args: unknown[]
+  ): Promise<{ runId: string }>;
+}
+
+export function createWorkflowApiLauncher(
+  workflowId: string,
+  startWorkflow: WorkflowStartApi
+): WorkflowLauncher {
+  if (!workflowId.includes("syncSourceWorkflow")) {
+    throw new Error("Sync workflow metadata is invalid");
+  }
+  return {
+    start(sourceId, mode, leaseOwner) {
+      return startWorkflow({ workflowId }, [sourceId, mode, leaseOwner]);
+    }
+  };
 }
