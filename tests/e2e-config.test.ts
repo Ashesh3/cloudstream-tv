@@ -21,6 +21,13 @@ describe("browser acceptance harness", () => {
     expect(source).toContain('CLOUDFRAME_E2E_BUILD: "1"');
   });
 
+  it("runs the source workbench journey in both responsive admin projects", async () => {
+    const source = await readFile("playwright.config.ts", "utf8");
+    const adminProjects = source.split('name: "admin-').slice(1);
+    expect(adminProjects).toHaveLength(2);
+    expect(adminProjects.every(project => /source-workbench/.test(project))).toBe(true);
+  });
+
   it("covers enrollment, browse/viewer, reassign, revoke, and admin responsive acceptance", async () => {
     const enrollment = await readFile("e2e/enrollment.spec.ts", "utf8");
     const browse = await readFile("e2e/browse-viewer.spec.ts", "utf8");
@@ -41,5 +48,13 @@ describe("browser acceptance harness", () => {
     expect(source).toContain("/api/tv/home");
     expect(source).toContain("assignedRootIds");
     expect(source).toContain('method: "DELETE"');
+  });
+
+  it("covers live nested folders, index recovery, responsive composition, and removal impact", async () => {
+    const source = await readFile("e2e/source-workbench.spec.ts", "utf8");
+    expect(source).toMatch(/My Drive[\s\S]*Photos[\s\S]*Trips/);
+    expect(source).toMatch(/queued[\s\S]*indexing[\s\S]*quota-exhausted/);
+    expect(source).toMatch(/admin-mobile[\s\S]*boundingBox/);
+    expect(source).toMatch(/removal impact[\s\S]*Remove Trips/i);
   });
 });

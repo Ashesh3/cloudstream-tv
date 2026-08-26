@@ -4,8 +4,8 @@ import { installTvFixture } from "./fixtures";
 test("folder browse opens a unified image and video viewer", async ({ page }) => {
   await installTvFixture(page, "ready");
   await page.goto("/");
-  await expect(page.getByText("Family Trips")).toBeVisible();
-  await page.getByText("Family Trips").click();
+  await expect(page.getByRole("button", { name: "Family Trips, program" })).toBeVisible();
+  await page.getByRole("button", { name: "Family Trips, program" }).click();
   await expect(page.getByText("Sunset.jpg")).toBeVisible();
   await page.getByText("Sunset.jpg").click();
   await expect(page.getByRole("img", { name: "Sunset.jpg" })).toBeVisible();
@@ -17,7 +17,7 @@ test("folder browse opens a unified image and video viewer", async ({ page }) =>
 test("viewer saves and restores a nonzero video position", async ({ page }) => {
   await installTvFixture(page, "ready");
   await page.goto("/");
-  await page.getByText("Family Trips").click();
+  await page.getByRole("button", { name: "Family Trips, program" }).click();
   await page.getByText("Lake.mp4").click();
   const video = page.getByLabel("Playing Lake.mp4");
   await expect(video).toBeVisible();
