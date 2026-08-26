@@ -123,6 +123,16 @@ describe("admin management HTTP API", () => {
     expect(wrong.status).toBe(401);
     await expect(wrong.json()).resolves.toMatchObject({ code: "INVALID_CREDENTIALS" });
 
+    const invalidCurrent = await harness.app(
+      jsonRequest(
+        "/api/admin/settings/passphrase",
+        "POST",
+        { currentPassphrase: "short", newPassphrase: NEW_PASSPHRASE },
+        mutationHeaders(harness.origin, admin)
+      )
+    );
+    expect(invalidCurrent.status).toBe(400);
+
     const short = await harness.app(
       jsonRequest(
         "/api/admin/settings/passphrase",
@@ -318,6 +328,15 @@ describe("admin management HTTP API", () => {
       providerNodeId: "provider-folder",
       enabled: true
     });
+    await harness.repository.putDevice(makeDevice(harness.householdId, harness.now, rootId));
+
+    const impact = await app(
+      jsonRequest(`/api/admin/roots/${rootId}/impact`, "GET", undefined, admin.headers)
+    );
+    expect(impact.status).toBe(200);
+    await expect(impact.json()).resolves.toMatchObject({
+      data: { roots: [{ id: rootId }], devices: [{ id: "device-1" }] }
+    });
 
     const thumbnails = await app(
       jsonRequest(
@@ -346,6 +365,7 @@ describe("admin management HTTP API", () => {
     );
     expect(removed.status).toBe(200);
     expect(await harness.repository.getRoot(rootId)).toMatchObject({ enabled: false });
+    expect(await harness.repository.getDevice("device-1")).toMatchObject({ assignedRootIds: [] });
   });
 
   it("re-enables one unique root under concurrent creates and records current provider ancestry", async () => {

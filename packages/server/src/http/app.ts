@@ -192,6 +192,11 @@ async function routeRequest(
     requireMethod(request, "DELETE");
     return removeSource(request, dependencies, now, decodeURIComponent(sourceMatch[1]!));
   }
+  const rootImpactMatch = /^\/api\/admin\/roots\/([^/]+)\/impact$/.exec(path);
+  if (rootImpactMatch) {
+    requireMethod(request, "GET");
+    return rootImpact(request, dependencies, now, decodeURIComponent(rootImpactMatch[1]!));
+  }
   const rootMatch = /^\/api\/admin\/roots\/([^/]+)$/.exec(path);
   if (rootMatch) {
     requireMethod(request, "DELETE");
@@ -350,7 +355,7 @@ async function rotatePassphrase(request: Request, dependencies: ApiAppDependenci
   verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
   await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
   const body = await readJsonObject(request);
-  if (typeof body.currentPassphrase !== "string" || typeof body.newPassphrase !== "string" || body.newPassphrase.length < 16 || body.newPassphrase.length > 1024) {
+  if (typeof body.currentPassphrase !== "string" || typeof body.newPassphrase !== "string" || body.currentPassphrase.length < 16 || body.currentPassphrase.length > 1024 || body.newPassphrase.length < 16 || body.newPassphrase.length > 1024) {
     throw new HttpError(400, "INVALID_PASSPHRASE", "The passphrase is invalid.");
   }
   if (!(await verifyPassphrase(household.adminPassphraseHash, body.currentPassphrase, dependencies.config.passphrasePepper))) {
@@ -479,6 +484,14 @@ async function removeRoot(request: Request, dependencies: ApiAppDependencies, no
   if (body.confirm !== true) throw new HttpError(400, "CONFIRMATION_REQUIRED", "Confirmation is required.");
   const impact = await dependencies.repository.disableRoot({ householdId: dependencies.config.householdId, rootId });
   return ok({ removed: true, roots: impact.roots.map(encodeAssignedRootDto), devices: impact.devices.map(encodeDeviceDto) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+}
+
+async function rootImpact(request: Request, dependencies: ApiAppDependencies, now: Date, rootId: string) {
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  const root = await dependencies.repository.getRoot(rootId);
+  if (!root || root.householdId !== dependencies.config.householdId) throw new HttpError(404, "ROOT_NOT_FOUND", "Root not found.");
+  const devices = (await dependencies.repository.listDevices(dependencies.config.householdId)).filter(device => device.assignedRootIds.includes(root.id));
+  return ok({ roots: [encodeAssignedRootDto(root)], devices: devices.map(encodeDeviceDto) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
 }
 
 async function adminThumbnailUrls(request: Request, dependencies: ApiAppDependencies, now: Date) {
