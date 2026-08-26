@@ -8,12 +8,14 @@ export default defineProject({
   root: adminRoot,
   resolve: {
     alias: {
+      "@": `${adminRoot}src`,
       "@cloudframe/shared": `${repoRoot}packages/shared/src/index.ts`
     }
   },
   test: {
     name: "admin",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+    setupFiles: ["src/test/setup.ts"],
     restoreMocks: true,
     clearMocks: true,
     isolate: true

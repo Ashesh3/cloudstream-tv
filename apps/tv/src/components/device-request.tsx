@@ -10,13 +10,18 @@ interface DeviceRequestProps {
 export function DeviceRequest({ busy, error, onSubmit }: DeviceRequestProps) {
   const [name, setName] = useState("");
   return (
-    <StatePanel eyebrow="Welcome to Cloudframe" title="Name this TV" body="Choose a name your household will recognize when approving access.">
+    <StatePanel eyebrow="Connect this television" title="Name this TV" body="Give this screen a familiar name, then approve its folder access from Cloudframe Admin.">
+      <ol className="enrollment-steps" aria-label="Connection steps">
+        <li><span>1</span><strong>Name this TV</strong><small>Choose a recognizable household name.</small></li>
+        <li><span>2</span><strong>Request access</strong><small>A secure request appears in Admin.</small></li>
+        <li><span>3</span><strong>Choose folders</strong><small>Only approved folders become visible.</small></li>
+      </ol>
       <form className="device-form" onSubmit={event => {
         event.preventDefault();
         const value = name.trim();
         if (value) onSubmit(value);
       }}>
-        <label htmlFor="device-name">TV name</label>
+        <div className="device-label-row"><label htmlFor="device-name">TV name</label><small>Shown in Household Admin</small></div>
         <input
           id="device-name"
           value={name}

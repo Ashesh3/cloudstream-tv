@@ -125,6 +125,18 @@ afterEach(() => {
 });
 
 describe("mobile admin workflows", () => {
+  it("presents the approved operational dashboard with household metrics", async () => {
+    const client = api();
+    await login(client);
+
+    expect(screen.getByRole("heading", { name: "Household overview" })).toBeVisible();
+    expect(screen.getByText("Pending requests").parentElement).toHaveTextContent("2");
+    expect(screen.getByText("Approved devices").parentElement).toHaveTextContent("1");
+    expect(screen.getByText("Cloud sources").parentElement).toHaveTextContent("1");
+    expect(screen.getByText("Available folders").parentElement).toHaveTextContent("1");
+    expect(screen.getByRole("button", { name: "Open admin menu" })).toBeVisible();
+  });
+
   it("logs in with a visible pending state and returns to login on an expired session", async () => {
     const client = api();
     let resolveLogin!: (value: { authenticated: true }) => void;
@@ -195,7 +207,7 @@ describe("mobile admin workflows", () => {
     await waitFor(() => expect(client.updateDevice).toHaveBeenCalledWith("device-1", expect.objectContaining({ name: "Family TV", enabled: false, assignedRootIds: ["root-1"], mediaOrder: "name-asc", slideshowSeconds: 12 })));
 
     fireEvent.click(screen.getByRole("button", { name: "Revoke Living Room" }));
-    const confirm = screen.getByRole("dialog", { name: "Revoke device" });
+    const confirm = screen.getByRole("alertdialog", { name: "Revoke device" });
     expect(within(confirm).getByText(/cannot be undone/i)).toBeVisible();
     fireEvent.click(within(confirm).getByRole("button", { name: "Revoke permanently" }));
     await waitFor(() => expect(client.revokeDevice).toHaveBeenCalledWith("device-1"));

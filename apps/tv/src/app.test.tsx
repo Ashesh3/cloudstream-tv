@@ -30,6 +30,10 @@ describe("TV enrollment and browse states", () => {
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "unenrolled" } });
     render(<TvApp api={client} browserSupported />);
     expect(await screen.findByRole("heading", { name: "Name this TV" })).toBeVisible();
+    expect(screen.getByText("Connect this television")).toBeVisible();
+    expect(screen.getByText("1", { selector: "span" })).toBeVisible();
+    expect(screen.getByText("2", { selector: "span" })).toBeVisible();
+    expect(screen.getByText("3", { selector: "span" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Request access" })).toBeVisible();
   });
 
@@ -58,6 +62,8 @@ describe("TV enrollment and browse states", () => {
     fireEvent.input(screen.getByLabelText("TV name"), { target: { value: "Den TV" } });
     fireEvent.click(screen.getByRole("button", { name: "Request access" }));
     expect(await screen.findByRole("heading", { name: "Waiting for approval" })).toBeVisible();
+    expect(screen.getByText("Request sent securely")).toBeVisible();
+    expect(screen.getByText(/keep this screen open/i)).toBeVisible();
     await act(async () => { await Promise.resolve(); });
     await act(async () => { await vi.advanceTimersByTimeAsync(2100); });
     expect(client.requestStatus).toHaveBeenCalledTimes(1);

@@ -1,6 +1,15 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import type { ApproveDeviceRequestBody, AssignedRootDto, DeviceRequestDto, SourceDto } from "@cloudframe/shared";
-import { Dialog } from "./dialog";
+import { Clock3Icon, FolderOpenIcon, MonitorIcon } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Spinner } from "@/components/ui/spinner";
 
 export function ApprovalSheet({ request, roots, sources, onApprove, onClose }: {
   request: DeviceRequestDto;
@@ -9,6 +18,7 @@ export function ApprovalSheet({ request, roots, sources, onApprove, onClose }: {
   onApprove(body: ApproveDeviceRequestBody): Promise<void>;
   onClose(): void;
 }) {
+  const returnFocus = useRef<HTMLElement | null>(null);
   const [name, setName] = useState(request.requestedName);
   const [selected, setSelected] = useState<string[]>([]);
   const [errors, setErrors] = useState<string[]>([]);
@@ -16,6 +26,11 @@ export function ApprovalSheet({ request, roots, sources, onApprove, onClose }: {
   const [failure, setFailure] = useState("");
   const enabledRoots = roots.filter(root => root.enabled);
   const sourceFor = (root: AssignedRootDto) => sources.find(source => source.id === root.sourceId);
+
+  useEffect(() => {
+    returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    return () => returnFocus.current?.focus();
+  }, []);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -26,40 +41,50 @@ export function ApprovalSheet({ request, roots, sources, onApprove, onClose }: {
     if (nextErrors.length) return;
     setPending(true);
     setFailure("");
-    try {
-      await onApprove({ name: name.trim(), rootIds: selected });
-    } catch (error) {
-      setFailure(error instanceof Error ? error.message : "Approval failed. Try again.");
-    } finally {
-      setPending(false);
-    }
+    try { await onApprove({ name: name.trim(), rootIds: selected }); }
+    catch (error) { setFailure(error instanceof Error ? error.message : "Approval failed. Try again."); }
+    finally { setPending(false); }
   };
 
-  return (
-    <Dialog label="Approve device" onClose={onClose} className="approval-sheet">
-      <form onSubmit={submit}>
-        <header className="dialog-header">
-          <div><p className="eyebrow">New television</p><h2>Approve device</h2></div>
-          <button type="button" className="icon-button" onClick={onClose} aria-label="Close">×</button>
-        </header>
-        <div className="dialog-scroll">
-          <label className="field">Device name<input data-autofocus value={name} onChange={event => setName(event.target.value)} autoComplete="off" /></label>
-          <fieldset className="root-picker"><legend>Available roots</legend>
-            {enabledRoots.length ? enabledRoots.map(root => {
-              const source = sourceFor(root);
-              return <label className="root-choice" key={root.id}>
-                <input type="checkbox" aria-label={root.displayName} checked={selected.includes(root.id)} onChange={() => setSelected(value => value.includes(root.id) ? value.filter(id => id !== root.id) : [...value, root.id])} />
-                <span className="folder-mosaic" aria-hidden="true"><i /><i /><i /></span>
-                <span><strong>{root.displayName}</strong><small>{source?.provider === "google" ? "Google Drive" : "OneDrive"} · {source?.accountLabel}</small></span>
-              </label>;
-            }) : <p className="empty-inline">Connect a source and add an enabled root before approving a device.</p>}
-          </fieldset>
-          {errors.length > 0 && <div className="form-errors" role="alert">{errors.map(error => <p key={error}>{error}</p>)}</div>}
-          {failure && <p className="error-banner" role="alert">{failure}</p>}
+  return <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
+    <DialogContent aria-label="Approve device" className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
+      <form onSubmit={submit} className="contents">
+        <DialogHeader className="pr-8">
+          <div className="flex items-center gap-3"><span className="flex size-11 items-center justify-center rounded-xl bg-primary/10 text-primary"><MonitorIcon /></span><div><div className="flex flex-wrap items-center gap-2"><DialogTitle className="text-xl">Approve device</DialogTitle><Badge variant="secondary">New television</Badge></div><DialogDescription className="mt-1">Confirm the device name and choose the folders this television can browse.</DialogDescription></div></div>
+        </DialogHeader>
+        <div className="grid gap-5">
+          <div className="grid gap-2 rounded-xl border bg-muted/40 p-4 sm:grid-cols-[1fr_auto] sm:items-center"><div><p className="text-sm font-medium">{request.requestedName}</p><p className="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Clock3Icon className="size-3.5" />Requested {formatTime(request.createdAt)}</p></div><span className="text-xs text-muted-foreground">Expires {formatTime(request.expiresAt)}</span></div>
+          <FieldGroup>
+            <Field data-invalid={errors.includes("Enter a device name.")}>
+              <FieldLabel htmlFor="approval-device-name">Device name</FieldLabel>
+              <Input id="approval-device-name" data-autofocus autoFocus value={name} onChange={event => setName(event.target.value)} autoComplete="off" aria-invalid={errors.includes("Enter a device name.")} />
+              <FieldDescription>Use a name your household will recognize later.</FieldDescription>
+              {errors.includes("Enter a device name.") && <FieldError>Enter a device name.</FieldError>}
+            </Field>
+            <FieldSet>
+              <FieldLegend>Folder access</FieldLegend>
+              <FieldDescription><span>{enabledRoots.length} available {enabledRoots.length === 1 ? "folder" : "folders"}</span>. Select only what this television should see.</FieldDescription>
+              <div className="grid gap-2">{enabledRoots.length ? enabledRoots.map(root => {
+                const source = sourceFor(root);
+                const checked = selected.includes(root.id);
+                return <Label key={root.id} htmlFor={`approval-root-${root.id}`} className="flex min-h-16 cursor-pointer items-center gap-3 rounded-xl border p-3 transition-colors hover:bg-muted/50 has-[[data-state=checked]]:border-primary/40 has-[[data-state=checked]]:bg-primary/5">
+                  <Checkbox id={`approval-root-${root.id}`} aria-label={root.displayName} checked={checked} onCheckedChange={() => setSelected(value => value.includes(root.id) ? value.filter(id => id !== root.id) : [...value, root.id])} />
+                  <span className="flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground"><FolderOpenIcon /></span>
+                  <span className="min-w-0 flex-1"><strong className="block truncate text-sm font-medium">{root.displayName}</strong><small className="mt-0.5 block truncate text-xs text-muted-foreground">{source?.provider === "google" ? "Google Drive" : "OneDrive"} · {source?.accountLabel}</small></span>
+                </Label>;
+              }) : <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">Connect a source and add an enabled folder before approving a device.</p>}</div>
+              {errors.includes("Select at least one root.") && <FieldError>Select at least one root.</FieldError>}
+            </FieldSet>
+          </FieldGroup>
+          {failure && <Alert variant="destructive"><AlertDescription>{failure}</AlertDescription></Alert>}
         </div>
-        <footer className="dialog-actions"><button type="button" className="button secondary" onClick={onClose}>Cancel</button><button type="submit" className="button primary" disabled={pending}>{pending ? "Approving…" : "Approve device"}</button></footer>
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={onClose}>Cancel</Button>
+          <Button type="submit" disabled={pending || !enabledRoots.length}>{pending && <Spinner data-icon="inline-start" />}{pending ? "Approving…" : "Approve device"}</Button>
+        </DialogFooter>
       </form>
-    </Dialog>
-  );
+    </DialogContent>
+  </Dialog>;
 }
 
+function formatTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "soon" : date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }); }
