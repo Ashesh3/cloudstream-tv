@@ -935,6 +935,67 @@ describe("admin management HTTP API", () => {
     expect(workflowStart).toHaveBeenCalledTimes(1);
   });
 
+  it("does not relaunch a checkpointed initial crawl when the same enabled root is selected again", async () => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, {
+      providerRootId: "root",
+      status: "syncing",
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: "page-2",
+        processedNodeCount: 25,
+        generation: "generation-1",
+        pendingProviderFolderIds: ["photos-child"]
+      },
+      activeWorkflowRunId: "run-1",
+      leaseOwner: "active-owner",
+      leaseExpiresAt: new Date(harness.now.getTime() + 60_000)
+    });
+    const root: AssignedRoot = {
+      id: assignedRootDocumentId(harness.householdId, source.id, "photos"),
+      householdId: harness.householdId,
+      sourceId: source.id,
+      providerNodeId: "photos",
+      displayName: "Photos",
+      ancestryProviderIds: ["root"],
+      enabled: true,
+      createdAt: harness.now
+    };
+    await harness.repository.putSource(source);
+    await harness.repository.putRoot(root);
+    const workflowStart = vi.fn(async () => ({ runId: "duplicate-run" }));
+    const indexing = createIndexingService({
+      repository: harness.repository,
+      workflowLauncher: { start: workflowStart },
+      householdId: harness.householdId,
+      cronSecret: "cron",
+      now: () => harness.now,
+      createOwner: () => "duplicate-owner"
+    });
+    const providerFolders = makeProviderFolderService(harness, {}, indexing);
+    const admin = await login(harness.app);
+    const app = createApiApp({
+      repository: harness.repository,
+      providerFolders,
+      config: apiConfig(harness),
+      now: () => harness.now
+    });
+
+    const response = await app(jsonRequest(
+      `/api/admin/sources/${source.id}/roots`,
+      "POST",
+      { providerNodeId: "photos", displayName: "Photos" },
+      mutationHeaders(harness.origin, admin)
+    ));
+
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toMatchObject({
+      data: { indexing: { started: false, runId: null } }
+    });
+    expect(workflowStart).not.toHaveBeenCalled();
+    expect(await harness.repository.getSource(source.id)).toEqual(source);
+  });
+
   it("maps only bounded OAuth failures while unexpected callback defects remain safe 500s", async () => {
     const harness = await createTestApi();
     const admin = await login(harness.app);

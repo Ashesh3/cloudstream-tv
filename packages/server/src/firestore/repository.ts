@@ -520,11 +520,13 @@ export class FirestoreRepository implements AppRepository {
       }
 
       let enabled: AssignedRoot;
+      let alreadyEnabledIdenticalRoot = false;
       if (deterministicSnapshot.exists) {
         const current = decodeFirestoreDocument<AssignedRoot>(deterministicSnapshot.id, deterministicSnapshot.data());
         if (current.householdId !== value.householdId || current.sourceId !== value.sourceId || current.providerNodeId !== value.providerNodeId) {
           throw new RepositoryError("ROOT_CONFLICT", "Root identity conflicts with existing data");
         }
+        alreadyEnabledIdenticalRoot = sameEnabledRootSelection(current, value);
         enabled = { ...current, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true };
         transaction.set(deterministicRef, enabled);
       } else {
@@ -532,6 +534,7 @@ export class FirestoreRepository implements AppRepository {
         if (duplicate) {
           const current = decodeFirestoreDocument<AssignedRoot>(duplicate.id, duplicate.data());
           if (current.householdId !== value.householdId) throw new RepositoryError("ROOT_CONFLICT", "Root conflicts with another household");
+          alreadyEnabledIdenticalRoot = sameEnabledRootSelection(current, value);
           enabled = { ...current, id: deterministicId, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true };
           transaction.create(deterministicRef, enabled);
           transaction.delete(duplicate.ref);
@@ -546,7 +549,7 @@ export class FirestoreRepository implements AppRepository {
           transaction.create(deterministicRef, enabled);
         }
       }
-      if (!hasActiveInitialLaunch(source, input.resetAt)) {
+      if (!(alreadyEnabledIdenticalRoot && hasActiveInitialSync(source, input.resetAt))) {
         transaction.update(sourceRef, initialSourceReset());
       }
       return enabled;
@@ -1209,16 +1212,24 @@ function initialSourceReset(): Pick<
   };
 }
 
-function hasActiveInitialLaunch(source: Source, resetAt: Date): boolean {
+function hasActiveInitialSync(source: Source, resetAt: Date): boolean {
   return (
     source.status === "syncing" &&
     source.deltaCursor === null &&
-    source.crawlCheckpoint === null &&
+    (source.crawlCheckpoint === null || source.crawlCheckpoint.mode === "initial") &&
     source.nextSyncAt === null &&
     source.lastSyncErrorCode === null &&
     source.leaseOwner !== null &&
     source.leaseExpiresAt !== null &&
     source.leaseExpiresAt > resetAt
+  );
+}
+
+function sameEnabledRootSelection(current: AssignedRoot, requested: AssignedRoot): boolean {
+  return (
+    current.enabled &&
+    current.ancestryProviderIds.length === requested.ancestryProviderIds.length &&
+    current.ancestryProviderIds.every((providerId, index) => providerId === requested.ancestryProviderIds[index])
   );
 }
 

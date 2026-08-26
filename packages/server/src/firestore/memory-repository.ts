@@ -259,6 +259,11 @@ export class MemoryRepository implements AppRepository {
       root.sourceId === input.sourceId &&
       root.providerNodeId === input.root.providerNodeId
     );
+    const alreadyEnabledIdenticalRoot = Boolean(
+      duplicate?.enabled &&
+      duplicate.ancestryProviderIds.length === input.root.ancestryProviderIds.length &&
+      duplicate.ancestryProviderIds.every((providerId, index) => providerId === input.root.ancestryProviderIds[index])
+    );
     const enabled = copy({
       ...(duplicate ?? input.root),
       id: deterministicId,
@@ -279,16 +284,16 @@ export class MemoryRepository implements AppRepository {
       }
     }
     this.roots.set(deterministicId, enabled);
-    const activeInitialLaunch =
+    const activeInitialSync =
       source.status === "syncing" &&
       source.deltaCursor === null &&
-      source.crawlCheckpoint === null &&
+      (source.crawlCheckpoint === null || source.crawlCheckpoint.mode === "initial") &&
       source.nextSyncAt === null &&
       source.lastSyncErrorCode === null &&
       source.leaseOwner !== null &&
       source.leaseExpiresAt !== null &&
       source.leaseExpiresAt > input.resetAt;
-    if (!activeInitialLaunch) {
+    if (!(alreadyEnabledIdenticalRoot && activeInitialSync)) {
       this.sources.set(source.id, copy({
         ...source,
         status: "syncing",

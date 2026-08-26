@@ -383,7 +383,13 @@ describe("MemoryRepository domain storage", () => {
     const source = makeSource({
       status: "syncing",
       deltaCursor: null,
-      crawlCheckpoint: null,
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: "page-2",
+        processedNodeCount: 25,
+        generation: "generation-1",
+        pendingProviderFolderIds: ["photos-child"]
+      },
       activeWorkflowRunId: "run-1",
       nextSyncAt: null,
       leaseOwner: "active-owner",
@@ -397,6 +403,47 @@ describe("MemoryRepository domain storage", () => {
     await repo.enableRootAndResetInitial({ root, sourceId: source.id, resetAt: now });
 
     expect(await repo.getSource(source.id)).toEqual(source);
+  });
+
+  it("resets an active crawl when a different root is added", async () => {
+    const repo = new MemoryRepository();
+    const source = makeSource({
+      status: "syncing",
+      deltaCursor: null,
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: "page-2",
+        processedNodeCount: 25,
+        generation: "generation-1",
+        pendingProviderFolderIds: ["photos-child"]
+      },
+      activeWorkflowRunId: "run-1",
+      nextSyncAt: null,
+      leaseOwner: "active-owner",
+      leaseExpiresAt: later,
+      lastSyncErrorCode: null
+    });
+    const existing = makeRoot();
+    const added = {
+      ...makeRoot(),
+      id: "new-root",
+      providerNodeId: "another-folder",
+      displayName: "Another folder",
+      ancestryProviderIds: ["root-provider"]
+    };
+    await repo.putSource(source);
+    await repo.putRoot(existing);
+
+    await repo.enableRootAndResetInitial({ root: added, sourceId: source.id, resetAt: now });
+
+    expect(await repo.getSource(source.id)).toMatchObject({
+      status: "syncing",
+      crawlCheckpoint: null,
+      activeWorkflowRunId: null,
+      leaseOwner: null,
+      leaseExpiresAt: null
+    });
+    expect(await repo.listRootsForSource(source.id)).toHaveLength(2);
   });
 });
 
@@ -858,6 +905,42 @@ describe("FirestoreRepository admin management transactions", () => {
     expect(writes).toContain(
       "update:sources/s1:{\"status\":\"syncing\",\"deltaCursor\":null,\"crawlCheckpoint\":null,\"activeWorkflowRunId\":null,\"syncGeneration\":null,\"nextSyncAt\":null,\"leaseOwner\":null,\"leaseExpiresAt\":null,\"lastSyncErrorCode\":null}"
     );
+  });
+
+  it("preserves a checkpointed active initial sync for the same enabled Firestore root", async () => {
+    const writes: string[] = [];
+    const source = makeSource({
+      status: "syncing",
+      deltaCursor: null,
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: "page-2",
+        processedNodeCount: 25,
+        generation: "generation-1",
+        pendingProviderFolderIds: ["photos-child"]
+      },
+      activeWorkflowRunId: "run-1",
+      nextSyncAt: null,
+      leaseOwner: "active-owner",
+      leaseExpiresAt: later,
+      lastSyncErrorCode: null
+    });
+    const existing = {
+      ...makeRoot(),
+      id: assignedRootDocumentId("h1", "s1", "provider-root"),
+      displayName: "Old label"
+    };
+    const firestore = createManagementFirestore({ writes, source, roots: [existing] });
+    const repo = new FirestoreRepository(firestore);
+
+    await repo.enableRootAndResetInitial({
+      root: { ...existing, displayName: "Updated label" },
+      sourceId: source.id,
+      resetAt: now
+    });
+
+    expect(writes.some(write => write.startsWith("update:sources/s1:"))).toBe(false);
+    expect(writes.some(write => write.startsWith(`set:roots/${existing.id}:`))).toBe(true);
   });
 
   it("serializes concurrent absent-root creates onto one deterministic document", async () => {
