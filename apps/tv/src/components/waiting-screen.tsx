@@ -5,9 +5,9 @@ export function WaitingScreen({ name, expiresAt }: { name: string; expiresAt: st
     <StatePanel
       eyebrow={name}
       title="Waiting for approval"
-      body="Open Cloudframe Admin on your phone, review this request, and choose at least one folder."
+      body="Open Cloudframe Admin on your phone, review this television, and choose at least one collection for its program."
     >
-      <div className="request-sent"><span aria-hidden="true">✓</span><div><strong>Request sent securely</strong><small>Keep this screen open while your household admin approves access.</small></div></div>
+      <div className="request-sent"><span aria-hidden="true"><i /></span><div><strong>Request sent securely</strong><small>Keep this screen open while the household administrator approves its program.</small></div></div>
       <div className="waiting-pulse" aria-label="Approval request pending"><i /><i /><i /></div>
       <p className="state-detail">Request expires {formatExpiry(expiresAt)}</p>
     </StatePanel>

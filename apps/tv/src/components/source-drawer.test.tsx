@@ -8,8 +8,8 @@ import { SourceDrawer } from "./source-drawer";
 afterEach(cleanup);
 
 const roots = [
-  { id: "root-1", sourceId: "s1", displayName: "Family", provider: "google" as const, accountLabel: "Home", nodeId: "n1", folderCoverNodeIds: [], childFolderCount: 1, childMediaCount: 2 },
-  { id: "root-2", sourceId: "s2", displayName: "Trips", provider: "onedrive" as const, accountLabel: "Cloud", nodeId: "n2", folderCoverNodeIds: [], childFolderCount: 2, childMediaCount: 4 }
+  { id: "root-1", sourceId: "s1", displayName: "Family", provider: "google" as const, accountLabel: "Home", nodeId: "n1", folderCoverNodeIds: [], childFolderCount: 1, childMediaCount: 2, readiness: "ready" as const, readinessMessage: "Ready to screen" },
+  { id: "root-2", sourceId: "s2", displayName: "Trips", provider: "onedrive" as const, accountLabel: "Cloud", nodeId: "n2", folderCoverNodeIds: [], childFolderCount: 2, childMediaCount: 4, readiness: "ready" as const, readinessMessage: "Ready to screen" }
 ];
 
 describe("source drawer remote focus", () => {

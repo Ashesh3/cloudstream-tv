@@ -1,6 +1,7 @@
 import type { TvRootCardDto } from "@cloudframe/shared";
 import { normalizeTvKey, shouldHandleTvKey } from "@cloudframe/tv-core";
 import { useEffect, useRef, useState } from "preact/hooks";
+import { ProgramStatus } from "./program-status";
 
 export function SourceDrawer({ open, roots, onClose, onHome, onSelect }: {
   open: boolean;
@@ -11,7 +12,7 @@ export function SourceDrawer({ open, roots, onClose, onHome, onSelect }: {
 }) {
   const host = useRef<HTMLElement>(null);
   const [focusedIndex, setFocusedIndex] = useState(0);
-  const actions = [onClose, onHome, ...roots.map(root => () => onSelect(root))];
+  const actions = [onClose, onHome, ...roots.map(root => () => { if (root.nodeId) onSelect(root); })];
   useEffect(() => {
     if (!open) return;
     setFocusedIndex(0);
@@ -44,13 +45,13 @@ export function SourceDrawer({ open, roots, onClose, onHome, onSelect }: {
           event.preventDefault();
         }}
       >
-        <header><span>Navigate</span><button type="button" onClick={onClose}>Close</button></header>
-        <button className="drawer-home" type="button" onClick={onHome}>All folders</button>
+        <header><div><small>Program desk</small><strong>Choose a collection</strong></div><button type="button" onClick={onClose}>Close <kbd>Back</kbd></button></header>
+        <button className="drawer-home" type="button" onClick={onHome}><span className="drawer-cue" />Household program</button>
         <div className="drawer-list">
           {roots.map(root => (
-            <button type="button" key={root.id} onClick={() => onSelect(root)}>
-              <span className={`provider-dot ${root.provider}`} />
-              <span><strong>{root.displayName}</strong><small>{root.accountLabel}</small></span>
+            <button type="button" key={root.id} onClick={() => root.nodeId && onSelect(root)} aria-disabled={!root.nodeId}>
+              <span className={`provider-monogram ${root.provider}`}>{root.provider === "google" ? "G" : "1"}</span>
+              <span><strong>{root.displayName}</strong><small>{root.accountLabel}</small><ProgramStatus readiness={root.readiness} message={root.readinessMessage} compact /></span>
             </button>
           ))}
         </div>

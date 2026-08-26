@@ -22,6 +22,7 @@ export function MediaCard({ name, kind, thumbnailUrl, focused, resumeProgress = 
     >
       <span className="card-visual media-preview" data-preview={failed || !thumbnailUrl ? "unavailable" : "ready"}>
         {thumbnailUrl && <img src={thumbnailUrl} alt="" onError={() => setFailed(true)} />}
+        {!thumbnailUrl || failed ? <span className="media-stock"><i />{kind === "video" ? "Motion" : "Still"}</span> : null}
         {kind === "video" && <span className="video-badge">Video</span>}
         {kind === "video" && percent > 0 && (
           <span className="resume-track" role="progressbar" aria-label="Watched" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
@@ -29,7 +30,7 @@ export function MediaCard({ name, kind, thumbnailUrl, focused, resumeProgress = 
           </span>
         )}
       </span>
-      <span className="card-copy"><strong>{name}</strong></span>
+      <span className="card-copy"><strong>{name}</strong><small>{kind === "video" ? "Original video" : "Original photograph"}</small></span>
     </button>
   );
 }

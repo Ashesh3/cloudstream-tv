@@ -5,14 +5,14 @@ export function ViewerOverlay({ items, activeIndex }: { items: ViewerMediaItem[]
   return (
     <aside className="viewer-overlay" role="dialog" aria-label="Media details">
       <div className="viewer-details">
-        <p>{active.kind === "video" ? "Video" : "Photo"}</p>
+        <p>Now screening · {active.kind === "video" ? "Motion" : "Still"}</p>
         <h2>{active.name}</h2>
-        <span>{active.mimeType ?? "Unknown format"}</span>
+        <span>{active.mimeType ?? "Original file"}</span>
       </div>
       <div className="viewer-filmstrip" aria-label="Folder media">
         {items.map((item, index) => (
           <span key={item.id} className={index === activeIndex ? "is-active" : ""}>
-            <i>{item.kind === "video" ? "▶" : "▧"}</i>
+            <i aria-hidden="true"><span /></i>
             <b>{item.name}</b>
           </span>
         ))}

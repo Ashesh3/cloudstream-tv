@@ -237,11 +237,12 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
 
   const historyResume = history[active.id]?.completed ? 0 : history[active.id]?.positionSeconds ?? 0;
   return (
-    <section className="viewer-shell" aria-label="Media viewer">
+    <section className="viewer-shell" aria-label="Media viewer" data-media-kind={active.kind}>
+      <span className="viewer-frame-corners" aria-hidden="true"><i /><i /><b /><b /></span>
       <div className="viewer-topline">
-        <span>{state.index + 1} / {state.items.length}</span>
+        <span>Program {state.index + 1} / {state.items.length}</span>
         <strong>{active.name}</strong>
-        <span>↑ Details · Back</span>
+        <span>Up: details · Back: collection</span>
       </div>
       {resumeOverrides[active.id] ? <span className="viewer-resume-note">Resuming at {formatResume(resumeOverrides[active.id]!)}</span> : null}
       <div className="viewer-stage">

@@ -193,10 +193,12 @@ export interface TvRootCardDto {
   displayName: string;
   provider: Source["provider"];
   accountLabel: string;
-  nodeId: string;
+  nodeId: string | null;
   folderCoverNodeIds: string[];
   childFolderCount: number;
   childMediaCount: number;
+  readiness: "preparing" | "ready" | "blocked";
+  readinessMessage: string;
 }
 
 export interface MediaUrlResponse {

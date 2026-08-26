@@ -10,11 +10,11 @@ interface DeviceRequestProps {
 export function DeviceRequest({ busy, error, onSubmit }: DeviceRequestProps) {
   const [name, setName] = useState("");
   return (
-    <StatePanel eyebrow="Connect this television" title="Name this TV" body="Give this screen a familiar name, then approve its folder access from Cloudframe Admin.">
+    <StatePanel eyebrow="Connect this television" title="Name this TV" body="Mark this screen for the program ledger, then approve its collections from Cloudframe Admin.">
       <ol className="enrollment-steps" aria-label="Connection steps">
-        <li><span>1</span><strong>Name this TV</strong><small>Choose a recognizable household name.</small></li>
-        <li><span>2</span><strong>Request access</strong><small>A secure request appears in Admin.</small></li>
-        <li><span>3</span><strong>Choose folders</strong><small>Only approved folders become visible.</small></li>
+        <li><span>1</span><strong>Name the screen</strong><small>Use the room name your household knows.</small></li>
+        <li><span>2</span><strong>Send the request</strong><small>The program desk receives it securely.</small></li>
+        <li><span>3</span><strong>Approve the program</strong><small>Only chosen collections appear here.</small></li>
       </ol>
       <form className="device-form" onSubmit={event => {
         event.preventDefault();
@@ -50,7 +50,8 @@ export function StatePanel(props: {
   return (
     <main className="state-shell" data-testid={props.testId}>
       <section className="state-panel">
-        <span className="state-mark" aria-hidden="true"><span /></span>
+        <div className="state-ledger-rule" aria-hidden="true"><span>Cloudframe</span><i /></div>
+        <span className="state-mark" aria-hidden="true"><span /><i /></span>
         {props.eyebrow && <p className="eyebrow">{props.eyebrow}</p>}
         <h1>{props.title}</h1>
         <p>{props.body}</p>
