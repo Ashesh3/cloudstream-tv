@@ -38,3 +38,11 @@
 - Adding a folder updates the program immediately, refreshes authoritative admin data, and remains selected while the user browses elsewhere.
 - No fabricated child/media counts, browser storage, provider secrets, backend authorization changes, or Task 7 global visual replacement were introduced.
 - Protected product, plan, spec, and Impeccable artifacts plus `apps/admin/node_modules` remain untouched and unstaged.
+
+## Fix Round 1
+
+- Reproduced a stale removal-impact race where root A's delayed success or error could populate root B's confirmation after A was closed, enabling B removal without B's authoritative impact response.
+- Scoped each impact response to a monotonically increasing request generation plus the selected root ID. Closing, switching/reopening roots, unmounting, and successful removal invalidate the prior generation; stale success and error results are ignored.
+- Added regressions for close-before-resolve/reopen of the same root and A/B out-of-order resolution. Both assert the current dialog stays loading, stale errors/devices remain hidden, and removal stays disabled until the current root resolves.
+- Verification: requested source-workbench/household/provider/folder-picker/app matrix passed with 26 tests; admin typecheck, admin build, changed-file ESLint, and `git diff --check` passed.
+- Deferred the optional post-add refresh warning minor to a later UI round; optimistic selection remains visible and the requested destructive race fix stays narrowly scoped.

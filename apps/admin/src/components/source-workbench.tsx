@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AssignedRootDto, DeviceDto, SourceDto } from "@cloudframe/shared";
 import { ArrowLeftIcon } from "lucide-react";
 import type { AdminApi } from "../api/client";
@@ -22,20 +22,40 @@ export function SourceWorkbench({ source, roots, devices = [], api, onChanged, o
   const [impact, setImpact] = useState<{ devices: DeviceDto[] } | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const impactRequest = useRef<{ generation: number; rootId: string | null }>({ generation: 0, rootId: null });
   useEffect(() => {
     setProgramRoots(roots.filter(root => root.enabled));
   }, [roots]);
+  useEffect(() => () => {
+    impactRequest.current = { generation: impactRequest.current.generation + 1, rootId: null };
+  }, []);
+
+  const invalidateImpactRequest = () => {
+    impactRequest.current = { generation: impactRequest.current.generation + 1, rootId: null };
+  };
+  const closeRemoval = () => {
+    if (pending) return;
+    invalidateImpactRequest();
+    setRemoveRoot(null); setImpact(null); setError("");
+  };
 
   const reviewRemoval = async (root: AssignedRootDto) => {
+    const generation = impactRequest.current.generation + 1;
+    impactRequest.current = { generation, rootId: root.id };
     setRemoveRoot(root); setImpact(null); setError("");
-    try { setImpact(await api.rootImpact(root.id)); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Removal impact could not be loaded."); }
+    try {
+      const nextImpact = await api.rootImpact(root.id);
+      if (impactRequest.current.generation === generation && impactRequest.current.rootId === root.id) setImpact(nextImpact);
+    } catch (cause) {
+      if (impactRequest.current.generation === generation && impactRequest.current.rootId === root.id) setError(cause instanceof Error ? cause.message : "Removal impact could not be loaded.");
+    }
   };
   const remove = async () => {
     if (!removeRoot) return;
     setPending(true); setError("");
     try {
       await api.removeRoot(removeRoot.id);
+      invalidateImpactRequest();
       setProgramRoots(value => value.filter(root => root.id !== removeRoot.id));
       setRemoveRoot(null); setImpact(null);
       await onChanged();
@@ -45,14 +65,14 @@ export function SourceWorkbench({ source, roots, devices = [], api, onChanged, o
 
   if (removeRoot) {
     const displayName = removeRoot.providerNodeId === source.providerRootId ? `Entire ${source.provider === "google" ? "My Drive" : "OneDrive"}` : removeRoot.displayName;
-    return <Dialog label="Remove folder from household program" onClose={() => { if (!pending) { setRemoveRoot(null); setImpact(null); setError(""); } }}>
+    return <Dialog label="Remove folder from household program" onClose={closeRemoval}>
       <header className="dialog-header"><div><h2 className="font-heading text-lg font-medium">Remove {displayName}?</h2><p className="mt-1 text-sm text-muted-foreground">This immediately removes the folder from every assigned television. Reconciliation will then remove out-of-program metadata.</p></div></header>
       <div className="dialog-scroll">
         {!impact && !error && <p aria-live="polite">Loading affected televisions…</p>}
         {impact && (impact.devices.length ? <><p className="font-medium">Affected televisions</p><ul className="mt-2 list-disc space-y-1 pl-5">{impact.devices.map(device => <li key={device.id}>{device.name}</li>)}</ul></> : <p>No televisions currently use this folder.</p>)}
         {error && <p className="error-banner" role="alert">{error}</p>}
       </div>
-      <footer className="dialog-actions"><Button variant="outline" disabled={pending} onClick={() => { setRemoveRoot(null); setImpact(null); setError(""); }}>Cancel</Button><Button variant="destructive" disabled={!impact || pending} onClick={() => void remove()}>{pending ? "Removing…" : `Remove ${displayName}`}</Button></footer>
+      <footer className="dialog-actions"><Button variant="outline" disabled={pending} onClick={closeRemoval}>Cancel</Button><Button variant="destructive" disabled={!impact || pending} onClick={() => void remove()}>{pending ? "Removing…" : `Remove ${displayName}`}</Button></footer>
     </Dialog>;
   }
 

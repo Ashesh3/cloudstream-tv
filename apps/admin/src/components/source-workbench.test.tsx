@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdminProviderFolderPageResponse, AssignedRootDto, DeviceDto, ProviderFolderDto, SourceDto } from "@cloudframe/shared";
 import type { AdminApi } from "../api/client";
@@ -18,10 +18,21 @@ const albums: ProviderFolderDto = { providerNodeId: "albums", parentProviderId: 
 const trips: ProviderFolderDto = { providerNodeId: "trips", parentProviderId: "provider-root", name: "Trips", assignedRootId: null };
 const archive: ProviderFolderDto = { providerNodeId: "archive", parentProviderId: "provider-root", name: "Archive", assignedRootId: null };
 const addedRoot: AssignedRootDto = { id: "root-trips", sourceId: source.id, providerNodeId: trips.providerNodeId, displayName: trips.name, ancestryProviderIds: [source.providerRootId!], enabled: true, createdAt: source.createdAt };
+const albumsRoot: AssignedRootDto = { id: "root-albums", sourceId: source.id, providerNodeId: albums.providerNodeId, displayName: albums.name, ancestryProviderIds: [source.providerRootId!], enabled: true, createdAt: source.createdAt };
 const device: DeviceDto = { id: "tv-1", name: "Living Room", enabled: true, assignedRootIds: [addedRoot.id], mediaOrder: null, slideshowSeconds: null, createdAt: source.createdAt, approvedAt: source.createdAt, lastSeenAt: source.createdAt, revokedAt: null };
 
 function page(current: ProviderFolderDto, breadcrumbs: ProviderFolderDto[], folders: ProviderFolderDto[], nextCursor: string | null = null): AdminProviderFolderPageResponse {
   return { source, current, breadcrumbs, folders, nextCursor };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function workbenchApi(): AdminApi {
@@ -73,6 +84,50 @@ describe("source workbench", () => {
     await waitFor(() => expect(api.removeRoot).toHaveBeenCalledWith(addedRoot.id));
     expect(changed).toHaveBeenCalled();
     expect(await screen.findByText("No folders in the household program")).toBeVisible();
+  });
+
+  it("invalidates a pending impact request when its dialog closes, even if the same root is reopened", async () => {
+    const api = workbenchApi();
+    const first = deferred<Awaited<ReturnType<AdminApi["rootImpact"]>>>();
+    const second = deferred<Awaited<ReturnType<AdminApi["rootImpact"]>>>();
+    vi.mocked(api.rootImpact).mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    render(<SourceWorkbench source={source} roots={[addedRoot]} devices={[device]} api={api} onChanged={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Review removal impact for Trips" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Remove folder from household program" })).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review removal impact for Trips" }));
+    const reopened = await screen.findByRole("dialog", { name: "Remove folder from household program" });
+
+    await act(async () => { first.reject(new Error("Stale impact failed.")); await Promise.resolve(); });
+    expect(within(reopened).getByText("Loading affected televisions…")).toBeVisible();
+    expect(within(reopened).queryByRole("alert")).not.toBeInTheDocument();
+    expect(within(reopened).getByRole("button", { name: "Remove Trips" })).toBeDisabled();
+
+    await act(async () => { second.resolve({ roots: [addedRoot], devices: [device] }); await Promise.resolve(); });
+    expect(await within(reopened).findByText("Living Room")).toBeVisible();
+  });
+
+  it("does not let root A impact populate or enable root B after out-of-order resolution", async () => {
+    const api = workbenchApi();
+    const impactA = deferred<Awaited<ReturnType<AdminApi["rootImpact"]>>>();
+    const impactB = deferred<Awaited<ReturnType<AdminApi["rootImpact"]>>>();
+    vi.mocked(api.rootImpact).mockImplementationOnce(() => impactA.promise).mockImplementationOnce(() => impactB.promise);
+    render(<SourceWorkbench source={source} roots={[addedRoot, albumsRoot]} devices={[device]} api={api} onChanged={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Review removal impact for Trips" }));
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Remove folder from household program" })).getByRole("button", { name: "Cancel" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review removal impact for Albums" }));
+    const albumsDialog = await screen.findByRole("dialog", { name: "Remove folder from household program" });
+
+    await act(async () => { impactA.resolve({ roots: [addedRoot], devices: [{ ...device, id: "tv-stale", name: "Stale TV" }] }); await Promise.resolve(); });
+    expect(within(albumsDialog).getByText("Loading affected televisions…")).toBeVisible();
+    expect(within(albumsDialog).queryByText("Stale TV")).not.toBeInTheDocument();
+    expect(within(albumsDialog).getByRole("button", { name: "Remove Albums" })).toBeDisabled();
+
+    const albumsDevice = { ...device, id: "tv-albums", name: "Family Room", assignedRootIds: [albumsRoot.id] };
+    await act(async () => { impactB.resolve({ roots: [albumsRoot], devices: [albumsDevice] }); await Promise.resolve(); });
+    expect(await within(albumsDialog).findByText("Family Room")).toBeVisible();
+    expect(within(albumsDialog).getByRole("button", { name: "Remove Albums" })).toBeEnabled();
   });
 
   it("uses mobile Back for folder ancestry and closes only from the provider root", async () => {
