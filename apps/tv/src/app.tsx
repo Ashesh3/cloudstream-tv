@@ -61,6 +61,17 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
   const columns = useResponsiveColumns();
   const viewportHeight = useViewportHeight();
 
+  const closeDrawerAndRestore = useCallback(() => {
+    setDrawerOpen(false);
+    const restore = restoreFocusAfterDrawer.current;
+    if (restore !== null) {
+      window.setTimeout(() => {
+        setFocusedIndex(restore);
+        setRestoredFocusTick(value => value + 1);
+      }, 0);
+    }
+  }, []);
+
   const loadHome = useCallback(async () => {
     const version = ++loadVersion.current;
     setBrowse(current => ({ ...current, loading: true, error: null }));
@@ -136,17 +147,14 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
       if (!action || !shouldHandleTvKey(action, event.repeat)) return;
       if (action === "menu") {
         if (drawerOpen) {
-          setDrawerOpen(false);
-          window.setTimeout(() => setFocusedIndex(value => value), 0);
+          closeDrawerAndRestore();
         } else {
           restoreFocusAfterDrawer.current = focusedIndex;
           setDrawerOpen(true);
         }
         event.preventDefault();
       } else if (action === "back" && drawerOpen) {
-        setDrawerOpen(false);
-        const restore = restoreFocusAfterDrawer.current;
-        if (restore !== null) window.setTimeout(() => setFocusedIndex(restore), 0);
+        closeDrawerAndRestore();
         event.preventDefault();
       } else if (action === "back" && !drawerOpen && stack.length > 0) {
         goBack();
@@ -155,7 +163,7 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [drawerOpen, focusedIndex, stack, browse]);
+  }, [drawerOpen, focusedIndex, stack, browse, closeDrawerAndRestore]);
 
   const openItem = (item: BrowseItem, index: number) => {
     const nodeId = item.itemType === "root" ? item.nodeId : item.kind === "folder" ? item.id : null;
@@ -252,7 +260,7 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
           )}
         />
       )}
-      <SourceDrawer open={drawerOpen} roots={browse.roots} onClose={() => { setDrawerOpen(false); const restore = restoreFocusAfterDrawer.current; if (restore !== null) window.setTimeout(() => { setFocusedIndex(restore); setRestoredFocusTick(value => value + 1); }, 0); }} onHome={() => { setDrawerOpen(false); void loadHome(); }} onSelect={root => { setDrawerOpen(false); void loadFolder(root.nodeId); }} />
+      <SourceDrawer open={drawerOpen} roots={browse.roots} onClose={closeDrawerAndRestore} onHome={() => { setDrawerOpen(false); void loadHome(); }} onSelect={root => { setDrawerOpen(false); void loadFolder(root.nodeId); }} />
     </main>
   );
 }
@@ -323,7 +331,12 @@ async function restoreFolderPages(
 ): Promise<{ folder: TvFolderResponse; items: BrowseItem[]; nextCursor: string | null } | null> {
   let folder: TvFolderResponse | null = null;
   const items: BrowseItem[] = [];
-  for (const cursor of cursors.slice(0, 20)) {
+  if (cursors.length > 10_000) throw new Error("Saved navigation contains too many pages to restore safely.");
+  const seen = new Set<string>();
+  for (const cursor of cursors) {
+    const key = cursor ?? "__first_page__";
+    if (seen.has(key)) throw new Error("Saved navigation contains a repeated page cursor.");
+    seen.add(key);
     const response = await api.folder(folderId, cursor);
     if (version !== currentVersion.current) return null;
     folder = response;

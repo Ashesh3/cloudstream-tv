@@ -104,6 +104,18 @@ describe("TV enrollment and browse states", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Trips/ })).toHaveFocus());
   });
 
+  it("restores exact grid focus when Menu closes the source drawer", async () => {
+    const client = readyApiWithRoots();
+    render(<TvApp api={client} browserSupported />);
+    const grid = await screen.findByRole("grid");
+    fireEvent.keyDown(grid, { key: "ArrowRight" });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Trips/ })).toHaveFocus());
+    fireEvent.keyDown(window, { keyCode: 457 });
+    await screen.findByRole("dialog", { name: "Sources" });
+    fireEvent.keyDown(window, { keyCode: 457 });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Trips/ })).toHaveFocus());
+  });
+
   it("loads missing pages once and focuses the same-column destination after append", async () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
@@ -145,6 +157,31 @@ describe("TV enrollment and browse states", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(5));
     await waitFor(() => expect(screen.getByRole("button", { name: /Node 12/ })).toHaveFocus());
+  });
+
+  it("replays more than twenty saved pages before exact Back restoration", async () => {
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    for (let page = 0; page < 22; page += 1) {
+      vi.mocked(client.folder).mockResolvedValueOnce(folderPage("folder-parent", page, 1, page < 21 ? `page-${page + 1}` : null, "Parent"));
+    }
+    vi.mocked(client.folder).mockResolvedValueOnce(folderPage("node-21", 0, 0, null, "Child"));
+    for (let page = 0; page < 22; page += 1) {
+      vi.mocked(client.folder).mockResolvedValueOnce(folderPage("folder-parent", page, 1, page < 21 ? `page-${page + 1}` : null, "Parent"));
+    }
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    await screen.findByRole("grid", { name: "Parent" });
+    for (let page = 1; page < 22; page += 1) {
+      fireEvent.keyDown(screen.getByRole("grid", { name: "Parent" }), { key: "ArrowDown" });
+      await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(page + 1));
+    }
+    fireEvent.click(await screen.findByRole("button", { name: /Node 21/ }));
+    await screen.findByRole("heading", { name: "Child" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(45));
+    await waitFor(() => expect(screen.getByRole("button", { name: /Node 21/ })).toHaveFocus());
   });
 
   it("shows no-roots, empty-folder and offline retry states", async () => {
@@ -191,7 +228,7 @@ function readyApiWithRoots() {
 function folderPage(parentId: string, start: number, count: number, nextCursor: string | null, parentName = "Parent") {
   return {
     parent: node(parentId, "folder", parentName), breadcrumbs: [],
-    children: Array.from({ length: count }, (_, offset) => node(`node-${start + offset}`, start + offset === 12 ? "folder" : "image", `Node ${start + offset}`)),
+    children: Array.from({ length: count }, (_, offset) => node(`node-${start + offset}`, start + offset === 12 || start + offset === 21 ? "folder" : "image", `Node ${start + offset}`)),
     nextCursor
   };
 }
