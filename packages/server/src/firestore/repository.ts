@@ -88,6 +88,16 @@ export interface SourceCredentialMutationInput {
   credentials: Pick<Source, "encryptedRefreshToken" | "encryptedAccessToken" | "accessTokenExpiresAt">;
 }
 
+export interface ReconnectSourceInput {
+  sourceId: string;
+  householdId: string;
+  provider: Source["provider"];
+  providerAccountId: string;
+  providerRootId: string;
+  accountLabel: string;
+  credentials: Pick<Source, "encryptedRefreshToken" | "encryptedAccessToken" | "accessTokenExpiresAt">;
+}
+
 export function assignedRootDocumentId(
   householdId: string,
   sourceId: string,
@@ -135,6 +145,7 @@ export type RepositoryErrorCode =
   | "SYNC_LEASE_STALE"
   | "SYNC_CHECKPOINT_STALE"
   | "SOURCE_NOT_FOUND"
+  | "SOURCE_RECONNECT_MISMATCH"
   | "ROOT_NOT_FOUND"
   | "ROOT_CONFLICT";
 
@@ -179,6 +190,7 @@ export interface AppRepository {
   putSource(source: Source): Promise<void>;
   updateSourceCredentialsIfCurrent(input: SourceCredentialMutationInput): Promise<Source | null>;
   markSourceReauthRequiredIfCurrent(input: Omit<SourceCredentialMutationInput, "credentials">): Promise<Source | null>;
+  reconnectSource(input: ReconnectSourceInput): Promise<Source>;
   connectSource(source: Source): Promise<void>;
   getSource(id: string): Promise<Source | null>;
   listSources(householdId: string): Promise<Source[]>;
@@ -306,6 +318,60 @@ export class FirestoreRepository implements AppRepository {
         throw new RepositoryError("ROOT_CONFLICT", "Source already exists");
       }
       transaction.create(reference, source);
+    });
+  }
+  async reconnectSource(input: ReconnectSourceInput): Promise<Source> {
+    return this.firestore.runTransaction(async transaction => {
+      const reference = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+      const rootsQuery = this.firestore
+        .collection(COLLECTIONS.roots)
+        .where("sourceId", "==", input.sourceId)
+        .where("enabled", "==", true);
+      const [snapshot, rootsSnapshot] = await Promise.all([
+        transaction.get(reference),
+        transaction.get(rootsQuery)
+      ]);
+      if (!snapshot.exists) {
+        throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
+      }
+      const current = decodeSourceDocument(snapshot.id, snapshot.data());
+      if (current.householdId !== input.householdId || current.provider !== input.provider) {
+        throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
+      }
+      const migrationReconnect =
+        current.providerAccountId === null &&
+        current.status === "reauth-required" &&
+        current.lastSyncErrorCode?.startsWith("MIGRATION_") === true;
+      if (!migrationReconnect && current.providerAccountId !== input.providerAccountId) {
+        throw new RepositoryError(
+          "SOURCE_RECONNECT_MISMATCH",
+          "Reconnect account does not match the current source"
+        );
+      }
+      if (current.providerRootId !== null && current.providerRootId !== input.providerRootId) {
+        throw new RepositoryError(
+          "SOURCE_RECONNECT_MISMATCH",
+          "Reconnect root does not match the current source"
+        );
+      }
+      const hasEnabledRoots = rootsSnapshot.docs.some(root => {
+        const decoded = decodeFirestoreDocument<AssignedRoot>(root.id, root.data());
+        return decoded.householdId === input.householdId;
+      });
+      const hasResumableSync =
+        current.status === "syncing" ||
+        current.crawlCheckpoint !== null ||
+        current.activeWorkflowRunId !== null;
+      const patch: Partial<Source> = {
+        providerAccountId: current.providerAccountId ?? input.providerAccountId,
+        providerRootId: current.providerRootId ?? input.providerRootId,
+        accountLabel: input.accountLabel,
+        ...input.credentials,
+        status: hasEnabledRoots && hasResumableSync ? "syncing" : "healthy",
+        lastSyncErrorCode: null
+      };
+      transaction.update(reference, patch);
+      return { ...current, ...patch };
     });
   }
   async getSource(id: string): Promise<Source | null> {

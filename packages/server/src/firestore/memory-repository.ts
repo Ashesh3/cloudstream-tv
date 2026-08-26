@@ -116,6 +116,48 @@ export class MemoryRepository implements AppRepository {
     this.sources.set(input.sourceId, copy(updated));
     return copy(updated);
   }
+  async reconnectSource(input: import("./repository").ReconnectSourceInput): Promise<Source> {
+    const current = this.sources.get(input.sourceId);
+    if (!current || current.householdId !== input.householdId || current.provider !== input.provider) {
+      throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
+    }
+    const migrationReconnect =
+      current.providerAccountId === null &&
+      current.status === "reauth-required" &&
+      current.lastSyncErrorCode?.startsWith("MIGRATION_") === true;
+    if (!migrationReconnect && current.providerAccountId !== input.providerAccountId) {
+      throw new RepositoryError(
+        "SOURCE_RECONNECT_MISMATCH",
+        "Reconnect account does not match the current source"
+      );
+    }
+    if (current.providerRootId !== null && current.providerRootId !== input.providerRootId) {
+      throw new RepositoryError(
+        "SOURCE_RECONNECT_MISMATCH",
+        "Reconnect root does not match the current source"
+      );
+    }
+    const hasEnabledRoots = [...this.roots.values()].some(root =>
+      root.sourceId === current.id &&
+      root.householdId === input.householdId &&
+      root.enabled
+    );
+    const hasResumableSync =
+      current.status === "syncing" ||
+      current.crawlCheckpoint !== null ||
+      current.activeWorkflowRunId !== null;
+    const updated: Source = {
+      ...current,
+      providerAccountId: current.providerAccountId ?? input.providerAccountId,
+      providerRootId: current.providerRootId ?? input.providerRootId,
+      accountLabel: input.accountLabel,
+      ...input.credentials,
+      status: hasEnabledRoots && hasResumableSync ? "syncing" : "healthy",
+      lastSyncErrorCode: null
+    };
+    this.sources.set(current.id, copy(updated));
+    return copy(updated);
+  }
   async connectSource(source: Source) {
     if (this.sources.has(source.id)) {
       throw new RepositoryError("ROOT_CONFLICT", "Source already exists");

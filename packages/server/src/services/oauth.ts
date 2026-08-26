@@ -8,7 +8,7 @@ import {
   type ProviderTokenKeyring
 } from "../crypto/provider-tokens";
 import { hashOpaqueToken } from "../auth/tokens";
-import type { AppRepository } from "../firestore/repository";
+import { RepositoryError, type AppRepository } from "../firestore/repository";
 import { createSourceService } from "./sources";
 
 const STATE_BYTES = 32;
@@ -185,32 +185,38 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
           "Cloud authorization did not include renewable access."
         );
       }
-      const enabledRoots = (await repository.listRootsForSource(existing.id)).filter(
-        root => root.enabled
-      );
-      const indexingActive =
-        enabledRoots.length > 0 &&
-        (existing.status === "syncing" ||
-          existing.crawlCheckpoint !== null ||
-          existing.activeWorkflowRunId !== null);
-      source = {
-        ...existing,
-        providerAccountId: migrationReconnect
-          ? account.accountId
-          : existing.providerAccountId,
-        providerRootId: existing.providerRootId ?? providerRoot.providerNodeId,
-        accountLabel: account.accountLabel,
-        encryptedRefreshToken: encryptProviderToken(refreshToken, keyring),
-        encryptedAccessToken: encryptProviderToken(
-          account.credentials.accessToken,
-          keyring
-        ),
-        accessTokenExpiresAt: account.credentials.accessTokenExpiresAt,
-        status: indexingActive ? existing.status : "healthy",
-        crawlCheckpoint: indexingActive ? existing.crawlCheckpoint : null,
-        lastSyncErrorCode: null
-      };
-      await repository.putSource(source);
+      try {
+        source = await repository.reconnectSource({
+          sourceId: existing.id,
+          householdId: consumed.householdId,
+          provider: consumed.provider,
+          providerAccountId: account.accountId,
+          providerRootId: providerRoot.providerNodeId,
+          accountLabel: account.accountLabel,
+          credentials: {
+            encryptedRefreshToken: encryptProviderToken(refreshToken, keyring),
+            encryptedAccessToken: encryptProviderToken(
+              account.credentials.accessToken,
+              keyring
+            ),
+            accessTokenExpiresAt: account.credentials.accessTokenExpiresAt
+          }
+        });
+      } catch (error) {
+        if (
+          error instanceof RepositoryError &&
+          error.code === "SOURCE_RECONNECT_MISMATCH"
+        ) {
+          throw new OAuthServiceError(
+            "OAUTH_ACCOUNT_MISMATCH",
+            "Reconnect must use the same cloud account."
+          );
+        }
+        if (error instanceof RepositoryError && error.code === "SOURCE_NOT_FOUND") {
+          throw new OAuthServiceError("SOURCE_NOT_FOUND", "Source not found.");
+        }
+        throw error;
+      }
     } else {
       source = sourceService.encryptSource({
         id: createId(),

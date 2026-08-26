@@ -498,6 +498,126 @@ describe("OAuth state and encrypted source lifecycle", () => {
     expect(google.getRoot).toHaveBeenCalledOnce();
   });
 
+  it("preserves indexing progress that advances after OAuth reads the source", async () => {
+    const { repository, service } = await setup();
+    const sourceService = createSourceService({ repository, providers: registry(), keyring, now: () => now });
+    const original = sourceService.encryptSource({
+      id: "source-existing",
+      householdId: household.id,
+      provider: "google",
+      providerAccountId: "synthetic-account-a",
+      providerRootId: "provider-root",
+      accountLabel: "Old label",
+      credentials: { accessToken: "old", refreshToken: "old-refresh", accessTokenExpiresAt: now },
+      createdAt: now
+    });
+    await repository.putSource(original);
+    await repository.putRoot({
+      id: "root-existing", householdId: household.id, sourceId: original.id,
+      providerNodeId: "folder-existing", displayName: "Existing folder",
+      ancestryProviderIds: ["provider-root"], enabled: true, createdAt: now
+    });
+    const reconnectSource = repository.reconnectSource.bind(repository);
+    repository.reconnectSource = async input => {
+      await repository.putSource({
+        ...original,
+        status: "syncing",
+        crawlCheckpoint: {
+          mode: "initial",
+          providerPageCursor: "advanced-page",
+          processedNodeCount: 77,
+          generation: "advanced-generation"
+        },
+        activeWorkflowRunId: "advanced-run",
+        syncGeneration: "advanced-generation",
+        nextSyncAt: new Date(now.getTime() + 60_000),
+        leaseOwner: "advanced-worker",
+        leaseExpiresAt: new Date(now.getTime() + 120_000),
+        lastSyncStartedAt: now
+      });
+      return reconnectSource(input);
+    };
+    const start = await service.beginAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      reconnectSourceId: original.id
+    });
+
+    await service.completeAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      state: new URL(start.authorizationUrl).searchParams.get("state")!,
+      code: "synthetic-code"
+    });
+
+    expect(await repository.getSource(original.id)).toMatchObject({
+      accountLabel: "Family cloud",
+      status: "syncing",
+      crawlCheckpoint: { providerPageCursor: "advanced-page", processedNodeCount: 77 },
+      activeWorkflowRunId: "advanced-run",
+      syncGeneration: "advanced-generation",
+      leaseOwner: "advanced-worker"
+    });
+  });
+
+  it("recovers a reauth-required source with an enabled resumable checkpoint to syncing", async () => {
+    const { repository, service } = await setup();
+    const sourceService = createSourceService({ repository, providers: registry(), keyring, now: () => now });
+    const source = sourceService.encryptSource({
+      id: "source-reauth",
+      householdId: household.id,
+      provider: "google",
+      providerAccountId: "synthetic-account-a",
+      providerRootId: "provider-root",
+      accountLabel: "Old label",
+      credentials: { accessToken: "old", refreshToken: "old-refresh", accessTokenExpiresAt: now },
+      createdAt: now
+    });
+    const checkpoint = {
+      mode: "initial" as const,
+      providerPageCursor: "resume-page",
+      processedNodeCount: 31,
+      generation: "resume-generation"
+    };
+    await repository.putSource({
+      ...source,
+      status: "reauth-required",
+      crawlCheckpoint: checkpoint,
+      lastSyncErrorCode: "PROVIDER_REAUTH_REQUIRED"
+    });
+    await repository.putRoot({
+      id: "root-existing", householdId: household.id, sourceId: source.id,
+      providerNodeId: "folder-existing", displayName: "Existing folder",
+      ancestryProviderIds: ["provider-root"], enabled: true, createdAt: now
+    });
+    const start = await service.beginAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      reconnectSourceId: source.id
+    });
+
+    await service.completeAuthorization({
+      householdId: household.id,
+      adminSessionId: "admin-session-a",
+      provider: "google",
+      redirectUri,
+      state: new URL(start.authorizationUrl).searchParams.get("state")!,
+      code: "synthetic-code"
+    });
+
+    expect(await repository.getSource(source.id)).toMatchObject({
+      status: "syncing",
+      crawlCheckpoint: checkpoint,
+      lastSyncErrorCode: null
+    });
+  });
+
   it("rejects a reconnect when the live provider root identity changes", async () => {
     const { repository, google, service } = await setup();
     const sourceService = createSourceService({

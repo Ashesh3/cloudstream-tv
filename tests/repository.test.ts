@@ -641,6 +641,66 @@ describe("FirestoreRepository admin management transactions", () => {
     expect(writes).toEqual(["create:sources/s1"]);
   });
 
+  it("reconnects with a partial transaction update that preserves current indexing state", async () => {
+    const writes: string[] = [];
+    const current: Source = {
+      ...makeSource(),
+      status: "reauth-required",
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: "commit-time-page",
+        processedNodeCount: 42,
+        generation: "commit-time-generation"
+      },
+      activeWorkflowRunId: "run-current",
+      syncGeneration: "commit-time-generation",
+      nextSyncAt: later,
+      leaseOwner: "worker-current",
+      leaseExpiresAt: later,
+      lastSyncStartedAt: now,
+      lastSyncCompletedAt: new Date("2026-08-25T00:00:00Z"),
+      lastSyncErrorCode: "PROVIDER_REAUTH_REQUIRED"
+    };
+    const firestore = createManagementFirestore({
+      writes,
+      source: current,
+      roots: [makeRoot()]
+    });
+    const repo = new FirestoreRepository(firestore);
+    const updated = await repo.reconnectSource({
+      sourceId: current.id,
+      householdId: current.householdId,
+      provider: current.provider,
+      providerAccountId: current.providerAccountId!,
+      providerRootId: "provider-root",
+      accountLabel: "New label",
+      credentials: {
+        encryptedRefreshToken: { ...current.encryptedRefreshToken, ciphertext: "new-refresh" },
+        encryptedAccessToken: { ...current.encryptedRefreshToken, ciphertext: "new-access" },
+        accessTokenExpiresAt: later
+      }
+    });
+
+    expect(updated).toMatchObject({
+      accountLabel: "New label",
+      status: "syncing",
+      crawlCheckpoint: current.crawlCheckpoint,
+      activeWorkflowRunId: "run-current",
+      syncGeneration: "commit-time-generation",
+      nextSyncAt: later,
+      leaseOwner: "worker-current",
+      leaseExpiresAt: later,
+      lastSyncStartedAt: now,
+      lastSyncCompletedAt: current.lastSyncCompletedAt,
+      lastSyncErrorCode: null
+    });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("update:sources/s1:");
+    expect(writes[0]).not.toContain("crawlCheckpoint");
+    expect(writes[0]).not.toContain("leaseOwner");
+    expect(writes[0]).not.toContain("nextSyncAt");
+  });
+
   it("removes source, disables roots, and detaches devices in one transaction", async () => {
     const writes: string[] = [];
     const firestore = createManagementFirestore({
