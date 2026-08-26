@@ -16,8 +16,8 @@ export interface VideoPlayerProps {
   onCanPlay: () => void;
   onPause: () => void;
   onWaiting: () => void;
-  onTimeUpdate: () => void;
-  onProgress: () => void;
+  onTimeUpdate: (element: HTMLVideoElement) => void;
+  onProgress: (element: HTMLVideoElement) => void;
   onSeeked: () => void;
   onEnded: () => void;
   onError: () => void;
@@ -41,8 +41,9 @@ export function VideoPlayer(props: VideoPlayerProps) {
           onPause={props.onPause}
           onWaiting={props.onWaiting}
           onCanPlay={props.onCanPlay}
-          onTimeUpdate={props.onTimeUpdate}
-          onProgress={props.onProgress}
+          onTimeUpdate={event => props.onTimeUpdate(event.currentTarget)}
+          onProgress={event => props.onProgress(event.currentTarget)}
+          onLoadedData={event => props.onProgress(event.currentTarget)}
           onSeeked={props.onSeeked}
           onEnded={props.onEnded}
           onError={props.onError}

@@ -287,6 +287,12 @@ export function historySnapshot(positionSeconds: number, durationSeconds: number
   };
 }
 
+export function calculateBufferedPercent(bufferedEndSeconds: number, durationSeconds: number): number {
+  const duration = finiteNonNegative(durationSeconds);
+  if (duration === 0) return 0;
+  return Math.max(0, Math.min(100, Math.round(finiteNonNegative(bufferedEndSeconds) / duration * 100)));
+}
+
 function finiteNonNegative(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }

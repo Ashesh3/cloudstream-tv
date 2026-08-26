@@ -1,6 +1,7 @@
 import type { MediaNodeDto, ThumbnailUrlItem, WatchHistoryDto } from "@cloudframe/shared";
 import {
   activeViewerItem,
+  calculateBufferedPercent,
   clampVideoSeek,
   createViewerState,
   historySnapshot,
@@ -17,13 +18,14 @@ import { ImageViewer } from "./image-viewer";
 import { VideoPlayer } from "./video-player";
 import { ViewerOverlay } from "./viewer-overlay";
 
-export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews, onClose }: {
+export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews, onClose, onUnauthorized = () => undefined }: {
   api: TvApi;
   items: MediaNodeDto[];
   selectedItemId: string;
   slideshowSeconds: number;
   previews: Record<string, ThumbnailUrlItem>;
   onClose: (restorationItemId: string) => void;
+  onUnauthorized?: () => void;
 }) {
   const viewerItems = useMemo(() => items.map(toViewerItem), [items]);
   const [state, dispatch] = useReducer(viewerReducer, undefined, () => createViewerState(viewerItems, selectedItemId));
@@ -44,26 +46,48 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
   const latestVideoPositions = useRef<Record<string, number>>({});
   const [resumeOverrides, setResumeOverrides] = useState<Record<string, number>>({});
   const closed = useRef(false);
+  const unauthorized = useRef(false);
+  const mounted = useRef(true);
+  const historyController = useRef<AbortController | null>(null);
+
+  const propagateUnauthorized = useCallback((error: unknown): boolean => {
+    if (!isDeviceUnauthorized(error)) return false;
+    if (unauthorized.current) return true;
+    unauthorized.current = true;
+    closed.current = true;
+    historyController.current?.abort();
+    Object.keys(inflightUrls.current).forEach(nodeId => inflightUrls.current[nodeId]!.controller.abort());
+    inflightUrls.current = {};
+    const element = videoRef.current;
+    if (element) element.pause();
+    onUnauthorized();
+    return true;
+  }, [onUnauthorized]);
 
   const saveElementHistory = useCallback((nodeId: string, element: HTMLVideoElement | null) => {
-    if (!element) return;
+    if (!element || unauthorized.current || !mounted.current) return;
     latestVideoPositions.current[nodeId] = Number.isFinite(element.currentTime) ? Math.max(0, element.currentTime) : 0;
     const value = historySnapshot(element.currentTime, element.duration);
-    void api.saveHistory(nodeId, value).catch(() => undefined);
-  }, [api]);
+    void api.saveHistory(nodeId, value).catch(error => { propagateUnauthorized(error); });
+  }, [api, propagateUnauthorized]);
 
   useEffect(() => {
     const controller = new AbortController();
+    historyController.current = controller;
     void api.history(controller.signal).then(response => {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || unauthorized.current || !mounted.current) return;
       const next: Record<string, WatchHistoryDto> = {};
       response.history.forEach(value => { next[value.nodeId] = value; });
       setHistory(next);
-    }).catch(() => undefined);
-    return () => controller.abort();
-  }, [api]);
+    }).catch(error => { if (!controller.signal.aborted) propagateUnauthorized(error); });
+    return () => {
+      controller.abort();
+      if (historyController.current === controller) historyController.current = null;
+    };
+  }, [api, propagateUnauthorized]);
 
   useEffect(() => {
+    if (unauthorized.current) return;
     Object.keys(inflightUrls.current).forEach(nodeId => {
       const request = inflightUrls.current[nodeId]!;
       const wanted = state.urls[nodeId];
@@ -81,20 +105,22 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
       const controller = new AbortController();
       inflightUrls.current[nodeId] = { requestId, controller };
       void api.mediaUrl(nodeId, controller.signal).then(result => {
-        if (!controller.signal.aborted) {
+        if (!controller.signal.aborted && !unauthorized.current && mounted.current) {
           delete inflightUrls.current[nodeId];
           dispatch({ type: "url-ready", nodeId, requestId: entry.requestId, ...result });
         }
       }).catch(error => {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || unauthorized.current || !mounted.current) return;
         delete inflightUrls.current[nodeId];
+        if (propagateUnauthorized(error)) return;
         if (isAuthorizationEvidence(error)) dispatch({ type: "authorization-expired", nodeId, resumeSeconds: entry.resumeSeconds });
         else dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: "generic" });
       });
     });
-  }, [api, urlRequestKey]);
+  }, [api, propagateUnauthorized, urlRequestKey]);
 
   useEffect(() => () => {
+    mounted.current = false;
     Object.keys(inflightUrls.current).forEach(nodeId => inflightUrls.current[nodeId]!.controller.abort());
     inflightUrls.current = {};
     startedUrlRequests.current = {};
@@ -123,13 +149,13 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
 
   useEffect(() => {
     if (!state.slideshowActive || active.kind !== "image") return;
-    const timer = window.setTimeout(() => dispatch({ type: "slideshow-tick" }), Math.max(1, slideshowSeconds) * 1_000);
+    const timer = window.setTimeout(() => { if (!unauthorized.current && mounted.current) dispatch({ type: "slideshow-tick" }); }, Math.max(1, slideshowSeconds) * 1_000);
     return () => window.clearTimeout(timer);
   }, [active.id, active.kind, slideshowSeconds, state.slideshowActive]);
 
   useEffect(() => {
     if (!state.videoPlaying || active.kind !== "video" || state.overlayOpen) return;
-    const timer = window.setTimeout(() => dispatch({ type: "controls-timeout" }), 4_000);
+    const timer = window.setTimeout(() => { if (!unauthorized.current && mounted.current) dispatch({ type: "controls-timeout" }); }, 4_000);
     return () => window.clearTimeout(timer);
   }, [active.id, active.kind, state.controlsVisible, state.overlayOpen, state.videoPlaying]);
 
@@ -140,7 +166,7 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
   }, [active.id, active.kind, saveElementHistory, state.videoPlaying]);
 
   const close = useCallback(() => {
-    if (closed.current) return;
+    if (closed.current || unauthorized.current || !mounted.current) return;
     closed.current = true;
     if (active.kind === "video") saveElementHistory(active.id, videoRef.current);
     dispatch({ type: "back" });
@@ -162,6 +188,7 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if (unauthorized.current || !mounted.current) return;
       const action = normalizeTvKey(event);
       if (action && shouldHandleTvKey(action, event.repeat)) {
         dispatch({ type: "activity" });
@@ -192,6 +219,7 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
   }, [active.id, active.kind, close, state.overlayOpen]);
 
   const retry = () => {
+    if (unauthorized.current || !mounted.current) return;
     const before = state.urls[active.id];
     const resumeSeconds = latestVideoPositions.current[active.id] || currentSeconds || videoRef.current?.currentTime || 0;
     latestResumeOverrides.current[active.id] = resumeSeconds;
@@ -201,6 +229,7 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
   };
 
   const onMediaError = () => {
+    if (unauthorized.current || !mounted.current) return;
     const elementError = active.kind === "video" ? videoRef.current?.error : null;
     if (active.kind === "video" && videoRef.current) latestVideoPositions.current[active.id] = videoRef.current.currentTime;
     dispatch({ type: "media-error", nodeId: active.id, kind: elementError?.code === 4 ? "codec" : "generic" });
@@ -246,16 +275,18 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
             onCanPlay={() => setBuffering(false)}
             onPause={() => { dispatch({ type: "video-paused", nodeId: active.id }); saveElementHistory(active.id, videoRef.current); }}
             onWaiting={() => setBuffering(true)}
-            onTimeUpdate={() => {
-              const current = videoRef.current?.currentTime ?? 0;
+            onTimeUpdate={element => {
+              const current = element.currentTime;
               latestVideoPositions.current[active.id] = current;
               setCurrentSeconds(current);
-              setDurationSeconds(videoRef.current?.duration ?? 0);
+              setDurationSeconds(element.duration);
+              if (Number.isFinite(element.duration) && element.duration > 0 && element.buffered.length > 0) {
+                setBufferedPercent(calculateBufferedPercent(element.buffered.end(element.buffered.length - 1), element.duration));
+              }
             }}
-            onProgress={() => {
-              const element = videoRef.current;
-              if (!element || !Number.isFinite(element.duration) || element.duration <= 0 || element.buffered.length === 0) return;
-              setBufferedPercent(Math.max(0, Math.min(100, Math.round(element.buffered.end(element.buffered.length - 1) / element.duration * 100))));
+            onProgress={element => {
+              if (!Number.isFinite(element.duration) || element.duration <= 0 || element.buffered.length === 0) return;
+              setBufferedPercent(calculateBufferedPercent(element.buffered.end(element.buffered.length - 1), element.duration));
             }}
             onSeeked={() => saveElementHistory(active.id, videoRef.current)}
             onEnded={() => dispatch({ type: "video-ended", nodeId: active.id })}
@@ -286,7 +317,12 @@ function toViewerItem(item: MediaNodeDto): ViewerMediaItem {
 
 function isAuthorizationEvidence(error: unknown): boolean {
   const code = typeof error === "object" && error && "code" in error ? String((error as { code: unknown }).code) : "";
-  return code === "MEDIA_URL_EXPIRED" || code === "PROVIDER_UNAUTHORIZED" || code === "DEVICE_UNAUTHORIZED";
+  return code === "MEDIA_URL_EXPIRED" || code === "PROVIDER_UNAUTHORIZED";
+}
+
+function isDeviceUnauthorized(error: unknown): boolean {
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code: unknown }).code) : "";
+  return code === "DEVICE_UNAUTHORIZED";
 }
 
 function formatResume(seconds: number): string {

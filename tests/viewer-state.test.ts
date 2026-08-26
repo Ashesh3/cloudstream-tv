@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   activeViewerItem,
+  calculateBufferedPercent,
   clampVideoSeek,
   createViewerState,
   historySnapshot,
@@ -166,5 +167,11 @@ describe("video helpers", () => {
     expect(historySnapshot(96, 100)).toEqual({ positionSeconds: 96, durationSeconds: 100, completed: true });
     expect(historySnapshot(30, 100)).toEqual({ positionSeconds: 30, durationSeconds: 100, completed: false });
     expect(historySnapshot(Number.NaN, Number.POSITIVE_INFINITY)).toEqual({ positionSeconds: 0, durationSeconds: 0, completed: false });
+  });
+
+  it("calculates bounded buffered progress from media ranges", () => {
+    expect(calculateBufferedPercent(60, 100)).toBe(60);
+    expect(calculateBufferedPercent(200, 100)).toBe(100);
+    expect(calculateBufferedPercent(Number.NaN, 0)).toBe(0);
   });
 });

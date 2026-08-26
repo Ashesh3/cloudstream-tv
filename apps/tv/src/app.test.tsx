@@ -227,6 +227,26 @@ describe("TV enrollment and browse states", () => {
     fireEvent.keyDown(window, { key: "Escape" });
     await waitFor(() => expect(screen.getByRole("button", { name: /Second/ })).toHaveFocus());
   });
+
+  it("rebootstraps the session once when the viewer reports device revocation", async () => {
+    const client = api();
+    vi.mocked(client.bootstrap)
+      .mockResolvedValueOnce({ enrollment: { state: "ready", device: readyDevice, household } })
+      .mockResolvedValueOnce({ enrollment: { state: "revoked" } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.folder).mockResolvedValue({
+      parent: node("folder-parent", "folder", "Parent"), breadcrumbs: [],
+      children: [node("image-1", "image", "First")], nextCursor: null
+    });
+    vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
+    vi.mocked(client.history).mockResolvedValue({ history: [] });
+    vi.mocked(client.mediaUrl).mockRejectedValue(Object.assign(new Error("revoked"), { code: "DEVICE_UNAUTHORIZED" }));
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /First/ }));
+    expect(await screen.findByTestId("state-revoked")).toBeVisible();
+    expect(client.bootstrap).toHaveBeenCalledTimes(2);
+  });
 });
 
 const readyDevice = {

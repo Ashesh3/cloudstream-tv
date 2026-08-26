@@ -227,7 +227,7 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
   if (browse.error && browse.items.length === 0) return <StatePanel title="Source temporarily unavailable" body={browse.error}><button className="primary-action" onClick={() => browse.folder ? loadFolder(browse.folder.parent.id) : loadHome()}>Retry</button></StatePanel>;
   if (!browse.folder && browse.items.length === 0) return <StatePanel title="No folders assigned" body="Ask the household administrator to assign at least one folder to this TV."><button className="primary-action" onClick={loadHome}>Refresh</button></StatePanel>;
 
-  if (viewer) return <Viewer api={api} items={viewer.items} selectedItemId={viewer.selectedItemId} slideshowSeconds={slideshowSeconds} previews={thumbnails} onClose={closeViewer} />;
+  if (viewer) return <Viewer api={api} items={viewer.items} selectedItemId={viewer.selectedItemId} slideshowSeconds={slideshowSeconds} previews={thumbnails} onClose={closeViewer} onUnauthorized={onUnauthorized} />;
 
   const title = browse.folder?.parent.name ?? "Home";
   return (

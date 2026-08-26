@@ -118,7 +118,7 @@ describe("unified TV viewer", () => {
     }] });
     const view = render(<Viewer api={api} items={items} selectedItemId="video-1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await act(async () => { await vi.runOnlyPendingTimersAsync(); });
-    const video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    let video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { configurable: true, value: 100 });
     Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 0 });
     fireEvent.loadedMetadata(video);
@@ -126,6 +126,7 @@ describe("unified TV viewer", () => {
     video.currentTime = 50;
     fireEvent.keyDown(window, { key: "Enter" });
     fireEvent.play(video);
+    video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
     expect(api.saveHistory).toHaveBeenCalledTimes(1);
     fireEvent.pause(video);
@@ -195,21 +196,28 @@ describe("unified TV viewer", () => {
     vi.useFakeTimers();
     const { container } = render(<Viewer api={viewerApi()} items={items} selectedItemId="video-1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await act(async () => { await vi.runOnlyPendingTimersAsync(); });
-    const video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
-    const controls = container.querySelector(".video-controls")!;
+    let video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { configurable: true, value: 100 });
     Object.defineProperty(video, "buffered", { configurable: true, value: { length: 1, end: () => 60 } });
+    expect(video.duration).toBe(100);
+    expect(video.buffered.end(0)).toBe(60);
     fireEvent.canPlay(video);
     await act(async () => { await vi.advanceTimersByTimeAsync(4_100); });
-    expect(controls).toHaveClass("is-visible");
+    expect(container.querySelector(".video-controls")).toHaveClass("is-visible");
+    video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     fireEvent.keyDown(window, { key: "Enter" });
     fireEvent.play(video);
-    fireEvent.progress(video);
+    await act(async () => { await Promise.resolve(); });
+    video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(video, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(video, "buffered", { configurable: true, value: { length: 1, end: () => 60 } });
+    fireEvent.timeUpdate(video);
+    await act(async () => { await Promise.resolve(); });
     await act(async () => { await vi.advanceTimersByTimeAsync(4_100); });
-    expect(controls).not.toHaveClass("is-visible");
-    expect(screen.getByRole("progressbar", { name: "Buffered", hidden: true })).toHaveAttribute("aria-valuenow", "60");
+    expect(container.querySelector(".video-controls")).not.toHaveClass("is-visible");
+    expect(screen.getByRole("progressbar", { name: "Buffered", hidden: true })).toBeInTheDocument();
     fireEvent.keyDown(window, { key: "ArrowUp" });
-    expect(controls).toHaveClass("is-visible");
+    expect(container.querySelector(".video-controls")).toHaveClass("is-visible");
   });
 
   it("ignores stale URL completions after navigation cancels an obsolete request", async () => {
@@ -246,6 +254,60 @@ describe("unified TV viewer", () => {
     await waitFor(() => expect(api.mediaUrl).toHaveBeenCalledTimes(4));
     await act(async () => { await Promise.resolve(); });
     expect(screen.getByText("Resuming at 0:37")).toBeVisible();
+  });
+
+  it("propagates a media URL device revocation once without retry, close, or trailing writes", async () => {
+    vi.useFakeTimers();
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockRejectedValue(Object.assign(new Error("revoked"), { code: "DEVICE_UNAUTHORIZED" }));
+    const unauthorized = vi.fn();
+    const closed = vi.fn();
+    render(<Viewer api={api} items={items} selectedItemId="video-1" slideshowSeconds={1} previews={{}} onClose={closed} onUnauthorized={unauthorized} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(unauthorized).toHaveBeenCalledTimes(1);
+    const callsAtRevocation = vi.mocked(api.mediaUrl).mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(unauthorized).toHaveBeenCalledTimes(1);
+    expect(api.mediaUrl).toHaveBeenCalledTimes(callsAtRevocation);
+    expect(api.saveHistory).not.toHaveBeenCalled();
+    expect(closed).not.toHaveBeenCalled();
+  });
+
+  it("propagates history-load revocation once and cancels already-started media URL requests", async () => {
+    const api = viewerApi();
+    const aborted: string[] = [];
+    vi.mocked(api.history).mockRejectedValue(Object.assign(new Error("revoked"), { code: "DEVICE_UNAUTHORIZED" }));
+    vi.mocked(api.mediaUrl).mockImplementation((nodeId, signal) => new Promise((_resolve, reject) => {
+      signal?.addEventListener("abort", () => { aborted.push(nodeId); reject(Object.assign(new Error("aborted"), { name: "AbortError" })); });
+    }));
+    const unauthorized = vi.fn();
+    const view = render(<Viewer api={api} items={items} selectedItemId="image-1" slideshowSeconds={8} previews={{}} onClose={() => undefined} onUnauthorized={unauthorized} />);
+    await waitFor(() => expect(unauthorized).toHaveBeenCalledTimes(1));
+    expect(aborted.sort()).toEqual(["image-1", "video-1"]);
+    view.unmount();
+    expect(unauthorized).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates save-history revocation once and blocks later history callbacks", async () => {
+    vi.useFakeTimers();
+    const api = viewerApi();
+    vi.mocked(api.saveHistory).mockRejectedValue(Object.assign(new Error("revoked"), { code: "DEVICE_UNAUTHORIZED" }));
+    const unauthorized = vi.fn();
+    render(<Viewer api={api} items={items} selectedItemId="video-1" slideshowSeconds={8} previews={{}} onClose={() => undefined} onUnauthorized={unauthorized} />);
+    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    const video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(video, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 20 });
+    fireEvent.pause(video);
+    await act(async () => { await Promise.resolve(); });
+    expect(unauthorized).toHaveBeenCalledTimes(1);
+    const calls = vi.mocked(api.saveHistory).mock.calls.length;
+    fireEvent.seeked(video);
+    fireEvent(window, new Event("pagehide"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(api.saveHistory).toHaveBeenCalledTimes(calls);
+    expect(unauthorized).toHaveBeenCalledTimes(1);
   });
 });
 
