@@ -70,6 +70,17 @@ describe("source workbench", () => {
     expect(await screen.findByRole("button", { name: "Trips is in the household program" })).toBeDisabled();
   });
 
+  it("keeps an optimistic root selected and warns when the post-add refresh fails", async () => {
+    const api = workbenchApi();
+    const changed = vi.fn().mockRejectedValue(new Error("Overview refresh failed."));
+    render(<SourceWorkbench source={source} roots={[]} devices={[]} api={api} onChanged={changed} onClose={vi.fn()} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add Trips to household program" }));
+
+    expect(await screen.findByRole("button", { name: "Trips is in the household program" })).toBeDisabled();
+    expect(await screen.findByRole("status")).toHaveTextContent("Trips was added, but the household ledger could not refresh. The selection is preserved.");
+  });
+
   it("loads removal impact and removes a selected root only after confirmation", async () => {
     const api = workbenchApi();
     const changed = vi.fn().mockResolvedValue(undefined);

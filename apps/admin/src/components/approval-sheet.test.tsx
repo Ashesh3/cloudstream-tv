@@ -61,4 +61,25 @@ describe("approval sheet accessibility", () => {
     expect(close).toHaveBeenCalledTimes(1);
     expect(submit).not.toHaveBeenCalled();
   });
+
+  it("shows provider, account, index readiness, and affected access for every root", () => {
+    render(<ApprovalSheet request={request} roots={roots} sources={[source]} onApprove={vi.fn()} onClose={vi.fn()} />);
+    const row = screen.getByLabelText("Family Photos").closest("label")!;
+    expect(within(row).getByText("Google Drive · Home Drive")).toBeVisible();
+    expect(within(row).getByText("Program ready")).toBeVisible();
+    expect(within(row).getByText("Available after approval")).toBeVisible();
+  });
+
+  it("keeps quota-paused roots assignable and explains delayed content", () => {
+    const quotaSource: SourceDto = {
+      ...source,
+      indexState: { kind: "quota-exhausted", processedNodeCount: 7, pendingFolderCount: 2, recoverable: true, errorCode: "RESOURCE_EXHAUSTED" }
+    };
+    render(<ApprovalSheet request={request} roots={roots} sources={[quotaSource]} onApprove={vi.fn()} onClose={vi.fn()} />);
+    const checkbox = screen.getByLabelText("Family Photos");
+    expect(checkbox).toBeEnabled();
+    const row = checkbox.closest("label")!;
+    expect(within(row).getByText("Indexing paused")).toBeVisible();
+    expect(within(row).getByText("Content appears after indexing resumes.")).toBeVisible();
+  });
 });

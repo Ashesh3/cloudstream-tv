@@ -22,6 +22,7 @@ export function SourceWorkbench({ source, roots, devices = [], api, onChanged, o
   const [impact, setImpact] = useState<{ devices: DeviceDto[] } | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const impactRequest = useRef<{ generation: number; rootId: string | null }>({ generation: 0, rootId: null });
   useEffect(() => {
     setProgramRoots(roots.filter(root => root.enabled));
@@ -79,8 +80,9 @@ export function SourceWorkbench({ source, roots, devices = [], api, onChanged, o
   return <Dialog label="Choose source folders" onClose={onClose} className="source-workbench-shell folder-sheet">
     <div className="source-workbench flex max-h-[92vh] min-h-[min(44rem,92vh)] flex-col" data-workbench="source-folders">
       <div className="border-b px-4 py-3 md:hidden"><Button variant="ghost" size="sm" onClick={onClose}><ArrowLeftIcon />Back to sources</Button></div>
+      {notice && <p className="workbench-warning" role="status">{notice}</p>}
       <div className="grid min-h-0 flex-1 gap-0 md:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]">
-        <div className="min-h-0 p-4 md:border-r"><ProviderFolderStage api={api} source={source} selectedProviderNodeIds={new Set(programRoots.map(root => root.providerNodeId))} onRootAdded={root => { setProgramRoots(value => [...new Map([...value, root].map(item => [item.id, item])).values()]); void onChanged().catch(() => undefined); }} onClose={onClose} /></div>
+        <div className="min-h-0 p-4 md:border-r"><ProviderFolderStage api={api} source={source} selectedProviderNodeIds={new Set(programRoots.map(root => root.providerNodeId))} onRootAdded={root => { setProgramRoots(value => [...new Map([...value, root].map(item => [item.id, item])).values()]); setNotice(""); void onChanged().catch(() => setNotice(`${root.displayName} was added, but the household ledger could not refresh. The selection is preserved.`)); }} onClose={onClose} /></div>
         <div className="min-h-0 border-t bg-muted/20 p-4 md:border-t-0"><HouseholdProgram source={source} roots={programRoots} devices={devices} onRemove={root => void reviewRemoval(root)} /></div>
       </div>
     </div>

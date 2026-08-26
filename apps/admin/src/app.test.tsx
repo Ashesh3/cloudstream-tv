@@ -12,6 +12,7 @@ import type {
 } from "@cloudframe/shared";
 import { AdminApp } from "./app";
 import type { AdminApi } from "./api/client";
+import { CHECKED_CONTROL_SELECTORS, CONTROL_HIT_TARGET, DIRECTION_SEED } from "./design/ledger";
 
 const request = (id: string, name: string, createdAt: string): DeviceRequestDto => ({
   id,
@@ -128,16 +129,64 @@ afterEach(() => {
 });
 
 describe("mobile admin workflows", () => {
-  it("presents the approved operational dashboard with household metrics", async () => {
+  it("leads with source truth and attention before program figures", async () => {
     const client = api();
     await login(client);
 
-    expect(screen.getByRole("heading", { name: "Household overview" })).toBeVisible();
-    expect(screen.getByText("Pending requests").parentElement).toHaveTextContent("2");
-    expect(screen.getByText("Approved devices").parentElement).toHaveTextContent("1");
-    expect(screen.getByText("Cloud sources").parentElement).toHaveTextContent("1");
-    expect(screen.getByText("Available folders").parentElement).toHaveTextContent("1");
+    expect(screen.queryByText("Operations")).not.toBeInTheDocument();
+    const sourceHealth = screen.getByRole("region", { name: "Source health" });
+    const attention = screen.getByRole("region", { name: "Attention" });
+    const figures = screen.getByRole("region", { name: "Program figures" });
+    expect(sourceHealth.compareDocumentPosition(attention) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(attention.compareDocumentPosition(figures) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(sourceHealth).getByText("Indexing selected folders")).toBeVisible();
+    expect(within(attention).getByText("2 televisions waiting")).toBeVisible();
+    expect(within(figures).getByText("1 approved")).toBeVisible();
     expect(screen.getByRole("button", { name: "Open admin menu" })).toBeVisible();
+  });
+
+  it("keeps one section title, four safe-area mobile actions, and labels every icon button", async () => {
+    const client = api();
+    await login(client);
+
+    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile admin sections" });
+    expect(within(mobileNavigation).getAllByRole("button")).toHaveLength(4);
+    expect(mobileNavigation).toHaveAttribute("data-safe-area", "bottom");
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+
+    for (const section of ["Devices", "Sources", "Settings", "Requests"]) {
+      fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: section }));
+      expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    }
+    for (const button of screen.getAllByRole("button")) expect(button).toHaveAccessibleName();
+  });
+
+  it("announces refresh progress and failures through live regions", async () => {
+    const client = api();
+    await login(client);
+    let rejectRefresh!: (reason?: unknown) => void;
+    vi.mocked(client.overview).mockReturnValueOnce(new Promise((_resolve, reject) => { rejectRefresh = reject; }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Refreshing household ledger…");
+    rejectRefresh(new Error("Refresh failed."));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Refresh failed.");
+  });
+
+  it("keeps compact Radix controls while preserving 44px hit targets and checked-state selectors", () => {
+    expect(CONTROL_HIT_TARGET).toBe(44);
+    expect(CHECKED_CONTROL_SELECTORS).toEqual([
+      '[data-slot="checkbox"][data-state="checked"]',
+      '[data-slot="switch"][data-state="checked"]'
+    ]);
+  });
+
+  it("emits the approved direction seed in the first admin root child", async () => {
+    const client = api();
+    await login(client);
+    const root = document.querySelector(".admin-root")!;
+    expect(root.firstChild?.nodeType).toBe(Node.COMMENT_NODE);
+    expect(root.firstChild?.textContent).toContain(DIRECTION_SEED);
   });
 
   it("logs in with a visible pending state and returns to login on an expired session", async () => {
@@ -220,7 +269,7 @@ describe("mobile admin workflows", () => {
     const client = api();
     await login(client);
     fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Sources" }));
-    expect(screen.getByText("Indexing selected folders")).toBeVisible();
+    expect(screen.getAllByText("Indexing selected folders").some(element => element.offsetParent !== null || element.isConnected)).toBe(true);
     expect(screen.getByText("42 items prepared")).toBeVisible();
     fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Settings" }));
     expect(screen.getByText("120")).toBeVisible();

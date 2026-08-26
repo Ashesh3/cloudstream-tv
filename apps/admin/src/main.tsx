@@ -1,5 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import "@fontsource-variable/instrument-sans";
+import "@fontsource-variable/archivo-narrow";
 import { AdminApp } from "./app";
 import { createAdminApi, type AdminApi } from "./api/client";
 import "./styles/app.css";
