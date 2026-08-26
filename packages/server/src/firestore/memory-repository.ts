@@ -20,6 +20,7 @@ import type {
 import { recomputeFolderMetadata, type IndexBatchCommitInput } from "@cloudframe/indexer";
 import {
   RepositoryError,
+  assignedRootDocumentId,
   validateDeviceApproval,
   type AppRepository
 } from "./repository";
@@ -100,11 +101,12 @@ export class MemoryRepository implements AppRepository {
   }
   async putSource(value: Source) { this.set(this.sources, value); }
   async connectSourceWithRoot(input: ConnectSourceInput) {
-    if (this.sources.has(input.source.id) || this.roots.has(input.root.id)) {
+    const rootId = assignedRootDocumentId(input.root.householdId, input.root.sourceId, input.root.providerNodeId);
+    if (this.sources.has(input.source.id) || this.roots.has(rootId)) {
       throw new RepositoryError("ROOT_CONFLICT", "Source connection conflicts with existing data");
     }
     this.sources.set(input.source.id, copy(input.source));
-    this.roots.set(input.root.id, copy(input.root));
+    this.roots.set(rootId, copy({ ...input.root, id: rootId }));
   }
   async getSource(id: string) { return this.get(this.sources, id); }
   async listSources(householdId: string) { return this.filter(this.sources, value => value.householdId === householdId); }
@@ -152,18 +154,30 @@ export class MemoryRepository implements AppRepository {
   }
   async putRoot(value: AssignedRoot) { this.set(this.roots, value); }
   async createOrEnableRoot(value: AssignedRoot) {
+    const deterministicId = assignedRootDocumentId(value.householdId, value.sourceId, value.providerNodeId);
+    const deterministic = this.roots.get(deterministicId);
+    if (deterministic) {
+      const enabled = copy({ ...deterministic, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true });
+      this.roots.set(deterministicId, enabled);
+      return copy(enabled);
+    }
     const duplicate = [...this.roots.values()].find(root =>
       root.householdId === value.householdId &&
       root.sourceId === value.sourceId &&
       root.providerNodeId === value.providerNodeId
     );
     if (duplicate) {
-      const enabled = copy({ ...duplicate, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true });
-      this.roots.set(enabled.id, enabled);
+      const enabled = copy({ ...duplicate, id: deterministicId, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true });
+      this.roots.delete(duplicate.id);
+      this.roots.set(deterministicId, enabled);
+      for (const [id, device] of this.devices) {
+        if (device.assignedRootIds.includes(duplicate.id)) this.devices.set(id, copy({ ...device, assignedRootIds: device.assignedRootIds.map(rootId => rootId === duplicate.id ? deterministicId : rootId) }));
+      }
       return copy(enabled);
     }
-    this.roots.set(value.id, copy(value));
-    return copy(value);
+    const created = copy({ ...value, id: deterministicId });
+    this.roots.set(deterministicId, created);
+    return copy(created);
   }
   async disableRoot(input: DisableRootInput) {
     const root = this.roots.get(input.rootId);

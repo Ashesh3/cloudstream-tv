@@ -1,5 +1,6 @@
 import type { Household } from "@cloudframe/shared";
 import {
+  assignedRootDocumentId,
   MemoryRepository,
   createOAuthService,
   createSourceService
@@ -92,7 +93,6 @@ async function setup() {
     keyring,
     now: () => currentNow,
     createId: () => `source-${++id}`,
-    createRootId: () => `root-${id}`,
     randomBytes: size => new Uint8Array(size).fill(++random),
     startInitialSync
   });
@@ -219,7 +219,7 @@ describe("OAuth state and encrypted source lifecycle", () => {
     expect(JSON.stringify(source)).not.toContain("synthetic-refresh-token");
     expect(await repository.listRootsForSource("source-1")).toEqual([
       expect.objectContaining({
-        id: "root-1",
+        id: assignedRootDocumentId(household.id, "source-1", "provider-root"),
         providerNodeId: "provider-root",
         displayName: "Family cloud",
         ancestryProviderIds: [],

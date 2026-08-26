@@ -9,6 +9,7 @@ import {
 } from "../crypto/provider-tokens";
 import { hashOpaqueToken } from "../auth/tokens";
 import type { AppRepository } from "../firestore/repository";
+import { assignedRootDocumentId } from "../firestore/repository";
 import { createSourceService } from "./sources";
 
 const STATE_BYTES = 32;
@@ -39,7 +40,6 @@ export interface OAuthServiceDependencies {
   keyring: ProviderTokenKeyring;
   now: () => Date;
   createId: () => string;
-  createRootId?: () => string;
   randomBytes?: (size: number) => Uint8Array;
   startInitialSync: (sourceId: string) => Promise<void>;
   logger?: (event: { code: string; provider: ProviderKind }) => void;
@@ -204,7 +204,7 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
         throw new OAuthServiceError("OAUTH_PROVIDER_ERROR", "Cloud authorization failed.");
       }
       initialRoot = {
-        id: dependencies.createRootId?.() ?? createId(),
+        id: assignedRootDocumentId(consumed.householdId, source.id, providerRoot.providerNodeId),
         householdId: consumed.householdId,
         sourceId: source.id,
         providerNodeId: providerRoot.providerNodeId,

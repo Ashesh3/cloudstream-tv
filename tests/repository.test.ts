@@ -12,6 +12,7 @@ import type {
   WatchHistory
 } from "@cloudframe/shared";
 import {
+  assignedRootDocumentId,
   createFirestoreClient,
   decodeFirestoreDocument,
   FirestoreRepository,
@@ -608,7 +609,10 @@ describe("FirestoreRepository admin management transactions", () => {
 
     await repo.connectSourceWithRoot({ source, root });
 
-    expect(writes).toEqual(["create:sources/s1", "create:roots/root-1"]);
+    expect(writes).toEqual([
+      "create:sources/s1",
+      `create:roots/${assignedRootDocumentId("h1", "s1", "provider-root")}`
+    ]);
   });
 
   it("removes source, disables roots, and detaches devices in one transaction", async () => {
@@ -660,18 +664,39 @@ describe("FirestoreRepository admin management transactions", () => {
     expect(writes).toContain("update:devices/d1:{\"assignedRootIds\":[]}");
   });
 
-  it("re-enables a unique source/provider root instead of creating a duplicate", async () => {
+  it("migrates and re-enables a legacy root under the deterministic identity", async () => {
     const writes: string[] = [];
     const firestore = createManagementFirestore({
       writes,
-      roots: [{ ...makeRoot(), enabled: false, displayName: "Old" }]
+      roots: [{ ...makeRoot(), enabled: false, displayName: "Old" }],
+      devices: [{ ...device, assignedRootIds: ["root-1"] }]
     });
     const repo = new FirestoreRepository(firestore);
 
     const root = await repo.createOrEnableRoot({ ...makeRoot(), id: "root-new", displayName: "New" });
 
-    expect(root).toMatchObject({ id: "root-1", displayName: "New", enabled: true });
-    expect(writes).toEqual([expect.stringMatching(/^set:roots\/root-1:/)]);
+    const expectedId = assignedRootDocumentId("h1", "s1", "provider-root");
+    expect(root).toMatchObject({ id: expectedId, displayName: "New", enabled: true });
+    expect(writes).toContain(`create:roots/${expectedId}`);
+    expect(writes).toContain("delete:roots/root-1");
+    expect(writes).toContain(`update:devices/d1:{"assignedRootIds":["${expectedId}"]}`);
+  });
+
+  it("serializes concurrent absent-root creates onto one deterministic document", async () => {
+    const fake = createConcurrentRootFirestore();
+    const repo = new FirestoreRepository(fake.firestore);
+    const input = makeRoot();
+
+    const [first, second] = await Promise.all([
+      repo.createOrEnableRoot({ ...input, id: "random-a" }),
+      repo.createOrEnableRoot({ ...input, id: "random-b" })
+    ]);
+
+    const expectedId = assignedRootDocumentId("h1", "s1", "provider-root");
+    expect(first.id).toBe(expectedId);
+    expect(second.id).toBe(expectedId);
+    expect(fake.rootIds()).toEqual([expectedId]);
+    expect(expectedId).not.toContain("provider-root");
   });
 });
 
@@ -919,6 +944,98 @@ function createConcurrentApprovalFirestore(): {
   } as unknown as Firestore;
 
   return { firestore, createdTokenClaimIds };
+}
+
+function createConcurrentRootFirestore(): {
+  firestore: Firestore;
+  rootIds(): string[];
+} {
+  type Ref = { key: string; id: string };
+  type Query = { collection: string; filters: Array<[string, unknown]>; limit?: number };
+  const documents = new Map<string, Record<string, unknown>>();
+  const versions = new Map<string, number>();
+  const references = new Map<string, Ref>();
+  let firstAttemptCount = 0;
+  const barrier: Array<() => void> = [];
+  const reference = (collection: string, id: string): Ref => {
+    const key = `${collection}/${id}`;
+    const existing = references.get(key);
+    if (existing) return existing;
+    const created = { key, id };
+    references.set(key, created);
+    return created;
+  };
+  const queryBuilder = (query: Query): unknown => ({
+    __query: query,
+    where(field: string, _operator: string, value: unknown) {
+      return queryBuilder({ ...query, filters: [...query.filters, [field, value]] });
+    },
+    limit(value: number) { return queryBuilder({ ...query, limit: value }); }
+  });
+  const snapshot = (ref: Ref) => ({
+    id: ref.id,
+    ref,
+    exists: documents.has(ref.key),
+    data: () => documents.get(ref.key)
+  });
+
+  const firestore = {
+    collection(collection: string) {
+      return {
+        doc(id: string) { return reference(collection, id); },
+        where(field: string, _operator: string, value: unknown) {
+          return queryBuilder({ collection, filters: [[field, value]] });
+        }
+      };
+    },
+    async runTransaction(operation: (transaction: unknown) => Promise<unknown>) {
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const reads = new Map<string, number>();
+        const writes: Array<{ kind: "create" | "set" | "update" | "delete"; ref: Ref; value?: Record<string, unknown> }> = [];
+        const result = await operation({
+          async get(target: Ref | { __query?: Query }) {
+            if ("key" in target) {
+              reads.set(target.key, versions.get(target.key) ?? 0);
+              return snapshot(target);
+            }
+            const query = target.__query;
+            if (!query) throw new Error("Unexpected root transaction query");
+            const docs = [...documents.entries()]
+              .filter(([key]) => key.startsWith(`${query.collection}/`))
+              .filter(([, value]) => query.filters.every(([field, expected]) => value[field] === expected))
+              .slice(0, query.limit ?? Number.POSITIVE_INFINITY)
+              .map(([key]) => snapshot(reference(query.collection, key.split("/")[1]!)));
+            return { docs };
+          },
+          create(ref: Ref, value: Record<string, unknown>) { writes.push({ kind: "create", ref, value }); },
+          set(ref: Ref, value: Record<string, unknown>) { writes.push({ kind: "set", ref, value }); },
+          update(ref: Ref, value: Record<string, unknown>) { writes.push({ kind: "update", ref, value }); },
+          delete(ref: Ref) { writes.push({ kind: "delete", ref }); }
+        });
+
+        if (attempt === 0) {
+          firstAttemptCount += 1;
+          if (firstAttemptCount < 2) await new Promise<void>(resolve => barrier.push(resolve));
+          else barrier.splice(0).forEach(resolve => resolve());
+        }
+        if ([...reads].some(([key, version]) => (versions.get(key) ?? 0) !== version)) continue;
+        for (const write of writes) {
+          if (write.kind === "create" && documents.has(write.ref.key)) throw new Error("document already exists");
+          if (write.kind === "delete") documents.delete(write.ref.key);
+          else if (write.kind === "update") documents.set(write.ref.key, { ...documents.get(write.ref.key), ...write.value });
+          else documents.set(write.ref.key, write.value!);
+          versions.set(write.ref.key, (versions.get(write.ref.key) ?? 0) + 1);
+        }
+        return result;
+      }
+      throw new Error("transaction retry exhausted");
+    }
+  } as unknown as Firestore;
+
+  return {
+    firestore,
+    rootIds: () => [...documents.keys()].filter(key => key.startsWith("roots/")).map(key => key.slice("roots/".length))
+  };
 }
 
 function makeSource(): Source {

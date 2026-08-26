@@ -5,7 +5,9 @@ import type {
   Source
 } from "@cloudframe/shared";
 import {
+  assignedRootDocumentId,
   createApiApp,
+  hashOpaqueToken,
   verifyPassphrase
 } from "@cloudframe/server";
 import { describe, expect, it, vi } from "vitest";
@@ -221,6 +223,38 @@ describe("admin management HTTP API", () => {
     expect(callback.headers.get("location")).not.toContain("opaque-state");
   });
 
+  it("preserves a rolling admin cookie on the OAuth 303 callback", async () => {
+    const harness = await createTestApi();
+    const admin = await login(harness.app);
+    const session = await harness.repository.getAdminSessionByHash(hashOpaqueToken(admin.raw));
+    await harness.repository.putAdminSession({
+      ...session!,
+      expiresAt: new Date(harness.now.getTime() + 29 * 24 * 60 * 60 * 1000)
+    });
+    const app = createApiApp({
+      repository: harness.repository,
+      config: {
+        householdId: harness.householdId,
+        passphrasePepper: harness.pepper,
+        csrfSecret: harness.csrfSecret,
+        allowedOrigin: harness.origin
+      },
+      now: () => harness.now,
+      oauth: {
+        beginAuthorization: vi.fn(),
+        completeAuthorization: vi.fn(async () => ({ sourceId: "source-1", status: "connected" as const }))
+      }
+    });
+
+    const response = await app(new Request(
+      `${harness.origin}/api/admin/oauth/google/callback?state=opaque&code=provider-code`,
+      { headers: admin.headers }
+    ));
+
+    expect(response.status).toBe(303);
+    expect(cookieValue(response, "admin_session")).toBe(admin.raw);
+  });
+
   it("lists safe sources and previews then atomically removes a confirmed source", async () => {
     const harness = await createTestApi();
     const source = makeSource(harness.householdId, harness.now);
@@ -402,6 +436,7 @@ describe("admin management HTTP API", () => {
     const roots = await harness.repository.listRootsForSource(source.id);
     expect(roots).toHaveLength(1);
     expect(roots[0]).toMatchObject({
+      id: assignedRootDocumentId(harness.householdId, source.id, "provider-folder"),
       providerNodeId: "provider-folder",
       ancestryProviderIds: ["provider-root"],
       enabled: true

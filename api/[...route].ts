@@ -94,7 +94,6 @@ const oauth = createOAuthService({
   keyring: { currentVersion: tokenKeyVersion, keys: { [tokenKeyVersion]: tokenKey } },
   now: () => new Date(),
   createId: () => crypto.randomUUID(),
-  createRootId: () => crypto.randomUUID(),
   startInitialSync: async sourceId => {
     await indexing.startSource(sourceId, "initial");
   }

@@ -404,7 +404,7 @@ async function oauthCallback(request: Request, dependencies: ApiAppDependencies,
   const authenticated = await authenticateAdmin(request, dependencies, now);
   const url = new URL(request.url);
   const state = url.searchParams.get("state");
-  if (!state || state.length > 1024) return oauthRedirect("invalid");
+  if (!state || state.length > 1024) return oauthRedirect("invalid", authenticated.responseHeaders);
   try {
     await dependencies.oauth.completeAuthorization({
       householdId: dependencies.config.householdId,
@@ -415,17 +415,21 @@ async function oauthCallback(request: Request, dependencies: ApiAppDependencies,
       ...(url.searchParams.get("code") ? { code: url.searchParams.get("code")! } : {}),
       ...(url.searchParams.get("error") ? { providerError: url.searchParams.get("error")! } : {})
     });
-    return oauthRedirect("connected");
+    return oauthRedirect("connected", authenticated.responseHeaders);
   } catch (error) {
     if (error instanceof OAuthServiceError || error instanceof ProviderError) {
-      return oauthRedirect(error instanceof OAuthServiceError && error.code === "OAUTH_CANCELLED" ? "cancelled" : "failed");
+      return oauthRedirect(error instanceof OAuthServiceError && error.code === "OAUTH_CANCELLED" ? "cancelled" : "failed", authenticated.responseHeaders);
     }
     throw error;
   }
 }
 
-function oauthRedirect(status: "connected" | "failed" | "invalid" | "cancelled") {
-  return new Response(null, { status: 303, headers: { location: `/admin?section=sources&oauth=${status}`, "cache-control": "no-store" } });
+function oauthRedirect(status: "connected" | "failed" | "invalid" | "cancelled", authenticationHeaders?: HeadersInit) {
+  const headers = new Headers(authenticationHeaders);
+  headers.set("location", `/admin?section=sources&oauth=${status}`);
+  headers.set("cache-control", "no-store");
+  headers.set("referrer-policy", "no-referrer");
+  return new Response(null, { status: 303, headers });
 }
 
 async function sourceImpact(request: Request, dependencies: ApiAppDependencies, now: Date, sourceId: string) {

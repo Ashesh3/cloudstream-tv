@@ -18,6 +18,7 @@ import type {
   WatchHistory
 } from "@cloudframe/shared";
 import type { Firestore, Query, Transaction, WriteBatch } from "@google-cloud/firestore";
+import { createHash } from "node:crypto";
 import { recomputeFolderMetadata, type IndexBatchCommitInput } from "@cloudframe/indexer";
 
 export interface RateLimitConsumeInput {
@@ -78,6 +79,22 @@ export interface UpdateDeviceInput {
 export interface SourceImpact {
   roots: AssignedRoot[];
   devices: Device[];
+}
+
+export function assignedRootDocumentId(
+  householdId: string,
+  sourceId: string,
+  providerNodeId: string
+): string {
+  const digest = createHash("sha256")
+    .update("assigned-root\0", "utf8")
+    .update(householdId, "utf8")
+    .update("\0", "utf8")
+    .update(sourceId, "utf8")
+    .update("\0", "utf8")
+    .update(providerNodeId, "utf8")
+    .digest("base64url");
+  return `root_${digest}`;
 }
 
 export interface ListWatchHistoryInput {
@@ -246,11 +263,12 @@ export class FirestoreRepository implements AppRepository {
   async connectSourceWithRoot(input: ConnectSourceInput): Promise<void> {
     await this.firestore.runTransaction(async transaction => {
       const sourceRef = this.firestore.collection(COLLECTIONS.sources).doc(input.source.id);
-      const rootRef = this.firestore.collection(COLLECTIONS.roots).doc(input.root.id);
+      const rootId = assignedRootDocumentId(input.root.householdId, input.root.sourceId, input.root.providerNodeId);
+      const rootRef = this.firestore.collection(COLLECTIONS.roots).doc(rootId);
       const [source, root] = await Promise.all([transaction.get(sourceRef), transaction.get(rootRef)]);
       if (source.exists || root.exists) throw new RepositoryError("ROOT_CONFLICT", "Source connection conflicts with existing data");
       transaction.create(sourceRef, input.source);
-      transaction.create(rootRef, input.root);
+      transaction.create(rootRef, { ...input.root, id: rootId });
     });
   }
   getSource(id: string) { return this.getById<Source>(COLLECTIONS.sources, id); }
@@ -317,24 +335,44 @@ export class FirestoreRepository implements AppRepository {
   putRoot(value: AssignedRoot) { return this.put(COLLECTIONS.roots, value); }
   async createOrEnableRoot(value: AssignedRoot): Promise<AssignedRoot> {
     return this.firestore.runTransaction(async transaction => {
+      const deterministicId = assignedRootDocumentId(value.householdId, value.sourceId, value.providerNodeId);
+      const deterministicRef = this.firestore.collection(COLLECTIONS.roots).doc(deterministicId);
       const duplicateQuery = this.firestore.collection(COLLECTIONS.roots)
         .where("sourceId", "==", value.sourceId)
         .where("providerNodeId", "==", value.providerNodeId)
         .limit(1);
-      const duplicateSnapshots = await transaction.get(duplicateQuery);
+      const [deterministicSnapshot, duplicateSnapshots, deviceSnapshots] = await Promise.all([
+        transaction.get(deterministicRef),
+        transaction.get(duplicateQuery),
+        transaction.get(this.firestore.collection(COLLECTIONS.devices).where("householdId", "==", value.householdId))
+      ]);
+      if (deterministicSnapshot.exists) {
+        const current = decodeFirestoreDocument<AssignedRoot>(deterministicSnapshot.id, deterministicSnapshot.data());
+        if (current.householdId !== value.householdId || current.sourceId !== value.sourceId || current.providerNodeId !== value.providerNodeId) {
+          throw new RepositoryError("ROOT_CONFLICT", "Root identity conflicts with existing data");
+        }
+        const enabled = { ...current, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true };
+        transaction.set(deterministicRef, enabled);
+        return enabled;
+      }
       const duplicate = duplicateSnapshots.docs[0];
       if (duplicate) {
         const current = decodeFirestoreDocument<AssignedRoot>(duplicate.id, duplicate.data());
         if (current.householdId !== value.householdId) throw new RepositoryError("ROOT_CONFLICT", "Root conflicts with another household");
-        const enabled = { ...current, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true };
-        transaction.set(duplicate.ref, enabled);
+        const enabled = { ...current, id: deterministicId, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true };
+        transaction.create(deterministicRef, enabled);
+        transaction.delete(duplicate.ref);
+        for (const snapshot of deviceSnapshots.docs) {
+          const device = decodeFirestoreDocument<Device>(snapshot.id, snapshot.data());
+          if (device.assignedRootIds.includes(current.id)) {
+            transaction.update(snapshot.ref, { assignedRootIds: device.assignedRootIds.map(id => id === current.id ? deterministicId : id) });
+          }
+        }
         return enabled;
       }
-      const ref = this.firestore.collection(COLLECTIONS.roots).doc(value.id);
-      const snapshot = await transaction.get(ref);
-      if (snapshot.exists) throw new RepositoryError("ROOT_CONFLICT", "Root already exists");
-      transaction.create(ref, value);
-      return value;
+      const deterministic = { ...value, id: deterministicId };
+      transaction.create(deterministicRef, deterministic);
+      return deterministic;
     });
   }
   async disableRoot(input: DisableRootInput): Promise<SourceImpact> {
