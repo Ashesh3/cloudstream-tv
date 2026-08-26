@@ -26,4 +26,22 @@ describe("API structured logging", () => {
     await expect(app(new Request("https://app.test/api/admin/sources/%E0%A4%A", { method: "DELETE" }))).resolves.toBeInstanceOf(Response);
     expect(JSON.stringify(events)).toContain('"sourceId":"invalid"');
   });
+
+  it("logs only bounded unexpected error identity, never its message", async () => {
+    const events: unknown[] = [];
+    const repository = new MemoryRepository();
+    repository.getHousehold = async () => {
+      const error = Object.assign(new Error("synthetic secret provider response"), { name: "GoogleAuthError", code: "E_OIDC" });
+      throw error;
+    };
+    const app = createApiApp({
+      repository,
+      config: { householdId: "h1", passphrasePepper: "pepper", csrfSecret: "csrf", allowedOrigin: "https://app.test" },
+      logger: { info: event => events.push(event), error: event => events.push(event) }
+    });
+    await app(new Request("https://app.test/api/bootstrap"));
+    const serialized = JSON.stringify(events);
+    expect(serialized).toContain('"errorName":"GoogleAuthError"');
+    expect(serialized).not.toContain("synthetic secret provider response");
+  });
 });

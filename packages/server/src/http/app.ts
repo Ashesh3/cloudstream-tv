@@ -78,6 +78,9 @@ export interface ApiLogEvent {
   sourceId?: string;
   deviceId?: string;
   runId?: string;
+  errorName?: string;
+  causeName?: string;
+  causeCode?: string;
 }
 
 export interface ApiLogger {
@@ -149,7 +152,11 @@ export function createApiApp(input: ApiAppDependencies) {
       if (safe.retryAfterSeconds !== undefined) {
         headers.set("retry-after", String(safe.retryAfterSeconds));
       }
-      dependencies.logger!.error({ ...requestEvent(request, requestId, safe.status, Date.now() - startedAt, safe.code), level: "error" });
+      dependencies.logger!.error({
+        ...requestEvent(request, requestId, safe.status, Date.now() - startedAt, safe.code),
+        ...safeErrorIdentity(error),
+        level: "error"
+      });
       return errorResponse(safe.toApiError(), safe.status, headers);
     }
   };
@@ -184,6 +191,23 @@ function safeRouteIdentifiers(path: string): Pick<ApiLogEvent, "sourceId" | "dev
 function safeRouteId(value: string): string {
   try { return decodeURIComponent(value).replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 128); }
   catch { return "invalid"; }
+}
+
+function safeErrorIdentity(error: unknown): Pick<ApiLogEvent, "errorName" | "causeName" | "causeCode"> {
+  if (!error || typeof error !== "object") return {};
+  const value = error as { name?: unknown; code?: unknown; cause?: unknown };
+  const cause = value.cause && typeof value.cause === "object"
+    ? value.cause as { name?: unknown; code?: unknown }
+    : null;
+  return {
+    ...(safeDiagnostic(value.name) ? { errorName: safeDiagnostic(value.name)! } : {}),
+    ...(safeDiagnostic(cause?.name) ? { causeName: safeDiagnostic(cause?.name)! } : {}),
+    ...(safeDiagnostic(cause?.code) ? { causeCode: safeDiagnostic(cause?.code)! } : {})
+  };
+}
+
+function safeDiagnostic(value: unknown): string | null {
+  return typeof value === "string" && /^[A-Za-z0-9_.:-]{1,80}$/.test(value) ? value : null;
 }
 
 async function routeRequest(
