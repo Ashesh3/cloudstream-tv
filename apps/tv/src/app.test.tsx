@@ -12,7 +12,10 @@ const api = (): TvApi => ({
   requestStatus: vi.fn(),
   home: vi.fn(),
   folder: vi.fn(),
-  thumbnailUrls: vi.fn()
+  thumbnailUrls: vi.fn(),
+  mediaUrl: vi.fn(),
+  history: vi.fn(),
+  saveHistory: vi.fn()
 });
 
 describe("TV enrollment and browse states", () => {
@@ -198,6 +201,31 @@ describe("TV enrollment and browse states", () => {
     expect(await screen.findByRole("heading", { name: "Cloudframe is offline" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() => expect(offline.bootstrap).toHaveBeenCalledTimes(2));
+  });
+
+  it("opens media in the loaded-folder viewer and restores the exact grid item after Back", async () => {
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.folder).mockResolvedValue({
+      parent: node("folder-parent", "folder", "Parent"), breadcrumbs: [],
+      children: [node("image-1", "image", "First"), node("folder-2", "folder", "Nested"), node("image-2", "image", "Second")],
+      nextCursor: null
+    });
+    vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
+    vi.mocked(client.mediaUrl).mockImplementation(async nodeId => ({ url: `https://provider.example/${nodeId}`, expiresAt: "2026-08-26T01:00:00.000Z", revision: "r1" }));
+    vi.mocked(client.history).mockResolvedValue({ history: [] });
+    vi.mocked(client.saveHistory).mockImplementation(async (nodeId, value) => ({ history: { nodeId, ...value, updatedAt: "2026-08-26T00:00:00.000Z" } }));
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    const grid = await screen.findByRole("grid", { name: "Parent" });
+    fireEvent.keyDown(grid, { key: "ArrowRight" });
+    fireEvent.keyDown(grid, { key: "ArrowRight" });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Second/ })).toHaveFocus());
+    fireEvent.click(screen.getByRole("button", { name: /Second/ }));
+    expect(await screen.findByRole("img", { name: "Second" })).toBeVisible();
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Second/ })).toHaveFocus());
   });
 });
 

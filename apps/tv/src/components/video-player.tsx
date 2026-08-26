@@ -1,0 +1,69 @@
+import type { RefObject } from "preact";
+import type { ViewerMediaItem, ViewerUrlState } from "@cloudframe/tv-core";
+
+export interface VideoPlayerProps {
+  item: ViewerMediaItem;
+  url?: ViewerUrlState;
+  videoRef: RefObject<HTMLVideoElement>;
+  controlsVisible: boolean;
+  buffering: boolean;
+  currentSeconds: number;
+  durationSeconds: number;
+  bufferedPercent: number;
+  onLoadedMetadata: () => void;
+  onPlaying: () => void;
+  onPlay: () => void;
+  onCanPlay: () => void;
+  onPause: () => void;
+  onWaiting: () => void;
+  onTimeUpdate: () => void;
+  onProgress: () => void;
+  onSeeked: () => void;
+  onEnded: () => void;
+  onError: () => void;
+}
+
+export function VideoPlayer(props: VideoPlayerProps) {
+  const source = props.url?.status === "ready" ? props.url.url : undefined;
+  return (
+    <div className="video-stage">
+      {source ? (
+        <video
+          ref={props.videoRef}
+          className="viewer-video"
+          src={source}
+          aria-label={`Playing ${props.item.name}`}
+          preload="metadata"
+          playsInline
+          onLoadedMetadata={props.onLoadedMetadata}
+          onPlaying={props.onPlaying}
+          onPlay={props.onPlay}
+          onPause={props.onPause}
+          onWaiting={props.onWaiting}
+          onCanPlay={props.onCanPlay}
+          onTimeUpdate={props.onTimeUpdate}
+          onProgress={props.onProgress}
+          onSeeked={props.onSeeked}
+          onEnded={props.onEnded}
+          onError={props.onError}
+        />
+      ) : <div className="viewer-loading" role="status">Preparing video…</div>}
+      <div className={`video-controls${props.controlsVisible ? " is-visible" : ""}`} aria-hidden={!props.controlsVisible}>
+        <span>{props.buffering ? "Buffering…" : "Play / Pause"}</span>
+        <span>−10s</span>
+        <time>{formatTime(props.currentSeconds)} / {formatTime(props.durationSeconds)}</time>
+        <span>+10s</span>
+        <span className="buffered-track" role="progressbar" aria-label="Buffered" aria-valuemin={0} aria-valuemax={100} aria-valuenow={props.bufferedPercent}>
+          <i style={{ width: `${props.bufferedPercent}%` }} />
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function formatTime(seconds: number) {
+  const safe = Number.isFinite(seconds) ? Math.max(0, Math.floor(seconds)) : 0;
+  const minutes = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return `${minutes}:${rest < 10 ? "0" : ""}${rest}`;
+}

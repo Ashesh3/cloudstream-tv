@@ -1,0 +1,170 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  activeViewerItem,
+  clampVideoSeek,
+  createViewerState,
+  historySnapshot,
+  viewerReducer,
+  type ViewerMediaItem
+} from "@cloudframe/tv-core";
+
+const media: ViewerMediaItem[] = [
+  { id: "image-1", name: "First.jpg", kind: "image", mimeType: "image/jpeg", revision: "r1" },
+  { id: "video-1", name: "Clip.mp4", kind: "video", mimeType: "video/mp4", revision: "r1" },
+  { id: "image-2", name: "Last.jpg", kind: "image", mimeType: "image/jpeg", revision: "r2" },
+  { id: "image-3", name: "Outside.jpg", kind: "image", mimeType: "image/jpeg", revision: "r3" }
+];
+
+describe("viewer reducer", () => {
+  it("opens on the exact selected media ID and requests only the active and adjacent window", () => {
+    const state = createViewerState(media, "video-1");
+
+    expect(activeViewerItem(state).id).toBe("video-1");
+    expect(state.restorationItemId).toBe("video-1");
+    expect(Object.keys(state.urls).sort()).toEqual(["image-1", "image-2", "video-1"]);
+    expect(Object.values(state.urls).every(entry => entry.status === "loading")).toBe(true);
+  });
+
+  it("clamps Left and Right without wrapping and pauses a deactivated video", () => {
+    let state = createViewerState(media, "image-1");
+    state = viewerReducer(state, { type: "navigate", direction: -1 });
+    expect(state.index).toBe(0);
+
+    state = viewerReducer(state, { type: "navigate", direction: 1 });
+    state = viewerReducer(state, { type: "enter" });
+    expect(state.playbackIntent).toBe("play");
+    state = viewerReducer(state, { type: "navigate", direction: 1 });
+    expect(activeViewerItem(state).id).toBe("image-2");
+    expect(state.playbackIntent).toBe("pause");
+    expect(Object.keys(state.urls).sort()).toEqual(["image-2", "image-3", "video-1"]);
+
+    state = viewerReducer(state, { type: "navigate", direction: 1 });
+    state = viewerReducer(state, { type: "navigate", direction: 1 });
+    expect(state.index).toBe(3);
+  });
+
+  it("uses Enter for image slideshow and video play-pause", () => {
+    let image = createViewerState(media, "image-1");
+    image = viewerReducer(image, { type: "enter" });
+    expect(image.slideshowActive).toBe(true);
+    image = viewerReducer(image, { type: "enter" });
+    expect(image.slideshowActive).toBe(false);
+
+    let video = createViewerState(media, "video-1");
+    video = viewerReducer(video, { type: "enter" });
+    expect(video.playbackIntent).toBe("play");
+    video = viewerReducer(video, { type: "enter" });
+    expect(video.playbackIntent).toBe("pause");
+  });
+
+  it("opens and closes details before Back closes with the original restoration target", () => {
+    let state = createViewerState(media, "video-1");
+    state = viewerReducer(state, { type: "overlay", open: true });
+    state = viewerReducer(state, { type: "navigate", direction: 1 });
+    state = viewerReducer(state, { type: "back" });
+    expect(state.overlayOpen).toBe(false);
+    expect(state.closed).toBe(false);
+    state = viewerReducer(state, { type: "back" });
+    expect(state.closed).toBe(true);
+    expect(state.restorationItemId).toBe("video-1");
+  });
+
+  it("advances image slides, pauses at video, continues on ended, and never wraps", () => {
+    let state = createViewerState(media.slice(0, 3), "image-1");
+    state = viewerReducer(state, { type: "enter" });
+    state = viewerReducer(state, { type: "slideshow-tick" });
+    expect(activeViewerItem(state).id).toBe("video-1");
+    expect(state.slideshowActive).toBe(true);
+    expect(state.playbackIntent).toBe("play");
+
+    state = viewerReducer(state, { type: "video-ended", nodeId: "video-1" });
+    expect(activeViewerItem(state).id).toBe("image-2");
+    expect(state.playbackIntent).toBe("pause");
+    state = viewerReducer(state, { type: "slideshow-tick" });
+    expect(state.index).toBe(2);
+    expect(state.slideshowActive).toBe(false);
+  });
+
+  it("stops the slideshow on a current image error", () => {
+    let state = createViewerState(media, "image-1");
+    state = viewerReducer(state, { type: "enter" });
+    state = viewerReducer(state, { type: "media-error", nodeId: "image-1", kind: "generic" });
+    expect(state.slideshowActive).toBe(false);
+    expect(state.mediaError).toMatchObject({ nodeId: "image-1", kind: "generic" });
+  });
+
+  it("ignores stale URL completions and permits exactly one refresh per node revision", () => {
+    let state = createViewerState(media, "image-1");
+    const first = state.urls["image-1"]!;
+    state = viewerReducer(state, {
+      type: "url-ready", nodeId: "image-1", requestId: first.requestId + 100,
+      url: "https://stale.example/media", revision: "r1"
+    });
+    expect(state.urls["image-1"]!.status).toBe("loading");
+
+    state = viewerReducer(state, {
+      type: "url-ready", nodeId: "image-1", requestId: first.requestId,
+      url: "https://provider.example/media", revision: "r1"
+    });
+    state = viewerReducer(state, { type: "authorization-expired", nodeId: "image-1", resumeSeconds: 37 });
+    const retry = state.urls["image-1"]!;
+    expect(retry.status).toBe("loading");
+    expect(retry.refreshUsed).toBe(true);
+    expect(retry.resumeSeconds).toBe(37);
+
+    state = viewerReducer(state, {
+      type: "url-ready", nodeId: "image-1", requestId: retry.requestId,
+      url: "https://provider.example/fresh", revision: "r1"
+    });
+    state = viewerReducer(state, { type: "authorization-expired", nodeId: "image-1", resumeSeconds: 41 });
+    expect(state.urls["image-1"]!.status).toBe("error");
+    expect(state.urls["image-1"]!.errorKind).toBe("authorization");
+  });
+
+  it("shares the one-refresh cap with manual retry but resets it for a new revision", () => {
+    let state = createViewerState(media, "image-1");
+    const initial = state.urls["image-1"]!;
+    state = viewerReducer(state, {
+      type: "url-ready", nodeId: "image-1", requestId: initial.requestId,
+      url: "https://provider.example/media", revision: "r1"
+    });
+    state = viewerReducer(state, { type: "manual-retry", nodeId: "image-1", resumeSeconds: 12 });
+    const retry = state.urls["image-1"]!;
+    state = viewerReducer(state, {
+      type: "url-ready", nodeId: "image-1", requestId: retry.requestId,
+      url: "https://provider.example/revised", revision: "r2"
+    });
+    expect(state.urls["image-1"]!.refreshUsed).toBe(false);
+    state = viewerReducer(state, { type: "manual-retry", nodeId: "image-1", resumeSeconds: 14 });
+    expect(state.urls["image-1"]!.status).toBe("loading");
+    expect(state.urls["image-1"]!.refreshUsed).toBe(true);
+  });
+
+  it("hides controls only while the active video is playing with no overlay", () => {
+    let state = createViewerState(media, "video-1");
+    state = viewerReducer(state, { type: "controls-timeout" });
+    expect(state.controlsVisible).toBe(true);
+    state = viewerReducer(state, { type: "video-playing", nodeId: "video-1" });
+    state = viewerReducer(state, { type: "controls-timeout" });
+    expect(state.controlsVisible).toBe(false);
+    state = viewerReducer(state, { type: "activity" });
+    state = viewerReducer(state, { type: "overlay", open: true });
+    state = viewerReducer(state, { type: "controls-timeout" });
+    expect(state.controlsVisible).toBe(true);
+  });
+});
+
+describe("video helpers", () => {
+  it("seeks in bounded ten-second steps", () => {
+    expect(clampVideoSeek(4, 120, -10)).toBe(0);
+    expect(clampVideoSeek(116, 120, 10)).toBe(120);
+    expect(clampVideoSeek(51, 120, 10)).toBe(61);
+  });
+
+  it("builds finite history and marks only near-end playback complete", () => {
+    expect(historySnapshot(96, 100)).toEqual({ positionSeconds: 96, durationSeconds: 100, completed: true });
+    expect(historySnapshot(30, 100)).toEqual({ positionSeconds: 30, durationSeconds: 100, completed: false });
+    expect(historySnapshot(Number.NaN, Number.POSITIVE_INFINITY)).toEqual({ positionSeconds: 0, durationSeconds: 0, completed: false });
+  });
+});

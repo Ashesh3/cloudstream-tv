@@ -9,6 +9,7 @@ import { MediaCard } from "./components/media-card";
 import { SourceDrawer } from "./components/source-drawer";
 import { TvHeader } from "./components/tv-header";
 import { VirtualGrid } from "./components/virtual-grid";
+import { Viewer } from "./components/viewer";
 import { WaitingScreen } from "./components/waiting-screen";
 import { useTvSession } from "./state/use-tv-session";
 
@@ -39,10 +40,11 @@ export function TvApp({ api = tvApi, browserSupported = detectBrowserSupport() }
   if (session.state.status === "expired") return <TerminalState state="expired" title="Request expired" body="The approval window ended. Start a fresh request when you are ready." onRetry={session.refresh} />;
   if (session.state.status === "revoked") return <TerminalState state="revoked" title="TV access removed" body="This device has been disabled or revoked by the administrator." onRetry={session.refresh} />;
   if (session.state.status === "offline") return <StatePanel title="Cloudframe is offline" body="Check the TV network connection, then retry."><button className="primary-action" onClick={session.refresh}>Retry</button></StatePanel>;
-  return <BrowserShell api={api} onUnauthorized={session.refresh} />;
+  if (session.state.status !== "ready") return null;
+  return <BrowserShell api={api} onUnauthorized={session.refresh} slideshowSeconds={session.state.device.slideshowSeconds ?? session.state.household.defaultSlideshowSeconds} />;
 }
 
-function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () => void }) {
+function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; onUnauthorized: () => void; slideshowSeconds: number }) {
   const [browse, setBrowse] = useState<BrowseState>({ folder: null, roots: [], items: [], nextCursor: null, loading: true, error: null });
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
@@ -52,6 +54,7 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
   const [mountedIds, setMountedIds] = useState<string[]>([]);
   const [loadedPageCursors, setLoadedPageCursors] = useState<(string | null)[]>([]);
   const [restoredFocusTick, setRestoredFocusTick] = useState(0);
+  const [viewer, setViewer] = useState<{ items: MediaNodeDto[]; selectedItemId: string } | null>(null);
   const loadVersion = useRef(0);
   const pageRequest = useRef<Promise<void> | null>(null);
   const pendingFocus = useRef<number | null>(null);
@@ -142,6 +145,7 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
   }, [api, browse.items, mountedIds.join("|")]);
 
   useEffect(() => {
+    if (viewer) return;
     const handler = (event: KeyboardEvent) => {
       const action = normalizeTvKey(event);
       if (!action || !shouldHandleTvKey(action, event.repeat)) return;
@@ -163,9 +167,14 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [drawerOpen, focusedIndex, stack, browse, closeDrawerAndRestore]);
+  }, [drawerOpen, focusedIndex, stack, browse, closeDrawerAndRestore, viewer]);
 
   const openItem = (item: BrowseItem, index: number) => {
+    if (item.itemType === "node" && item.kind !== "folder") {
+      const mediaItems = browse.items.filter((candidate): candidate is { itemType: "node" } & MediaNodeDto => candidate.itemType === "node" && candidate.kind !== "folder");
+      setViewer({ items: mediaItems, selectedItemId: item.id });
+      return;
+    }
     const nodeId = item.itemType === "root" ? item.nodeId : item.kind === "folder" ? item.id : null;
     if (!nodeId) return;
     setStack(current => pushNavigationEntry(current, {
@@ -178,6 +187,13 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
     setFocusedIndex(0);
     setScrollTop(0);
     void loadFolder(nodeId);
+  };
+
+  const closeViewer = (restorationItemId: string) => {
+    setViewer(null);
+    const index = browse.items.findIndex(item => item.id === restorationItemId);
+    if (index >= 0) setFocusedIndex(index);
+    window.setTimeout(() => setRestoredFocusTick(value => value + 1), 0);
   };
 
   const goBack = () => {
@@ -210,6 +226,8 @@ function BrowserShell({ api, onUnauthorized }: { api: TvApi; onUnauthorized: () 
   if (browse.loading && browse.items.length === 0) return <BrowseSkeleton />;
   if (browse.error && browse.items.length === 0) return <StatePanel title="Source temporarily unavailable" body={browse.error}><button className="primary-action" onClick={() => browse.folder ? loadFolder(browse.folder.parent.id) : loadHome()}>Retry</button></StatePanel>;
   if (!browse.folder && browse.items.length === 0) return <StatePanel title="No folders assigned" body="Ask the household administrator to assign at least one folder to this TV."><button className="primary-action" onClick={loadHome}>Refresh</button></StatePanel>;
+
+  if (viewer) return <Viewer api={api} items={viewer.items} selectedItemId={viewer.selectedItemId} slideshowSeconds={slideshowSeconds} previews={thumbnails} onClose={closeViewer} />;
 
   const title = browse.folder?.parent.name ?? "Home";
   return (
