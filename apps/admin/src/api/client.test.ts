@@ -65,15 +65,18 @@ describe("admin API browser boundary", () => {
       nextCursor: null
     }));
     const client = createAdminApi(fetcher);
+    const controller = new AbortController();
 
     await client.providerFolders("source/a", {
       providerFolderId: "folder & one",
       cursor: "cursor+/=",
-      limit: 25
+      limit: 25,
+      signal: controller.signal
     });
 
     expect(fetcher.mock.calls[0]![0]).toBe(
       "/api/admin/sources/source%2Fa/provider-folders?providerFolderId=folder+%26+one&cursor=cursor%2B%2F%3D&limit=25"
     );
+    expect(fetcher.mock.calls[0]![1].signal).toBe(controller.signal);
   });
 });

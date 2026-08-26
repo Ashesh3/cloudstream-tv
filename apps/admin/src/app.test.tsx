@@ -106,7 +106,7 @@ function api(): AdminApi {
     sourceImpact: vi.fn().mockResolvedValue({ roots: [root], devices: [device] }),
     removeSource: vi.fn().mockResolvedValue({ removed: true, roots: [root], devices: [device] }),
     sourceTree: vi.fn().mockResolvedValue({ source, parent: null, folders: [] }),
-    providerFolders: vi.fn().mockResolvedValue({ source, current: null, breadcrumbs: [], folders: [], nextCursor: null }),
+    providerFolders: vi.fn().mockResolvedValue({ source, current: { providerNodeId: "provider-root", parentProviderId: null, name: "My Drive", assignedRootId: null }, breadcrumbs: [{ providerNodeId: "provider-root", parentProviderId: null, name: "My Drive", assignedRootId: null }], folders: [], nextCursor: null }),
     createRoot: vi.fn().mockResolvedValue({ root }),
     rootImpact: vi.fn().mockResolvedValue({ roots: [root], devices: [device] }),
     removeRoot: vi.fn().mockResolvedValue({ removed: true, roots: [root], devices: [device] }),
@@ -220,7 +220,8 @@ describe("mobile admin workflows", () => {
     const client = api();
     await login(client);
     fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Sources" }));
-    expect(screen.getByText("Initial · 42 nodes · 3 folders pending")).toBeVisible();
+    expect(screen.getByText("Indexing selected folders")).toBeVisible();
+    expect(screen.getByText("42 items prepared")).toBeVisible();
     fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Settings" }));
     expect(screen.getByText("120")).toBeVisible();
     expect(screen.getByText(/Estimated Firestore documents/)).toBeVisible();

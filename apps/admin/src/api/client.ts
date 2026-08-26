@@ -48,7 +48,7 @@ export interface AdminApi {
   sourceImpact(sourceId: string): Promise<SourceImpactResponse>;
   removeSource(sourceId: string): Promise<{ removed: true; roots: AssignedRootDto[]; devices: DeviceDto[] }>;
   sourceTree(sourceId: string, parentNodeId?: string): Promise<AdminFolderTreeResponse>;
-  providerFolders(sourceId: string, input: { providerFolderId?: string; cursor?: string | null; limit?: number }): Promise<AdminProviderFolderPageResponse>;
+  providerFolders(sourceId: string, input: { providerFolderId?: string; cursor?: string | null; limit?: number; signal?: AbortSignal }): Promise<AdminProviderFolderPageResponse>;
   createRoot(sourceId: string, body: CreateAssignedRootBody): Promise<{ root: AssignedRootDto }>;
   rootImpact(rootId: string): Promise<SourceImpactResponse>;
   removeRoot(rootId: string): Promise<{ removed: true; roots: AssignedRootDto[]; devices: DeviceDto[] }>;
@@ -111,7 +111,7 @@ export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
       if (input.cursor) query.set("cursor", input.cursor);
       if (input.limit !== undefined) query.set("limit", String(input.limit));
       const suffix = query.size > 0 ? `?${query.toString()}` : "";
-      return request(`/api/admin/sources/${encodeURIComponent(id)}/provider-folders${suffix}`);
+      return request(`/api/admin/sources/${encodeURIComponent(id)}/provider-folders${suffix}`, { signal: input.signal });
     },
     createRoot: (id, body) => request(`/api/admin/sources/${encodeURIComponent(id)}/roots`, { method: "POST", body: json(body) }),
     rootImpact: id => request(`/api/admin/roots/${encodeURIComponent(id)}/impact`),
