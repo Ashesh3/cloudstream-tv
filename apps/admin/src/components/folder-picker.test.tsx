@@ -43,16 +43,29 @@ describe("indexed folder picker", () => {
   it("loads impact, confirms root removal, and restores focus inside the parent sheet", async () => {
     const api = pickerApi(); const changed = vi.fn().mockResolvedValue(undefined);
     render(<FolderPicker source={source} roots={[root]} api={api} onChanged={changed} onClose={vi.fn()} />);
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
     const remove = await screen.findByRole("button", { name: "Remove root Albums" });
     remove.focus(); fireEvent.click(remove);
     const confirm = await screen.findByRole("dialog", { name: "Remove root" });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.queryByRole("dialog", { name: "Choose source folders" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Choose source folders" })).not.toBeInTheDocument();
+    expect(remove).not.toBeInTheDocument();
     expect(within(confirm).getByText("Living Room")).toBeVisible();
     fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
-    await waitFor(() => expect(remove).toHaveFocus());
+    const restored = await screen.findByRole("button", { name: "Remove root Albums" });
+    await waitFor(() => expect(restored).toHaveFocus());
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
     expect(screen.getByRole("dialog", { name: "Choose source folders" })).toBeVisible();
-    fireEvent.click(remove);
-    fireEvent.click((await screen.findByRole("dialog", { name: "Remove root" })).querySelector<HTMLButtonElement>(".danger")!);
+
+    fireEvent.click(restored);
+    const secondConfirm = await screen.findByRole("dialog", { name: "Remove root" });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    fireEvent.click(within(secondConfirm).getByRole("button", { name: "Remove root" }));
     await waitFor(() => expect(api.removeRoot).toHaveBeenCalledWith(root.id));
+    await waitFor(() => expect(changed).toHaveBeenCalled());
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    const parent = screen.getByRole("dialog", { name: "Choose source folders" });
+    await waitFor(() => expect(within(parent).getByRole("button", { name: "Close" })).toHaveFocus());
   });
 });
-
