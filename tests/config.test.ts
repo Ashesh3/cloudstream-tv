@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
@@ -102,6 +102,9 @@ describe("deployment configuration", () => {
 
   it("provides the custom Vercel build assembler", async () => {
     await expect(access("scripts/build-vercel.mjs")).resolves.toBeUndefined();
+    await expect(access("deploy/api-entry.ts")).resolves.toBeUndefined();
+    await expect(access("api/[...route].ts")).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(access("api")).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("assembles static SPAs, the API function, and private durable workflow functions", async () => {
@@ -163,6 +166,11 @@ describe("deployment configuration", () => {
       ".vercel/output/functions/api.func/.vc-config.json"
     ) as { architecture: string; useWebApi: boolean; regions: string[] };
     expect(apiConfig).toMatchObject({ architecture: "x86_64", useWebApi: true, regions: ["bom1"] });
+    const functionDirectories = (await readdir(".vercel/output/functions", { recursive: true, withFileTypes: true }))
+      .filter(entry => entry.isDirectory() && entry.name.endsWith(".func"))
+      .map(entry => entry.parentPath.replaceAll("\\", "/") + "/" + entry.name);
+    expect(functionDirectories.filter(path => path.endsWith("/api.func"))).toHaveLength(1);
+    expect(functionDirectories.some(path => /api\/\[\.\.\.route\].func$/.test(path))).toBe(false);
     await expect(access(".vercel/output/static/.well-known/workflow/v1/manifest.json"))
       .rejects.toMatchObject({ code: "ENOENT" });
   }, 120_000);

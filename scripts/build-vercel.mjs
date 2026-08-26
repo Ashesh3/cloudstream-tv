@@ -54,7 +54,7 @@ async function buildApiFunction(syncWorkflowId) {
   const directory = join(output, "functions", "api.func");
   await mkdir(directory, { recursive: true });
   await esbuild({
-    entryPoints: [join(root, "api", "[...route].ts")],
+    entryPoints: [join(root, "deploy", "api-entry.ts")],
     outfile: join(directory, "index.js"),
     bundle: true,
     platform: "node",
