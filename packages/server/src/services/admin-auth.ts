@@ -80,17 +80,23 @@ export function verifyAdminMutation(
   authenticated: AuthenticatedAdmin,
   allowedOrigin: string
 ): void {
-  if (
-    request.headers.get("origin") !== allowedOrigin ||
-    !constantTimeEqual(
-      request.headers.get("x-csrf-token") ?? "",
-      authenticated.csrfToken
-    )
-  ) {
+  if (request.headers.get("origin") !== allowedOrigin) {
     throw new HttpError(
       403,
-      "ADMIN_MUTATION_FORBIDDEN",
-      "The admin mutation could not be verified."
+      "ORIGIN_INVALID",
+      "The request origin could not be verified."
+    );
+  }
+  if (!constantTimeEqual(
+    request.headers.get("x-csrf-token") ?? "",
+    authenticated.csrfToken
+  )) {
+    throw new HttpError(
+      403,
+      "CSRF_INVALID",
+      "The request token expired. Retry safely.",
+      undefined,
+      { "x-csrf-token": authenticated.csrfToken }
     );
   }
 }

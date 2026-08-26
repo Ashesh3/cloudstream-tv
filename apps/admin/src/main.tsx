@@ -1,12 +1,12 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-
-function App() {
-  return <main aria-label="Cloudframe Admin">Cloudframe Admin</main>;
-}
+import { AdminApp } from "./app";
+import { createAdminApi } from "./api/client";
+import "./styles/tokens.css";
+import "./styles/app.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <AdminApp api={createAdminApi()} />
   </StrictMode>
 );

@@ -117,18 +117,23 @@ describe("HTTP bootstrap and admin authentication", () => {
     const csrf = login.headers.get("x-csrf-token")!;
     const baseHeaders = { cookie: cookieHeader(["admin_session", raw]) };
 
-    for (const headers of [
-      baseHeaders,
-      { ...baseHeaders, origin: "https://evil.example", "x-csrf-token": csrf },
-      { ...baseHeaders, origin }
-    ]) {
+    for (const [headers, code] of [
+      [baseHeaders, "ORIGIN_INVALID"],
+      [{ ...baseHeaders, origin: "https://evil.example", "x-csrf-token": csrf }, "ORIGIN_INVALID"],
+      [{ ...baseHeaders, origin }, "CSRF_INVALID"]
+    ] as const) {
       const response = await app(
         jsonRequest("/api/admin/logout", "POST", {}, headers)
       );
       expect(response.status).toBe(403);
       await expect(response.json()).resolves.toMatchObject({
-        code: "ADMIN_MUTATION_FORBIDDEN"
+        code
       });
+      if (code === "CSRF_INVALID") {
+        expect(response.headers.get("x-csrf-token")).toBe(csrf);
+      } else {
+        expect(response.headers.get("x-csrf-token")).toBeNull();
+      }
     }
 
     const success = await app(

@@ -207,7 +207,7 @@ export interface SourceImpactResponse {
 export interface AdminFolderTreeResponse {
   source: SourceDto;
   parent: MediaNodeDto | null;
-  folders: MediaNodeDto[];
+  folders: Array<MediaNodeDto & { assignedRootId: string | null }>;
 }
 
 export interface CreateAssignedRootBody {

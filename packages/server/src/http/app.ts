@@ -462,7 +462,10 @@ async function sourceTree(request: Request, dependencies: ApiAppDependencies, no
   } else {
     children = (await dependencies.repository.listNodesForSource(sourceId)).filter(node => node.parentNodeId === null);
   }
-  return ok({ source: encodeSourceDto(source), parent: parent ? encodeMediaNodeDto(parent) : null, folders: children.filter(node => node.available && node.kind === "folder" && node.householdId === dependencies.config.householdId).map(encodeMediaNodeDto) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+  const roots = (await dependencies.repository.listRootsForSource(sourceId))
+    .filter(root => root.householdId === dependencies.config.householdId && root.enabled);
+  const rootByProviderNodeId = new Map(roots.map(root => [root.providerNodeId, root.id]));
+  return ok({ source: encodeSourceDto(source), parent: parent ? encodeMediaNodeDto(parent) : null, folders: children.filter(node => node.available && node.kind === "folder" && node.householdId === dependencies.config.householdId).map(node => ({ ...encodeMediaNodeDto(node), assignedRootId: rootByProviderNodeId.get(node.providerNodeId) ?? null })) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
 }
 
 async function createRoot(request: Request, dependencies: ApiAppDependencies, now: Date, sourceId: string) {

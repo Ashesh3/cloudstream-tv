@@ -345,7 +345,7 @@ describe("admin management HTTP API", () => {
     );
     expect(tree.status).toBe(200);
     await expect(tree.json()).resolves.toMatchObject({
-      data: { folders: [{ id: folder.id, name: "Photos", folderCoverNodeIds: [cover.id] }] }
+      data: { folders: [{ id: folder.id, name: "Photos", folderCoverNodeIds: [cover.id], assignedRootId: null }] }
     });
 
     const created = await app(
@@ -361,6 +361,12 @@ describe("admin management HTTP API", () => {
     expect(await harness.repository.getRoot(rootId)).toMatchObject({
       providerNodeId: "provider-folder",
       enabled: true
+    });
+    const assignedTree = await app(
+      jsonRequest(`/api/admin/sources/${source.id}/tree?parentNodeId=${providerRoot.id}`, "GET", undefined, admin.headers)
+    );
+    await expect(assignedTree.json()).resolves.toMatchObject({
+      data: { folders: [{ id: folder.id, assignedRootId: rootId }] }
     });
     await harness.repository.putDevice(makeDevice(harness.householdId, harness.now, rootId));
 
