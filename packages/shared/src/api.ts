@@ -3,6 +3,7 @@ import type {
   Device,
   DeviceRequest,
   Household,
+  IndexCheckpoint,
   MediaNode,
   Source,
   WatchHistory
@@ -64,6 +65,7 @@ export interface SourceDto {
   lastSyncStartedAt: string | null;
   lastSyncCompletedAt: string | null;
   lastSyncErrorCode: string | null;
+  indexProgress: { mode: IndexCheckpoint["mode"]; processedNodeCount: number; pendingFolderCount: number; reconciliationActive: boolean } | null;
   createdAt: string;
 }
 
@@ -186,6 +188,7 @@ export interface AdminSettingsResponse {
   allowNewDeviceRequests: boolean;
   defaultMediaOrder: Household["defaultMediaOrder"];
   defaultSlideshowSeconds: number;
+  indexHealth: { totalNodeCount: number; availableNodeCount: number; indexingSourceCount: number; estimatedFirestoreDocumentCount: number };
 }
 
 export interface UpdateAdminSettingsBody {
@@ -280,6 +283,12 @@ export function encodeSourceDto(value: Source): SourceDto {
     lastSyncStartedAt: nullableIso(value.lastSyncStartedAt),
     lastSyncCompletedAt: nullableIso(value.lastSyncCompletedAt),
     lastSyncErrorCode: value.lastSyncErrorCode,
+    indexProgress: value.crawlCheckpoint ? {
+      mode: value.crawlCheckpoint.mode,
+      processedNodeCount: value.crawlCheckpoint.processedNodeCount,
+      pendingFolderCount: value.crawlCheckpoint.pendingProviderFolderIds?.length ?? 0,
+      reconciliationActive: value.crawlCheckpoint.mode === "reconcile"
+    } : null,
     createdAt: iso(value.createdAt)
   };
 }

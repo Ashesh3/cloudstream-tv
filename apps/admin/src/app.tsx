@@ -11,7 +11,7 @@ import { Settings } from "./components/settings";
 import { Shell, type AdminSection } from "./components/shell";
 import { Sources } from "./components/sources";
 
-const EMPTY_SETTINGS: AdminSettingsResponse = { allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8 };
+const EMPTY_SETTINGS: AdminSettingsResponse = { allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8, indexHealth: { totalNodeCount: 0, availableNodeCount: 0, indexingSourceCount: 0, estimatedFirestoreDocumentCount: 0 } };
 
 export function AdminApp({ api, navigate = url => window.location.assign(url), checkSession = true }: { api: AdminApi; navigate?(url: string): void; checkSession?: boolean }) {
   const initial = initialNavigation();
@@ -75,7 +75,7 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
       {section === "requests" && <Requests requests={overview.pendingRequests} roots={overview.roots} sources={sourceDtos} disabled={!overview.household.allowNewDeviceRequests} pendingId={denying} onApprove={setApproval} onDeny={request => { setDenying(request.id); setError(""); void guard(() => api.denyRequest(request.id)).then(() => { setOverview(value => value ? { ...value, pendingRequests: value.pendingRequests.filter(item => item.id !== request.id) } : value); setNotice(`${request.requestedName} was denied.`); }).catch(cause => setError(messageFor(cause))).finally(() => setDenying(null)); }} />}
       {section === "devices" && <Devices devices={overview.devices.filter(device => !device.revokedAt)} roots={overview.roots} onUpdate={(id, body: UpdateDeviceBody) => mutate(() => api.updateDevice(id, body), "Device updated.")} onRevoke={setRevoke} />}
       {section === "sources" && <Sources sources={sources} allRoots={overview.roots} api={api} onRefresh={refresh} onAuthorize={authorize} />}
-      {section === "settings" && <Settings value={settings} overview={overview} onSave={async value => { const result = await guard(() => api.updateSettings(value)); setSettings(result); setOverview(current => current ? { ...current, household: { ...current.household, ...result } } : current); }} onRotate={async (current, next) => { await guard(() => api.rotatePassphrase(current, next)); unauthenticate(); }} onLogout={async () => { await guard(() => api.logout()); unauthenticate(); }} />}
+      {section === "settings" && <Settings value={settings} overview={overview} onSave={async value => { const result = await guard(() => api.updateSettings(value)); setSettings(current => ({ ...current, ...result, indexHealth: result.indexHealth ?? current.indexHealth })); setOverview(current => current ? { ...current, household: { ...current.household, ...householdSettings(result) } } : current); }} onRotate={async (current, next) => { await guard(() => api.rotatePassphrase(current, next)); unauthenticate(); }} onLogout={async () => { await guard(() => api.logout()); unauthenticate(); }} />}
     </div>
     {approval && <ApprovalSheet request={approval} roots={overview.roots} sources={sourceDtos} onClose={() => setApproval(null)} onApprove={async body => {
       const approvedRequestId = approval.id;
@@ -103,3 +103,4 @@ function initialNavigation() {
 function isStatus(value: unknown, status: number): value is { status: number } { return Boolean(value && typeof value === "object" && "status" in value && (value as { status: unknown }).status === status); }
 function isStale(value: unknown) { return Boolean(value && typeof value === "object" && "code" in value && ["DEVICE_STALE", "DEVICE_NOT_FOUND", "DEVICE_REQUEST_RESOLVED", "SOURCE_NOT_FOUND", "ROOT_NOT_FOUND"].includes(String((value as { code: unknown }).code))); }
 function messageFor(value: unknown) { if (value instanceof TypeError) return "Cloudframe could not reach the server."; if (value instanceof Error) return value.message; return "The request could not be completed."; }
+function householdSettings(value: AdminSettingsResponse) { return { allowNewDeviceRequests: value.allowNewDeviceRequests, defaultMediaOrder: value.defaultMediaOrder, defaultSlideshowSeconds: value.defaultSlideshowSeconds }; }

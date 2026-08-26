@@ -56,6 +56,7 @@ const source: SourceDto = {
   lastSyncStartedAt: "2026-08-26T00:00:00.000Z",
   lastSyncCompletedAt: "2026-08-26T00:04:00.000Z",
   lastSyncErrorCode: null,
+  indexProgress: { mode: "initial", processedNodeCount: 42, pendingFolderCount: 3, reconciliationActive: false },
   createdAt: "2026-08-20T00:00:00.000Z"
 };
 
@@ -88,7 +89,8 @@ function api(): AdminApi {
     settings: vi.fn().mockResolvedValue({
       allowNewDeviceRequests: true,
       defaultMediaOrder: "captured-desc",
-      defaultSlideshowSeconds: 8
+      defaultSlideshowSeconds: 8,
+      indexHealth: { totalNodeCount: 120, availableNodeCount: 118, indexingSourceCount: 1, estimatedFirestoreDocumentCount: 122 }
     }),
     updateSettings: vi.fn().mockResolvedValue({
       allowNewDeviceRequests: false,
@@ -197,6 +199,16 @@ describe("mobile admin workflows", () => {
     expect(within(confirm).getByText(/cannot be undone/i)).toBeVisible();
     fireEvent.click(within(confirm).getByRole("button", { name: "Revoke permanently" }));
     await waitFor(() => expect(client.revokeDevice).toHaveBeenCalledWith("device-1"));
+  });
+
+  it("shows safe source checkpoint progress and estimated Firestore index health", async () => {
+    const client = api();
+    await login(client);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Sources" }));
+    expect(screen.getByText("Initial · 42 nodes · 3 folders pending")).toBeVisible();
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Settings" }));
+    expect(screen.getByText("120")).toBeVisible();
+    expect(screen.getByText(/Estimated Firestore documents/)).toBeVisible();
   });
 
   it("refreshes the overview when a device mutation reports stale state", async () => {

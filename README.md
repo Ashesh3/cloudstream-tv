@@ -70,6 +70,8 @@ The seed is idempotent: it creates the household only when absent and verifies t
 
 The checked-in Vercel cron is daily (`02:00 UTC`) because the current project is on Hobby. Manual **Sync now** remains available. The approved 15-minute reconciliation schedule requires Vercel Pro or an equivalent external scheduler.
 
+Production cutover is blocked by `STAGING_BACKUP_RESTORE_PENDING`: Firestore scheduled backup and a full restore drill must be enabled and exercised in staging first. The current development project cannot complete that gate until an approved billing account is linked.
+
 Detailed Firebase, WIF, OAuth, deployment, migration, rollback, and observability procedures are in [docs/operations/firebase-vercel-setup.md](docs/operations/firebase-vercel-setup.md). Real LG webOS acceptance is in [docs/operations/webos-acceptance.md](docs/operations/webos-acceptance.md).
 
 ## Security boundaries

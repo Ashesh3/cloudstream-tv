@@ -1,4 +1,4 @@
-import type { MediaNodeDto, ThumbnailUrlItem, TvRootCardDto } from "@cloudframe/shared";
+import type { MediaNodeDto, ThumbnailUrlItem, TvRootCardDto, WatchHistoryDto } from "@cloudframe/shared";
 import { normalizeTvKey, pushNavigationEntry, restoreNavigationEntry, shouldHandleTvKey, type NavigationEntry } from "@cloudframe/tv-core";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
@@ -55,6 +55,7 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
   const [loadedPageCursors, setLoadedPageCursors] = useState<(string | null)[]>([]);
   const [restoredFocusTick, setRestoredFocusTick] = useState(0);
   const [viewer, setViewer] = useState<{ items: MediaNodeDto[]; selectedItemId: string } | null>(null);
+  const [history, setHistory] = useState<Record<string, WatchHistoryDto>>({});
   const loadVersion = useRef(0);
   const pageRequest = useRef<Promise<void> | null>(null);
   const pendingFocus = useRef<number | null>(null);
@@ -127,6 +128,19 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
 
   useEffect(() => { void loadHome(); }, [loadHome]);
 
+  const loadHistory = useCallback(async () => {
+    try {
+      const response = await api.history();
+      const next: Record<string, WatchHistoryDto> = {};
+      response.history.forEach(value => { next[value.nodeId] = value; });
+      setHistory(next);
+    } catch (error) {
+      if ((error as { code?: string }).code === "DEVICE_UNAUTHORIZED") onUnauthorized();
+    }
+  }, [api, onUnauthorized]);
+
+  useEffect(() => { void loadHistory(); }, [loadHistory]);
+
   useEffect(() => {
     mountedRequest.current?.abort();
     const ids = coverAndMediaIds(browse.items, mountedIds);
@@ -194,6 +208,7 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
     const index = browse.items.findIndex(item => item.id === restorationItemId);
     if (index >= 0) setFocusedIndex(index);
     window.setTimeout(() => setRestoredFocusTick(value => value + 1), 0);
+    void loadHistory();
   };
 
   const goBack = () => {
@@ -258,7 +273,7 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
             if (extend) appendNextPage(pendingIndex);
           }}
           onSelect={openItem}
-          onBack={goBack}
+          onBack={stack.length > 0 ? () => { goBack(); return true; } : undefined}
           renderItem={(item, state) => item.itemType === "root" || item.kind === "folder" ? (
             <FolderCard
               name={item.itemType === "root" ? item.displayName : item.name}
@@ -273,6 +288,7 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
               kind={item.kind}
               thumbnailUrl={thumbnails[item.id]?.url}
               focused={state.focused}
+              resumeProgress={item.kind === "video" ? resumeProgress(history[item.id]) : 0}
               onSelect={() => openItem(item, state.index)}
             />
           )}
@@ -320,6 +336,10 @@ function cardRowHeight() { return window.innerHeight <= 760 ? 250 : 310; }
 function detectBrowserSupport() { return typeof Promise !== "undefined" && typeof fetch !== "undefined" && typeof URL !== "undefined"; }
 function providerLabel(value: string) { return value === "google" ? "Google Drive" : "OneDrive"; }
 function folderCount(value: { childFolderCount: number; childMediaCount: number }) { return `${value.childFolderCount} folders · ${value.childMediaCount} media`; }
+function resumeProgress(value?: WatchHistoryDto) {
+  if (!value || value.completed || !Number.isFinite(value.durationSeconds) || value.durationSeconds <= 0) return 0;
+  return Math.max(0, Math.min(1, value.positionSeconds / value.durationSeconds));
+}
 
 function coverAndMediaIds(items: BrowseItem[], mountedIds: string[]): string[] {
   const mounted: Record<string, boolean> = {};

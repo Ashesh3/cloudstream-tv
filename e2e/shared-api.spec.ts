@@ -50,7 +50,8 @@ test("shared API state promotes cookies, enforces reassignment, and revokes imme
     issueToken: () => {
       const raw = Buffer.alloc(32, ++id).toString("base64url");
       return { raw, hash: hashOpaqueToken(raw) };
-    }
+    },
+    logger: { info: () => undefined, error: () => undefined }
   });
 
   const tv = await browser.newContext({ baseURL: origin });
@@ -67,14 +68,17 @@ test("shared API state promotes cookies, enforces reassignment, and revokes imme
   }, { path, init });
   await tvPage.goto(origin);
   await adminPage.goto(origin);
-  const tvRequest = await call(tvPage, "/api/device-requests", { method: "POST", data: { name: "Living Room" } });
-  expect(tvRequest.status).toBe(201);
-  expect(tvJar.has("device_request")).toBe(true);
-
   const login = await call(adminPage, "/api/admin/login", { method: "POST", data: { passphrase: "correct horse battery staple" } });
   const csrf = login.headers["x-csrf-token"]!;
   const adminSession = adminJar.get("admin_session");
   if (!adminSession) throw new Error(`Admin session cookie was not stored: ${JSON.stringify(login)}`);
+  expect((await call(adminPage, "/api/admin/settings", { method: "PATCH", headers: { origin, "x-csrf-token": csrf }, data: { allowNewDeviceRequests: false } })).status).toBe(200);
+  expect((await call(tvPage, "/api/device-requests", { method: "POST", data: { name: "Blocked TV" } })).status).toBe(403);
+  expect(await repository.listDeviceRequests(householdId)).toHaveLength(0);
+  expect((await call(adminPage, "/api/admin/settings", { method: "PATCH", headers: { origin, "x-csrf-token": csrf }, data: { allowNewDeviceRequests: true } })).status).toBe(200);
+  const tvRequest = await call(tvPage, "/api/device-requests", { method: "POST", data: { name: "Living Room" } });
+  expect(tvRequest.status).toBe(201);
+  expect(tvJar.has("device_request")).toBe(true);
   const request = (await repository.listDeviceRequests(householdId))[0]!;
   const approval = await call(adminPage, `/api/admin/requests/${request.id}/approve`, {
     method: "POST", headers: { origin, "x-csrf-token": csrf }, data: { name: "Living Room", rootIds: [rootA.id] }

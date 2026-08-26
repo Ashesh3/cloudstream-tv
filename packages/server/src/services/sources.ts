@@ -133,21 +133,26 @@ export function createSourceService(
         status: source.status === "reauth-required" ? "syncing" : source.status,
         lastSyncErrorCode: null
       };
-      await repository.putSource(updated);
-      return {
-        ...refreshed,
-        refreshToken: refreshed.refreshToken ?? decrypted.credentials.refreshToken
-      };
+      const committed = await repository.updateSourceCredentialsIfCurrent({
+        sourceId,
+        expectedEncryptedRefreshToken: source.encryptedRefreshToken,
+        credentials: {
+          encryptedRefreshToken: updated.encryptedRefreshToken,
+          encryptedAccessToken: updated.encryptedAccessToken,
+          accessTokenExpiresAt: updated.accessTokenExpiresAt
+        }
+      });
+      if (!committed) throw new SourceServiceError("SOURCE_NOT_FOUND", "Source not found.");
+      return decryptSource(committed).credentials;
     } catch (error) {
       if (
         error instanceof ProviderError &&
         error.code === "PROVIDER_REAUTH_REQUIRED"
       ) {
-        await repository.putSource({
-          ...source,
-          status: "reauth-required",
-          lastSyncErrorCode: error.code
+        const current = await repository.markSourceReauthRequiredIfCurrent({
+          sourceId, expectedEncryptedRefreshToken: source.encryptedRefreshToken
         });
+        if (current && current.status !== "reauth-required") return decryptSource(current).credentials;
       }
       throw error;
     }

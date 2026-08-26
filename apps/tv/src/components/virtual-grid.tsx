@@ -36,7 +36,7 @@ interface VirtualGridProps<T extends VirtualGridItem> {
   onFocusedIndexChange: (index: number, needsPageExtension?: boolean, pendingIndex?: number) => void;
   onMountedItemsChange?: (ids: string[]) => void;
   onSelect?: (item: T, index: number) => void;
-  onBack?: () => void;
+  onBack?: () => boolean | void;
   renderItem: (item: T, state: { focused: boolean; index: number }) => ComponentChild;
 }
 
@@ -101,7 +101,7 @@ export function VirtualGrid<T extends VirtualGridItem>(props: VirtualGridProps<T
           const item = props.items[props.focusedIndex];
           if (item) props.onSelect?.(item, props.focusedIndex);
         } else if (action === "back") {
-          props.onBack?.();
+          if (!props.onBack || props.onBack() === false) return;
         } else if (action === "left" || action === "right" || action === "up" || action === "down") {
           const next = moveFocus({
             index: props.focusedIndex,

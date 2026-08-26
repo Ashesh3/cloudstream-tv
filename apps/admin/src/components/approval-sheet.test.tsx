@@ -16,7 +16,7 @@ const request: DeviceRequestDto = {
 const source: SourceDto = {
   id: "source-1", provider: "google", accountLabel: "Home Drive", status: "healthy",
   accessTokenExpiresAt: null, nextSyncAt: null, lastSyncStartedAt: null,
-  lastSyncCompletedAt: null, lastSyncErrorCode: null, createdAt: "2026-08-20T00:00:00.000Z"
+  lastSyncCompletedAt: null, lastSyncErrorCode: null, indexProgress: null, createdAt: "2026-08-20T00:00:00.000Z"
 };
 const roots: AssignedRootDto[] = [
   { id: "root-1", sourceId: "source-1", providerNodeId: "a", displayName: "Family Photos", ancestryProviderIds: [], enabled: true, createdAt: "2026-08-20T00:00:00.000Z" },

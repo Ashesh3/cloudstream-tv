@@ -143,6 +143,8 @@ Hobby permits daily cron, so `vercel.json` runs reconciliation at `02:00 UTC`. I
 
 ## Migration and rollback
 
+**External production gate — `STAGING_BACKUP_RESTORE_PENDING`.** Before moving the production alias, enable scheduled Firestore backups and complete one full restore into an isolated staging database/project. Verify household settings, encrypted source records, device revocations, roots, nodes, and watch history after restoration. This drill is not complete because the development project remains on the Firestore free tier and the attempted billing link is blocked by Cloud billing linked-project quota. Do not treat development deployment readiness as production-cutover approval.
+
 1. Run `node scripts/migrate-vercel-blob.mjs` and review the redacted counts.
 2. Run with `--apply` only after the destination and encryption key version are verified.
 3. Reconnect every `reauth-required` source and re-enable roots deliberately.

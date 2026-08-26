@@ -228,6 +228,40 @@ describe("TV enrollment and browse states", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Second/ })).toHaveFocus());
   });
 
+  it("shows persisted video resume progress and refreshes it after the viewer closes", async () => {
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.folder).mockResolvedValue({
+      parent: node("folder-parent", "folder", "Parent"), breadcrumbs: [],
+      children: [videoNode("video-1", "Lake")], nextCursor: null
+    });
+    vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
+    vi.mocked(client.mediaUrl).mockResolvedValue({ url: "https://provider.example/video-1", expiresAt: "2026-08-26T01:00:00.000Z", revision: "r1" });
+    vi.mocked(client.history)
+      .mockResolvedValueOnce({ history: [{ nodeId: "video-1", positionSeconds: 30, durationSeconds: 120, completed: false, updatedAt: "2026-08-26T00:00:00.000Z" }] })
+      .mockResolvedValue({ history: [{ nodeId: "video-1", positionSeconds: 60, durationSeconds: 120, completed: false, updatedAt: "2026-08-26T00:05:00.000Z" }] });
+    vi.mocked(client.saveHistory).mockImplementation(async (nodeId, value) => ({ history: { nodeId, ...value, updatedAt: "2026-08-26T00:05:00.000Z" } }));
+
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    expect(await screen.findByRole("progressbar", { name: "Watched" })).toHaveAttribute("aria-valuenow", "25");
+    fireEvent.click(screen.getByRole("button", { name: /Lake/ }));
+    await screen.findByLabelText("Playing Lake");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(await screen.findByRole("progressbar", { name: "Watched" })).toHaveAttribute("aria-valuenow", "50");
+    expect(vi.mocked(client.history).mock.calls.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("leaves Back unhandled at the virtual root", async () => {
+    const client = readyApiWithRoots();
+    render(<TvApp api={client} browserSupported />);
+    const grid = await screen.findByRole("grid");
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    grid.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
   it("rebootstraps the session once when the viewer reports device revocation", async () => {
     const client = api();
     vi.mocked(client.bootstrap)
@@ -283,4 +317,8 @@ function folderPage(parentId: string, start: number, count: number, nextCursor: 
 
 function node(id: string, kind: "folder" | "image", name: string) {
   return { id, sourceId: "source-1", provider: "google" as const, parentNodeId: null, name, normalizedName: name.toLowerCase(), kind, mimeType: kind === "image" ? "image/jpeg" : null, size: null, width: null, height: null, capturedAt: null, createdAtProvider: null, modifiedAtProvider: null, thumbnailRevision: null, hasPreview: false, folderCoverNodeIds: [], childFolderCount: 0, childMediaCount: 0, available: true };
+}
+
+function videoNode(id: string, name: string) {
+  return { ...node(id, "image", name), kind: "video" as const, mimeType: "video/mp4" };
 }

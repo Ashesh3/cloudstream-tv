@@ -671,4 +671,51 @@ describe("source credential refresh", () => {
       lastSyncErrorCode: "PROVIDER_REAUTH_REQUIRED"
     });
   });
+
+  it("preserves a concurrent successful rotating-token refresh when an adjacent refresh loses with invalid_grant", async () => {
+    const repository = new MemoryRepository();
+    const google = adapter("google");
+    let calls = 0;
+    vi.mocked(google.refreshCredentials).mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) {
+        return { accessToken: "winner-access", refreshToken: "winner-refresh", accessTokenExpiresAt: new Date(now.getTime() + 3600000) };
+      }
+      await new Promise(resolve => setTimeout(resolve, 5));
+      throw new ProviderError("PROVIDER_REAUTH_REQUIRED", "Provider authorization is required.", { retryable: false });
+    });
+    const service = createSourceService({ repository, providers: registry(google), keyring, now: () => now });
+    await repository.putSource(service.encryptSource({
+      id: "source-a", householdId: household.id, provider: "google", providerAccountId: "account-a", accountLabel: "Family cloud",
+      credentials: { accessToken: "stale", refreshToken: "rotating-old", accessTokenExpiresAt: new Date(now.getTime() - 1000) }, createdAt: now
+    }));
+
+    const results = await Promise.all([
+      service.getUsableCredentials("source-a", household.id),
+      service.getUsableCredentials("source-a", household.id)
+    ]);
+
+    expect(google.refreshCredentials).toHaveBeenCalledTimes(2);
+    expect(results.map(value => value.accessToken)).toEqual(["winner-access", "winner-access"]);
+    const stored = await repository.getSource("source-a");
+    expect(stored).toMatchObject({ status: "syncing", lastSyncErrorCode: null });
+    expect(service.decryptSource(stored!).credentials).toMatchObject({ accessToken: "winner-access", refreshToken: "winner-refresh" });
+  });
+
+  it("merges refreshed credentials without overwriting concurrent indexing state", async () => {
+    const repository = new MemoryRepository();
+    const google = adapter("google");
+    const service = createSourceService({ repository, providers: registry(google), keyring, now: () => now });
+    const source = service.encryptSource({ id: "source-a", householdId: household.id, provider: "google", providerAccountId: "account-a", accountLabel: "Family cloud", credentials: { accessToken: "stale", refreshToken: "old-refresh", accessTokenExpiresAt: new Date(now.getTime() - 1000) }, createdAt: now });
+    await repository.putSource(source);
+    vi.mocked(google.refreshCredentials).mockImplementationOnce(async () => {
+      await repository.putSource({ ...source, crawlCheckpoint: { mode: "initial", providerPageCursor: "page-2", processedNodeCount: 50, generation: "generation-2" }, leaseOwner: "worker-2" });
+      return { accessToken: "fresh", refreshToken: "new-refresh", accessTokenExpiresAt: new Date(now.getTime() + 3600000) };
+    });
+
+    await service.getUsableCredentials("source-a", household.id);
+    expect(await repository.getSource("source-a")).toMatchObject({
+      crawlCheckpoint: { providerPageCursor: "page-2", processedNodeCount: 50 }, leaseOwner: "worker-2"
+    });
+  });
 });

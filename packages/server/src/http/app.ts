@@ -66,6 +66,25 @@ export interface ApiAppConfig {
   rateLimits?: Partial<Record<string, RateLimitPolicy>>;
 }
 
+export interface ApiLogEvent {
+  level: "info" | "error";
+  event: "api_request";
+  requestId: string;
+  method: string;
+  path: string;
+  status: number;
+  durationMs: number;
+  errorCode?: string;
+  sourceId?: string;
+  deviceId?: string;
+  runId?: string;
+}
+
+export interface ApiLogger {
+  info(event: ApiLogEvent): void;
+  error(event: ApiLogEvent): void;
+}
+
 export interface ApiAppDependencies {
   repository: AppRepository;
   config: ApiAppConfig;
@@ -73,6 +92,7 @@ export interface ApiAppDependencies {
   createId?: (prefix: string) => string;
   issueToken?: () => OpaqueToken;
   requestSubject?: RequestSubjectResolver;
+  logger?: ApiLogger;
   browse?: {
     home(device: Device, household: Household): Promise<unknown>;
     folder(device: Device, household: Household, nodeId: string, page: { cursor: string | null; limit: number }): Promise<unknown>;
@@ -110,21 +130,60 @@ export function createApiApp(input: ApiAppDependencies) {
     now: input.now ?? (() => new Date()),
     createId: input.createId ?? (prefix => `${prefix}-${crypto.randomUUID()}`),
     issueToken: input.issueToken ?? issueOpaqueToken,
-    requestSubject: input.requestSubject ?? requestSubject
+    requestSubject: input.requestSubject ?? requestSubject,
+    logger: input.logger ?? consoleApiLogger
   };
 
   return async (request: Request): Promise<Response> => {
+    const requestId = safeRequestId(request.headers.get("x-request-id")) ?? crypto.randomUUID();
+    const startedAt = Date.now();
     try {
-      return await routeRequest(request, dependencies);
+      const response = await routeRequest(request, dependencies);
+      response.headers.set("x-request-id", requestId);
+      dependencies.logger!.info(requestEvent(request, requestId, response.status, Date.now() - startedAt));
+      return response;
     } catch (error) {
       const safe = normalizeHttpError(error);
       const headers = new Headers(safe.responseHeaders);
+      headers.set("x-request-id", requestId);
       if (safe.retryAfterSeconds !== undefined) {
         headers.set("retry-after", String(safe.retryAfterSeconds));
       }
+      dependencies.logger!.error({ ...requestEvent(request, requestId, safe.status, Date.now() - startedAt, safe.code), level: "error" });
       return errorResponse(safe.toApiError(), safe.status, headers);
     }
   };
+}
+
+const consoleApiLogger: ApiLogger = {
+  info: event => console.info(JSON.stringify(event)),
+  error: event => console.error(JSON.stringify(event))
+};
+
+function safeRequestId(value: string | null): string | null {
+  return value && /^[A-Za-z0-9._:-]{1,128}$/.test(value) ? value : null;
+}
+
+function requestEvent(request: Request, requestId: string, status: number, durationMs: number, errorCode?: string): ApiLogEvent {
+  const path = new URL(request.url).pathname;
+  const identifiers = safeRouteIdentifiers(path);
+  return { level: status >= 500 ? "error" : "info", event: "api_request", requestId, method: request.method, path, status, durationMs, ...(errorCode ? { errorCode } : {}), ...identifiers };
+}
+
+function safeRouteIdentifiers(path: string): Pick<ApiLogEvent, "sourceId" | "deviceId" | "runId"> {
+  const source = /^\/api\/admin\/sources\/([^/]+)/.exec(path)?.[1];
+  const device = /^\/api\/admin\/devices\/([^/]+)/.exec(path)?.[1];
+  const run = /^\/api\/internal\/runs\/([^/]+)/.exec(path)?.[1];
+  return {
+    ...(source ? { sourceId: safeRouteId(source) } : {}),
+    ...(device ? { deviceId: safeRouteId(device) } : {}),
+    ...(run ? { runId: safeRouteId(run) } : {})
+  };
+}
+
+function safeRouteId(value: string): string {
+  try { return decodeURIComponent(value).replace(/[^A-Za-z0-9._:-]/g, "_").slice(0, 128); }
+  catch { return "invalid"; }
 }
 
 async function routeRequest(
@@ -323,7 +382,7 @@ async function adminSettings(request: Request, dependencies: ApiAppDependencies,
   const authenticated = await authenticateAdmin(request, dependencies, now);
   const household = await ensureHousehold(dependencies, now);
   if (request.method === "GET") {
-    return ok(settingsDto(household), { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+    return ok(await settingsDto(household, dependencies.repository), { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
   }
   verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
   await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
@@ -346,7 +405,7 @@ async function adminSettings(request: Request, dependencies: ApiAppDependencies,
     defaultMediaOrder: defaultMediaOrder as Household["defaultMediaOrder"],
     defaultSlideshowSeconds
   });
-  return ok(settingsDto(updated), { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+  return ok(await settingsDto(updated, dependencies.repository), { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
 }
 
 async function rotatePassphrase(request: Request, dependencies: ApiAppDependencies, now: Date) {
@@ -513,8 +572,16 @@ async function adminThumbnailUrls(request: Request, dependencies: ApiAppDependen
   return ok({ items: serializeTemporaryItems(result.items) }, { headers: mergeHeaders(withCsrf(authenticated.responseHeaders, authenticated.csrfToken), result.responseHeaders) });
 }
 
-function settingsDto(household: Household) {
-  return { allowNewDeviceRequests: household.allowNewDeviceRequests, defaultMediaOrder: household.defaultMediaOrder, defaultSlideshowSeconds: household.defaultSlideshowSeconds };
+async function settingsDto(household: Household, repository: AppRepository) {
+  const [sources, devices, requests, nodeCounts] = await Promise.all([repository.listSources(household.id), repository.listDevices(household.id), repository.listDeviceRequests(household.id), repository.countNodesForHousehold(household.id)]);
+  const rootsBySource = await Promise.all(sources.map(source => repository.listRootsForSource(source.id)));
+  const roots = rootsBySource.flat().filter(root => root.householdId === household.id);
+  return {
+    allowNewDeviceRequests: household.allowNewDeviceRequests,
+    defaultMediaOrder: household.defaultMediaOrder,
+    defaultSlideshowSeconds: household.defaultSlideshowSeconds,
+    indexHealth: { totalNodeCount: nodeCounts.total, availableNodeCount: nodeCounts.available, indexingSourceCount: sources.filter(source => source.status === "syncing" || source.crawlCheckpoint !== null).length, estimatedFirestoreDocumentCount: 1 + sources.length + roots.length + devices.length + requests.length + nodeCounts.total }
+  };
 }
 
 async function providerAncestry(repository: AppRepository, node: MediaNode): Promise<string[]> {

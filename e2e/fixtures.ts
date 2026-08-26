@@ -6,6 +6,13 @@ export const media = {
 };
 
 export async function installTvFixture(page: Page, state: "unenrolled" | "ready" = "ready") {
+  const persistedHistory = new Map<string, { nodeId: string; positionSeconds: number; durationSeconds: number; completed: boolean; updatedAt: string }>();
+  await page.exposeFunction("__cloudframeHistoryList", () => [...persistedHistory.values()]);
+  await page.exposeFunction("__cloudframeHistorySave", (nodeId: string, value: { positionSeconds: number; durationSeconds: number; completed: boolean }) => {
+    const saved = { nodeId, ...value, updatedAt: new Date().toISOString() };
+    persistedHistory.set(nodeId, saved);
+    return saved;
+  });
   await page.addInitScript(({ state, media }) => {
     const now = new Date().toISOString();
     let status = state;
@@ -30,14 +37,21 @@ export async function installTvFixture(page: Page, state: "unenrolled" | "ready"
       bootstrap: async () => ({ enrollment: enrollment() }),
       createDeviceRequest: async name => { status = "pending"; document.cookie = "cf_device_request=e2e; path=/"; return { request: { id: "request-1", requestedName: name, status: "pending", createdAt: now, expiresAt: new Date(Date.now() + 3600000).toISOString(), resolvedAt: null, approvedDeviceId: null } }; },
       requestStatus: async () => ({ enrollment: enrollment() }),
-      home: async () => ({ roots: [{ id: "root-1", nodeId: "folder-1", sourceId: "source-1", sourceLabel: "Family Drive", displayName: "Family Trips", coverNodeIds: ["image-1", "image-2"] }] }),
+      home: async () => ({ roots: [{ id: "root-1", nodeId: "folder-1", sourceId: "source-1", provider: "google", accountLabel: "Family Drive", displayName: "Family Trips", folderCoverNodeIds: ["image-1", "image-2"], childFolderCount: 0, childMediaCount: 2 }] }),
       folder: async () => ({ parent: folder, breadcrumbs: [folder], children: [image, video], nextCursor: null }),
       thumbnailUrls: async ids => ({ items: ids.map(nodeId => ({ nodeId, url: media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" })) }),
       mediaUrl: async nodeId => ({ nodeId, kind: nodeId === "video-1" ? "video" : "image", url: nodeId === "video-1" ? media.video : media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" }),
-      history: async () => ({ history: [] }),
-      saveHistory: async (nodeId, value) => { historySaves += 1; document.documentElement.dataset.historySaves = String(historySaves); return { history: { id: `device-1_${nodeId}`, deviceId: "device-1", nodeId, ...value, updatedAt: new Date().toISOString() } }; }
+      history: async () => ({ history: await window.__cloudframeHistoryList() }),
+      saveHistory: async (nodeId, value) => { historySaves += 1; document.documentElement.dataset.historySaves = String(historySaves); return { history: await window.__cloudframeHistorySave(nodeId, value) }; }
     };
   }, { state, media });
+}
+
+declare global {
+  interface Window {
+    __cloudframeHistoryList(): Promise<Array<{ nodeId: string; positionSeconds: number; durationSeconds: number; completed: boolean; updatedAt: string }>>;
+    __cloudframeHistorySave(nodeId: string, value: { positionSeconds: number; durationSeconds: number; completed: boolean }): Promise<{ nodeId: string; positionSeconds: number; durationSeconds: number; completed: boolean; updatedAt: string }>;
+  }
 }
 
 export async function installAdminFixture(page: Page) {

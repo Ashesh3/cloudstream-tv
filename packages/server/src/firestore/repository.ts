@@ -80,6 +80,13 @@ export interface SourceImpact {
   roots: AssignedRoot[];
   devices: Device[];
 }
+export interface NodeCountSummary { total: number; available: number; }
+
+export interface SourceCredentialMutationInput {
+  sourceId: string;
+  expectedEncryptedRefreshToken: Source["encryptedRefreshToken"];
+  credentials: Pick<Source, "encryptedRefreshToken" | "encryptedAccessToken" | "accessTokenExpiresAt">;
+}
 
 export function assignedRootDocumentId(
   householdId: string,
@@ -170,6 +177,8 @@ export interface AppRepository {
   ): Promise<AuthenticatedDeviceSession | null>;
   consumeRateLimit(input: RateLimitConsumeInput): Promise<RateLimitConsumeResult>;
   putSource(source: Source): Promise<void>;
+  updateSourceCredentialsIfCurrent(input: SourceCredentialMutationInput): Promise<Source | null>;
+  markSourceReauthRequiredIfCurrent(input: Omit<SourceCredentialMutationInput, "credentials">): Promise<Source | null>;
   connectSourceWithRoot(input: ConnectSourceInput): Promise<void>;
   getSource(id: string): Promise<Source | null>;
   listSources(householdId: string): Promise<Source[]>;
@@ -191,6 +200,7 @@ export interface AppRepository {
   getNodeByProviderId(sourceId: string, providerNodeId: string): Promise<MediaNode | null>;
   listChildNodes(parentNodeId: string | null, sourceIds: string[]): Promise<MediaNode[]>;
   listNodesForSource(sourceId: string): Promise<MediaNode[]>;
+  countNodesForHousehold(householdId: string): Promise<NodeCountSummary>;
   commitIndexBatch(input: IndexBatchCommitInput): Promise<number>;
   reconcileSourceGeneration(input: {
     sourceId: string;
@@ -260,6 +270,35 @@ export class FirestoreRepository implements AppRepository {
   putDeviceSession(value: DeviceSession) { return this.put(COLLECTIONS.deviceSessions, value); }
   getDeviceSessionByHash(hash: string) { return this.getOne<DeviceSession>(this.query(COLLECTIONS.deviceSessions, "tokenHash", hash)); }
   putSource(value: Source) { return this.put(COLLECTIONS.sources, value); }
+  async updateSourceCredentialsIfCurrent(input: SourceCredentialMutationInput): Promise<Source | null> {
+    return this.firestore.runTransaction(async transaction => {
+      const reference = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+      const snapshot = await transaction.get(reference);
+      if (!snapshot.exists) return null;
+      const current = decodeFirestoreDocument<Source>(snapshot.id, snapshot.data());
+      if (!sameEncryptedSecret(current.encryptedRefreshToken, input.expectedEncryptedRefreshToken)) return current;
+      const updated: Source = {
+        ...current,
+        ...input.credentials,
+        status: current.status === "reauth-required" ? "syncing" : current.status,
+        lastSyncErrorCode: null
+      };
+      transaction.set(reference, updated);
+      return updated;
+    });
+  }
+  async markSourceReauthRequiredIfCurrent(input: Omit<SourceCredentialMutationInput, "credentials">): Promise<Source | null> {
+    return this.firestore.runTransaction(async transaction => {
+      const reference = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+      const snapshot = await transaction.get(reference);
+      if (!snapshot.exists) return null;
+      const current = decodeFirestoreDocument<Source>(snapshot.id, snapshot.data());
+      if (!sameEncryptedSecret(current.encryptedRefreshToken, input.expectedEncryptedRefreshToken)) return current;
+      const updated = { ...current, status: "reauth-required" as const, lastSyncErrorCode: "PROVIDER_REAUTH_REQUIRED" };
+      transaction.set(reference, updated);
+      return updated;
+    });
+  }
   async connectSourceWithRoot(input: ConnectSourceInput): Promise<void> {
     await this.firestore.runTransaction(async transaction => {
       const sourceRef = this.firestore.collection(COLLECTIONS.sources).doc(input.source.id);
@@ -433,6 +472,14 @@ export class FirestoreRepository implements AppRepository {
 
   listNodesForSource(sourceId: string) {
     return this.getMany<MediaNode>(this.query(COLLECTIONS.nodes, "sourceId", sourceId));
+  }
+  async countNodesForHousehold(householdId: string): Promise<NodeCountSummary> {
+    const collection = this.firestore.collection(COLLECTIONS.nodes);
+    const [total, available] = await Promise.all([
+      collection.where("householdId", "==", householdId).count().get(),
+      collection.where("householdId", "==", householdId).where("available", "==", true).count().get()
+    ]);
+    return { total: total.data().count, available: available.data().count };
   }
 
   async commitIndexBatch(input: IndexBatchCommitInput): Promise<number> {
@@ -993,6 +1040,10 @@ export class FirestoreRepository implements AppRepository {
   private async create(collection: string, value: { id: string }): Promise<void> {
     await this.firestore.collection(collection).doc(value.id).create(value);
   }
+}
+
+function sameEncryptedSecret(left: Source["encryptedRefreshToken"], right: Source["encryptedRefreshToken"]): boolean {
+  return left.keyVersion === right.keyVersion && left.iv === right.iv && left.ciphertext === right.ciphertext && left.authTag === right.authTag;
 }
 
 export type FirestoreAtomicWriter = Transaction | WriteBatch;

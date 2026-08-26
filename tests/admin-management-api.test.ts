@@ -65,7 +65,13 @@ describe("admin management HTTP API", () => {
       data: {
         allowNewDeviceRequests: true,
         defaultMediaOrder: "captured-desc",
-        defaultSlideshowSeconds: 8
+        defaultSlideshowSeconds: 8,
+        indexHealth: {
+          totalNodeCount: 0,
+          availableNodeCount: 0,
+          indexingSourceCount: 0,
+          estimatedFirestoreDocumentCount: 1
+        }
       }
     });
 

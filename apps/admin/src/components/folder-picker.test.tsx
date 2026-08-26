@@ -7,7 +7,7 @@ import type { AdminApi } from "../api/client";
 import { FolderPicker } from "./folder-picker";
 
 afterEach(cleanup);
-const source: SourceDto = { id: "source-1", provider: "google", accountLabel: "Home Drive", status: "healthy", accessTokenExpiresAt: null, nextSyncAt: null, lastSyncStartedAt: null, lastSyncCompletedAt: null, lastSyncErrorCode: null, createdAt: "2026-08-20T00:00:00.000Z" };
+const source: SourceDto = { id: "source-1", provider: "google", accountLabel: "Home Drive", status: "healthy", accessTokenExpiresAt: null, nextSyncAt: null, lastSyncStartedAt: null, lastSyncCompletedAt: null, lastSyncErrorCode: null, indexProgress: null, createdAt: "2026-08-20T00:00:00.000Z" };
 const root: AssignedRootDto = { id: "root-1", sourceId: source.id, providerNodeId: "provider-albums", displayName: "Albums", ancestryProviderIds: [], enabled: true, createdAt: "2026-08-20T00:00:00.000Z" };
 const folder = (id: string, name: string, assignedRootId: string | null = null): AdminFolderTreeResponse["folders"][number] => ({ id, sourceId: source.id, provider: "google", parentNodeId: null, name, normalizedName: name.toLowerCase(), kind: "folder", mimeType: null, size: null, width: null, height: null, capturedAt: null, createdAtProvider: null, modifiedAtProvider: null, thumbnailRevision: null, hasPreview: true, folderCoverNodeIds: [`cover-${id}`], childFolderCount: 2, childMediaCount: 8, available: true, assignedRootId });
 

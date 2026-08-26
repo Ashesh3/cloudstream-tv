@@ -8,16 +8,34 @@ test("folder browse opens a unified image and video viewer", async ({ page }) =>
   await page.getByText("Family Trips").click();
   await expect(page.getByText("Sunset.jpg")).toBeVisible();
   await page.getByText("Sunset.jpg").click();
-  await expect(page.locator("img")).toBeVisible();
+  await expect(page.getByRole("img", { name: "Sunset.jpg" })).toBeVisible();
   await expect(page.locator(".viewer-shell")).toHaveScreenshot("tv-viewer-image.png", { animations: "disabled" });
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByLabel("Playing Lake.mp4")).toBeVisible();
 });
 
-test("viewer persists video history on page lifecycle", async ({ page }) => {
+test("viewer saves and restores a nonzero video position", async ({ page }) => {
   await installTvFixture(page, "ready");
   await page.goto("/");
   await page.getByText("Family Trips").click();
   await page.getByText("Lake.mp4").click();
-  await expect(page.locator("video")).toBeVisible();
-  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
-  await expect(page.locator("html")).toHaveAttribute("data-history-saves", "1");
+  const video = page.getByLabel("Playing Lake.mp4");
+  await expect(video).toBeVisible();
+  await video.evaluate((element: HTMLVideoElement) => {
+    Object.defineProperty(element, "duration", { configurable: true, value: 10 });
+    element.currentTime = 1.25;
+    element.dispatchEvent(new Event("timeupdate"));
+  });
+  await page.keyboard.press("Escape");
+  await expect.poll(() => page.evaluate(() => window.__cloudframeHistoryList())).toEqual([
+    expect.objectContaining({ nodeId: "video-1", positionSeconds: 1, durationSeconds: 10 })
+  ]);
+  await expect(page.getByText("Lake.mp4")).toBeVisible();
+  await page.getByText("Lake.mp4").click();
+  await expect(video).toBeVisible();
+  await video.evaluate((element: HTMLVideoElement) => {
+    Object.defineProperty(element, "duration", { configurable: true, value: 10 });
+    element.dispatchEvent(new Event("loadedmetadata"));
+  });
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeGreaterThan(0);
 });

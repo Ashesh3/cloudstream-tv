@@ -100,6 +100,22 @@ export class MemoryRepository implements AppRepository {
     return { session: copy(updatedSession), device: copy(updatedDevice), household: copy(household), renewed };
   }
   async putSource(value: Source) { this.set(this.sources, value); }
+  async updateSourceCredentialsIfCurrent(input: import("./repository").SourceCredentialMutationInput) {
+    const current = this.sources.get(input.sourceId);
+    if (!current) return null;
+    if (!sameSecret(current.encryptedRefreshToken, input.expectedEncryptedRefreshToken)) return copy(current);
+    const updated: Source = { ...current, ...input.credentials, status: current.status === "reauth-required" ? "syncing" : current.status, lastSyncErrorCode: null };
+    this.sources.set(input.sourceId, copy(updated));
+    return copy(updated);
+  }
+  async markSourceReauthRequiredIfCurrent(input: Omit<import("./repository").SourceCredentialMutationInput, "credentials">) {
+    const current = this.sources.get(input.sourceId);
+    if (!current) return null;
+    if (!sameSecret(current.encryptedRefreshToken, input.expectedEncryptedRefreshToken)) return copy(current);
+    const updated = { ...current, status: "reauth-required" as const, lastSyncErrorCode: "PROVIDER_REAUTH_REQUIRED" };
+    this.sources.set(input.sourceId, copy(updated));
+    return copy(updated);
+  }
   async connectSourceWithRoot(input: ConnectSourceInput) {
     const rootId = assignedRootDocumentId(input.root.householdId, input.root.sourceId, input.root.providerNodeId);
     if (this.sources.has(input.source.id) || this.roots.has(rootId)) {
@@ -197,6 +213,10 @@ export class MemoryRepository implements AppRepository {
   async getNodeByProviderId(sourceId: string, providerNodeId: string) { return this.find(this.nodes, value => value.sourceId === sourceId && value.providerNodeId === providerNodeId); }
   async listChildNodes(parentNodeId: string | null, sourceIds: string[]) { return this.filter(this.nodes, value => value.parentNodeId === parentNodeId && sourceIds.includes(value.sourceId)); }
   async listNodesForSource(sourceId: string) { return this.filter(this.nodes, value => value.sourceId === sourceId); }
+  async countNodesForHousehold(householdId: string) {
+    const nodes = [...this.nodes.values()].filter(value => value.householdId === householdId);
+    return { total: nodes.length, available: nodes.filter(value => value.available).length };
+  }
   async putWatchHistory(value: WatchHistory) { this.set(this.history, value); }
   async getWatchHistory(deviceId: string, nodeId: string) { return this.find(this.history, value => value.deviceId === deviceId && value.nodeId === nodeId); }
   async listWatchHistory(input: ListWatchHistoryInput) { return this.filter(this.history, value => value.householdId === input.householdId && value.deviceId === input.deviceId); }
@@ -523,4 +543,8 @@ export class MemoryRepository implements AppRepository {
   private create<T extends { id: string }>(map: Map<string, T>, value: T, label: string): void { if (map.has(value.id)) throw new Error(`${label} already exists`); this.set(map, value); }
   private find<T>(map: Map<string, T>, predicate: (value: T) => boolean): T | null { const value = [...map.values()].find(predicate); return value ? copy(value) : null; }
   private filter<T>(map: Map<string, T>, predicate: (value: T) => boolean): T[] { return [...map.values()].filter(predicate).map(copy); }
+}
+
+function sameSecret(left: Source["encryptedRefreshToken"], right: Source["encryptedRefreshToken"]) {
+  return left.keyVersion === right.keyVersion && left.iv === right.iv && left.ciphertext === right.ciphertext && left.authTag === right.authTag;
 }
