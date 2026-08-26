@@ -17,6 +17,7 @@ function pickerApi(): AdminApi {
   return {
     login: vi.fn(), logout: vi.fn(), overview: vi.fn(), approveRequest: vi.fn(), denyRequest: vi.fn(), updateDevice: vi.fn(), revokeDevice: vi.fn(), settings: vi.fn(), updateSettings: vi.fn(), rotatePassphrase: vi.fn(), sources: vi.fn(), authorizeSource: vi.fn(), syncSource: vi.fn(), sourceImpact: vi.fn(), removeSource: vi.fn(),
     sourceTree: vi.fn().mockImplementation(async (_sourceId: string, parentId?: string) => parentId ? { source, parent: trips as MediaNodeDto, folders: [] } : { source, parent: null, folders: [album, trips] }),
+    providerFolders: vi.fn().mockResolvedValue({ source, current: null, breadcrumbs: [], folders: [], nextCursor: null }),
     createRoot: vi.fn().mockResolvedValue({ root }),
     rootImpact: vi.fn().mockResolvedValue({ roots: [root], devices: [{ id: "device-1", name: "Living Room" }] }),
     removeRoot: vi.fn().mockResolvedValue({ removed: true, roots: [root], devices: [] }),

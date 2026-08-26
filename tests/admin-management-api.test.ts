@@ -7,9 +7,17 @@ import type {
 import {
   assignedRootDocumentId,
   createApiApp,
+  createProviderFolderService,
   hashOpaqueToken,
+  ProviderError,
   verifyPassphrase
 } from "@cloudframe/server";
+import type {
+  ProviderAdapter,
+  ProviderCredentials,
+  ProviderNode,
+  ProviderRegistry
+} from "@cloudframe/providers";
 import { describe, expect, it, vi } from "vitest";
 import {
   cookieHeader,
@@ -23,6 +31,225 @@ const PASSPHRASE = "correct horse battery staple";
 const NEW_PASSPHRASE = "a much longer replacement passphrase";
 
 describe("admin management HTTP API", () => {
+  it("browses live provider folders before any metadata is indexed", async () => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, {
+      providerRootId: "root",
+      status: "healthy"
+    });
+    await harness.repository.putSource(source);
+    const listFolder = vi.fn().mockResolvedValue({
+      items: [
+        providerFolder("photos", "Photos", "root"),
+        providerImage("cover", "Cover.jpg", "root")
+      ],
+      nextCursor: "page-2"
+    });
+    const providerFolders = makeProviderFolderService(harness, { listFolder });
+    const admin = await login(harness.app);
+    const app = createApiApp({
+      repository: harness.repository,
+      providerFolders,
+      config: apiConfig(harness),
+      now: () => harness.now
+    });
+
+    const response = await app(jsonRequest(
+      `/api/admin/sources/${source.id}/provider-folders?limit=100`,
+      "GET",
+      undefined,
+      admin.headers
+    ));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        current: { providerNodeId: "root", name: "My Drive" },
+        breadcrumbs: [{ providerNodeId: "root", name: "My Drive" }],
+        folders: [{ providerNodeId: "photos", name: "Photos", assignedRootId: null }],
+        nextCursor: "page-2"
+      }
+    });
+    expect(listFolder).toHaveBeenCalledWith(expect.objectContaining({
+      folderId: "root",
+      cursor: null,
+      pageSize: 100
+    }));
+    expect(await harness.repository.listNodesForSource(source.id)).toEqual([]);
+  });
+
+  it("pages a nested live folder with server-resolved breadcrumbs", async () => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, { providerRootId: "root" });
+    await harness.repository.putSource(source);
+    await harness.repository.putRoot({
+      ...makeRoot(harness.householdId, source.id, harness.now),
+      id: "assigned-photos",
+      providerNodeId: "photos"
+    });
+    const listFolder = vi.fn().mockResolvedValue({ items: [], nextCursor: null });
+    const getNode = vi.fn(async ({ providerNodeId }: { providerNodeId: string }) => {
+      if (providerNodeId === "photos") return providerFolder("photos", "Photos", "root");
+      return providerFolder("root", "My Drive", null);
+    });
+    const providerFolders = makeProviderFolderService(harness, { getNode, listFolder });
+    const admin = await login(harness.app);
+    const app = createApiApp({
+      repository: harness.repository,
+      providerFolders,
+      config: apiConfig(harness),
+      now: () => harness.now
+    });
+
+    const response = await app(jsonRequest(
+      `/api/admin/sources/${source.id}/provider-folders?providerFolderId=photos&cursor=opaque-page&limit=25`,
+      "GET",
+      undefined,
+      admin.headers
+    ));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      data: {
+        current: { providerNodeId: "photos", assignedRootId: "assigned-photos" },
+        breadcrumbs: [
+          { providerNodeId: "root", name: "My Drive" },
+          { providerNodeId: "photos", name: "Photos", assignedRootId: "assigned-photos" }
+        ],
+        folders: [],
+        nextCursor: null
+      }
+    });
+    expect(listFolder).toHaveBeenCalledWith(expect.objectContaining({
+      folderId: "photos",
+      cursor: "opaque-page",
+      pageSize: 25
+    }));
+  });
+
+  it.each([
+    ["PROVIDER_REAUTH_REQUIRED", 409, undefined],
+    ["PROVIDER_THROTTLED", 429, 37],
+    ["PROVIDER_THROTTLED", 429, 999_999]
+  ] as const)("maps %s live browsing failures safely", async (code, status, retryAfterSeconds) => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, { providerRootId: "root" });
+    await harness.repository.putSource(source);
+    const providerFolders = makeProviderFolderService(harness, {
+      listFolder: vi.fn(async () => {
+        throw new ProviderError(code, "secret provider payload", {
+          retryable: code === "PROVIDER_THROTTLED",
+          retryAfterSeconds
+        });
+      })
+    });
+    const admin = await login(harness.app);
+    const app = createApiApp({
+      repository: harness.repository,
+      providerFolders,
+      config: apiConfig(harness),
+      now: () => harness.now
+    });
+
+    const response = await app(jsonRequest(
+      `/api/admin/sources/${source.id}/provider-folders`,
+      "GET",
+      undefined,
+      admin.headers
+    ));
+
+    expect(response.status).toBe(status);
+    expect(response.headers.get("retry-after")).toBe(
+      retryAfterSeconds ? String(Math.min(retryAfterSeconds, 86_400)) : null
+    );
+    const body = await response.text();
+    expect(body).toContain(code);
+    expect(body).not.toContain("secret provider payload");
+  });
+
+  it("rejects a folder that cannot be proven to descend from the connected provider root", async () => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, { providerRootId: "root" });
+    await harness.repository.putSource(source);
+    const providerFolders = makeProviderFolderService(harness, {
+      getNode: vi.fn(async ({ providerNodeId }: { providerNodeId: string }) =>
+        providerNodeId === "outside"
+          ? providerFolder("outside", "Outside", "foreign-root")
+          : providerFolder("foreign-root", "Foreign", null)
+      )
+    });
+
+    await expect(providerFolders.resolveAncestry({
+      householdId: harness.householdId,
+      sourceId: source.id,
+      providerNodeId: "outside"
+    })).rejects.toMatchObject({ code: "PROVIDER_FOLDER_OUTSIDE_SOURCE" });
+  });
+
+  it("bounds ancestry walking and rejects invalid provider folder pages", async () => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, { providerRootId: "root" });
+    await harness.repository.putSource(source);
+    const getNode = vi.fn(async ({ providerNodeId }: { providerNodeId: string }) => {
+      const depth = Number(providerNodeId.replace("folder-", ""));
+      return providerFolder(
+        providerNodeId,
+        providerNodeId,
+        depth >= 255 ? "root" : `folder-${depth + 1}`
+      );
+    });
+    const providerFolders = makeProviderFolderService(harness, { getNode });
+    await expect(providerFolders.resolveAncestry({
+      householdId: harness.householdId,
+      sourceId: source.id,
+      providerNodeId: "folder-0"
+    })).rejects.toMatchObject({ code: "PROVIDER_FOLDER_OUTSIDE_SOURCE" });
+    expect(getNode).toHaveBeenCalledTimes(256);
+
+    const admin = await login(harness.app);
+    const app = createApiApp({
+      repository: harness.repository,
+      providerFolders,
+      config: apiConfig(harness),
+      now: () => harness.now
+    });
+    const response = await app(jsonRequest(
+      `/api/admin/sources/${source.id}/provider-folders?limit=101`,
+      "GET",
+      undefined,
+      admin.headers
+    ));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "INVALID_PAGE_SIZE" });
+  });
+
+  it("rejects provider ancestry cycles and non-folder browse targets", async () => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, { providerRootId: "root" });
+    await harness.repository.putSource(source);
+    const cycle = makeProviderFolderService(harness, {
+      getNode: vi.fn(async ({ providerNodeId }: { providerNodeId: string }) =>
+        providerNodeId === "a"
+          ? providerFolder("a", "A", "b")
+          : providerFolder("b", "B", "a")
+      )
+    });
+    await expect(cycle.resolveAncestry({
+      householdId: harness.householdId,
+      sourceId: source.id,
+      providerNodeId: "a"
+    })).rejects.toMatchObject({ code: "PROVIDER_ANCESTRY_CYCLE" });
+
+    const file = makeProviderFolderService(harness, {
+      getNode: vi.fn(async () => providerImage("image", "Image.jpg", "root"))
+    });
+    await expect(file.resolveAncestry({
+      householdId: harness.householdId,
+      sourceId: source.id,
+      providerNodeId: "image"
+    })).rejects.toMatchObject({ code: "PROVIDER_FOLDER_REQUIRED" });
+  });
+
   it("returns one safe overview with a refreshed CSRF token", async () => {
     const harness = await createTestApi();
     const source = makeSource(harness.householdId, harness.now);
@@ -528,7 +755,7 @@ function mutationHeaders(origin: string, admin: Awaited<ReturnType<typeof login>
   return { ...admin.headers, origin, "x-csrf-token": admin.csrf };
 }
 
-function makeSource(householdId: string, now: Date): Source {
+function makeSource(householdId: string, now: Date, overrides: Partial<Source> = {}): Source {
   return {
     id: "source-1",
     householdId,
@@ -550,7 +777,69 @@ function makeSource(householdId: string, now: Date): Source {
     lastSyncStartedAt: null,
     lastSyncCompletedAt: null,
     lastSyncErrorCode: null,
-    createdAt: now
+    createdAt: now,
+    ...overrides
+  };
+}
+
+function apiConfig(harness: Awaited<ReturnType<typeof createTestApi>>) {
+  return {
+    householdId: harness.householdId,
+    passphrasePepper: harness.pepper,
+    csrfSecret: harness.csrfSecret,
+    allowedOrigin: harness.origin
+  };
+}
+
+function makeProviderFolderService(
+  harness: Awaited<ReturnType<typeof createTestApi>>,
+  overrides: Partial<Pick<ProviderAdapter, "getRoot" | "getNode" | "listFolder">> = {}
+) {
+  const credentials: ProviderCredentials = {
+    accessToken: "access-secret",
+    refreshToken: "refresh-secret",
+    accessTokenExpiresAt: new Date(harness.now.getTime() + 60_000)
+  };
+  const adapter = {
+    getRoot: vi.fn(async () => providerFolder("root", "My Drive", null)),
+    getNode: vi.fn(async ({ providerNodeId }: { providerNodeId: string }) =>
+      providerNodeId === "root"
+        ? providerFolder("root", "My Drive", null)
+        : providerFolder(providerNodeId, providerNodeId, "root")
+    ),
+    listFolder: vi.fn(async () => ({ items: [], nextCursor: null })),
+    ...overrides
+  } as unknown as ProviderAdapter;
+  const providers: ProviderRegistry = { get: () => adapter };
+  return createProviderFolderService({
+    repository: harness.repository,
+    providers,
+    sourceService: {
+      getUsableCredentials: vi.fn(async () => credentials)
+    } as never
+  });
+}
+
+function providerFolder(providerNodeId: string, name: string, parentProviderId: string | null): ProviderNode {
+  return providerNode({ providerNodeId, name, parentProviderId, kind: "folder" });
+}
+
+function providerImage(providerNodeId: string, name: string, parentProviderId: string | null): ProviderNode {
+  return providerNode({ providerNodeId, name, parentProviderId, kind: "image" });
+}
+
+function providerNode(input: Pick<ProviderNode, "providerNodeId" | "name" | "parentProviderId" | "kind">): ProviderNode {
+  return {
+    ...input,
+    mimeType: input.kind === "folder" ? null : "image/jpeg",
+    size: null,
+    width: null,
+    height: null,
+    capturedAt: null,
+    createdAt: null,
+    modifiedAt: null,
+    thumbnailRevision: null,
+    hasPreview: false
   };
 }
 

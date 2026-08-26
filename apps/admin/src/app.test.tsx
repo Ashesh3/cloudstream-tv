@@ -106,6 +106,7 @@ function api(): AdminApi {
     sourceImpact: vi.fn().mockResolvedValue({ roots: [root], devices: [device] }),
     removeSource: vi.fn().mockResolvedValue({ removed: true, roots: [root], devices: [device] }),
     sourceTree: vi.fn().mockResolvedValue({ source, parent: null, folders: [] }),
+    providerFolders: vi.fn().mockResolvedValue({ source, current: null, breadcrumbs: [], folders: [], nextCursor: null }),
     createRoot: vi.fn().mockResolvedValue({ root }),
     rootImpact: vi.fn().mockResolvedValue({ roots: [root], devices: [device] }),
     removeRoot: vi.fn().mockResolvedValue({ removed: true, roots: [root], devices: [device] }),
