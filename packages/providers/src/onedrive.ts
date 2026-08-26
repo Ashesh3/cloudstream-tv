@@ -132,7 +132,7 @@ export function createOneDriveAdapter(
 
     async listFolder(input: ListFolderInput) {
       const url = input.cursor
-        ? requireGraphCursor(input.cursor)
+        ? requireFolderGraphCursor(input.cursor, input.folderId)
         : new URL(`${GRAPH_ENDPOINT}/me/drive/items/${encodeURIComponent(input.folderId)}/children`);
       if (!input.cursor) {
         url.searchParams.set("$top", String(input.pageSize));
@@ -320,6 +320,19 @@ async function graphJson<T>(
 function requireGraphCursor(cursor: string): URL {
   const url = new URL(cursor);
   if (url.protocol !== "https:" || url.hostname !== "graph.microsoft.com") {
+    throw new ProviderError(
+      "PROVIDER_BAD_RESPONSE",
+      "The cloud provider returned an invalid cursor.",
+      { retryable: false }
+    );
+  }
+  return url;
+}
+
+function requireFolderGraphCursor(cursor: string, folderId: string): URL {
+  const url = requireGraphCursor(cursor);
+  const expectedPath = `/v1.0/me/drive/items/${encodeURIComponent(folderId)}/children`;
+  if (url.origin !== new URL(GRAPH_ENDPOINT).origin || url.pathname !== expectedPath) {
     throw new ProviderError(
       "PROVIDER_BAD_RESPONSE",
       "The cloud provider returned an invalid cursor.",

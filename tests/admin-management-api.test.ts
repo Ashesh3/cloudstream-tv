@@ -18,6 +18,7 @@ import type {
   ProviderNode,
   ProviderRegistry
 } from "@cloudframe/providers";
+import { createOneDriveAdapter } from "@cloudframe/providers";
 import { describe, expect, it, vi } from "vitest";
 import {
   cookieHeader,
@@ -186,7 +187,7 @@ describe("admin management HTTP API", () => {
     })).rejects.toMatchObject({ code: "PROVIDER_FOLDER_OUTSIDE_SOURCE" });
   });
 
-  it("bounds ancestry walking and rejects invalid provider folder pages", async () => {
+  it("bounds ancestry walking and accepts provider folder pages through 200", async () => {
     const harness = await createTestApi();
     const source = makeSource(harness.householdId, harness.now, { providerRootId: "root" });
     await harness.repository.putSource(source);
@@ -213,14 +214,75 @@ describe("admin management HTTP API", () => {
       config: apiConfig(harness),
       now: () => harness.now
     });
+    for (const pageSize of [1, 101, 200]) {
+      const response = await app(jsonRequest(
+        `/api/admin/sources/${source.id}/provider-folders?limit=${pageSize}`,
+        "GET",
+        undefined,
+        admin.headers
+      ));
+      expect(response.status).toBe(200);
+    }
+  });
+
+  it.each([0, 201, 1.5])("rejects invalid provider folder page size %s at HTTP and service boundaries", async pageSize => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, { providerRootId: "root" });
+    await harness.repository.putSource(source);
+    const providerFolders = makeProviderFolderService(harness);
+    await expect(providerFolders.browse({
+      householdId: harness.householdId,
+      sourceId: source.id,
+      cursor: null,
+      pageSize
+    })).rejects.toMatchObject({ code: "INVALID_PAGE_SIZE" });
+
+    const admin = await login(harness.app);
+    const app = createApiApp({
+      repository: harness.repository,
+      providerFolders,
+      config: apiConfig(harness),
+      now: () => harness.now
+    });
     const response = await app(jsonRequest(
-      `/api/admin/sources/${source.id}/provider-folders?limit=101`,
+      `/api/admin/sources/${source.id}/provider-folders?limit=${pageSize}`,
       "GET",
       undefined,
       admin.headers
     ));
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ code: "INVALID_PAGE_SIZE" });
+  });
+
+  it.each([
+    "https://graph.microsoft.com/v1.0/me/drive/items/other/children?$skiptoken=private",
+    "https://graph.microsoft.com/v1.0/me/drive/root/delta?$skiptoken=private"
+  ])("rejects a mismatched OneDrive live-folder cursor before provider fetch", async cursor => {
+    const harness = await createTestApi();
+    const source = makeSource(harness.householdId, harness.now, {
+      provider: "onedrive",
+      providerRootId: "root"
+    });
+    await harness.repository.putSource(source);
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const liveAdapter = createOneDriveAdapter({
+      clientId: "synthetic-client",
+      clientSecret: "synthetic-secret",
+      fetch,
+      now: () => harness.now
+    });
+    const providerFolders = makeProviderFolderService(harness, {
+      getRoot: vi.fn(async () => providerFolder("root", "OneDrive", null)),
+      listFolder: liveAdapter.listFolder.bind(liveAdapter)
+    });
+
+    await expect(providerFolders.browse({
+      householdId: harness.householdId,
+      sourceId: source.id,
+      cursor,
+      pageSize: 100
+    })).rejects.toMatchObject({ code: "PROVIDER_BAD_RESPONSE" });
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("rejects provider ancestry cycles and non-folder browse targets", async () => {

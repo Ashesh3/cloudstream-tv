@@ -36,7 +36,8 @@ export type ProviderFolderErrorCode =
   | "PROVIDER_ROOT_MISSING"
   | "PROVIDER_FOLDER_REQUIRED"
   | "PROVIDER_ANCESTRY_CYCLE"
-  | "PROVIDER_FOLDER_OUTSIDE_SOURCE";
+  | "PROVIDER_FOLDER_OUTSIDE_SOURCE"
+  | "INVALID_PAGE_SIZE";
 
 export class ProviderFolderError extends Error {
   constructor(readonly code: ProviderFolderErrorCode, message: string) {
@@ -80,6 +81,9 @@ export function createProviderFolderService(dependencies: {
   }
 
   async function browse(input: BrowseProviderFoldersInput) {
+    if (!Number.isInteger(input.pageSize) || input.pageSize < 1 || input.pageSize > 200) {
+      throw new ProviderFolderError("INVALID_PAGE_SIZE", "Page size is invalid.");
+    }
     const context = await requireContext(input.householdId, input.sourceId);
     const currentId = input.providerFolderId ?? context.source.providerRootId!;
     const resolved = currentId === context.source.providerRootId

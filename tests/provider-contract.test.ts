@@ -427,6 +427,54 @@ describe("provider failure normalization", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "another folder",
+      "https://graph.microsoft.com/v1.0/me/drive/items/o-other/children?$skiptoken=private"
+    ],
+    [
+      "another Graph resource",
+      "https://graph.microsoft.com/v1.0/me/drive/root/delta?$skiptoken=private"
+    ]
+  ])("rejects a OneDrive continuation URL for %s before fetching", async (_label, cursor) => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const adapter = createOneDriveAdapter({
+      clientId: "synthetic-client",
+      clientSecret: "synthetic-secret",
+      tenant: "common",
+      fetch,
+      now: () => now
+    });
+
+    await expect(adapter.listFolder({
+      credentials,
+      folderId: "o-root",
+      cursor,
+      pageSize: 10
+    })).rejects.toMatchObject({ code: "PROVIDER_BAD_RESPONSE" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts only the encoded OneDrive folder path for a continuation URL", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => jsonResponse({ value: [] }));
+    const adapter = createOneDriveAdapter({
+      clientId: "synthetic-client",
+      clientSecret: "synthetic-secret",
+      tenant: "common",
+      fetch,
+      now: () => now
+    });
+
+    await adapter.listFolder({
+      credentials,
+      folderId: "folder/with space",
+      cursor: "https://graph.microsoft.com/v1.0/me/drive/items/folder%2Fwith%20space/children?$skiptoken=private",
+      pageSize: 10
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("returns null when OneDrive reports that no thumbnail exists", async () => {
     const fetch: typeof globalThis.fetch = async () => jsonResponse({}, 404);
     const adapter = createOneDriveAdapter({

@@ -579,7 +579,7 @@ async function browseProviderFolders(
   const url = new URL(request.url);
   const limitValue = url.searchParams.get("limit") ?? "100";
   const limit = Number(limitValue);
-  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
     throw new HttpError(400, "INVALID_PAGE_SIZE", "Page size is invalid.");
   }
   const providerFolderId = url.searchParams.get("providerFolderId") || undefined;
@@ -1224,13 +1224,15 @@ function normalizeHttpError(error: unknown): HttpError {
     return new HttpError(status, error.code, error.message);
   }
   if (error instanceof ProviderFolderError) {
-    const status = error.code === "PROVIDER_FOLDER_REQUIRED"
+    const status = error.code === "PROVIDER_FOLDER_REQUIRED" || error.code === "INVALID_PAGE_SIZE"
       ? 400
       : 409;
     const message = error.code === "PROVIDER_ROOT_MISSING"
       ? "Reconnect this source."
       : error.code === "PROVIDER_FOLDER_REQUIRED"
         ? "Choose a folder."
+        : error.code === "INVALID_PAGE_SIZE"
+          ? "Page size is invalid."
         : "This provider folder is unavailable for this source.";
     return new HttpError(status, error.code, message);
   }
