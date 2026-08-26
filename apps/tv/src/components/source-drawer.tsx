@@ -12,16 +12,21 @@ export function SourceDrawer({ open, roots, onClose, onHome, onSelect }: {
 }) {
   const host = useRef<HTMLElement>(null);
   const [focusedIndex, setFocusedIndex] = useState(0);
-  const actions = [onClose, onHome, ...roots.map(root => () => { if (root.nodeId) onSelect(root); })];
+  const readyRoots = roots.filter(isReadyRoot);
+  const actions = [onClose, onHome, ...readyRoots.map(root => () => onSelect(root))];
   useEffect(() => {
     if (!open) return;
     setFocusedIndex(0);
-    const frame = window.setTimeout(() => host.current?.querySelectorAll<HTMLButtonElement>("button")[0]?.focus(), 0);
+    const frame = window.setTimeout(() => focusableButtons(host.current)[0]?.focus(), 0);
     return () => window.clearTimeout(frame);
   }, [open]);
   useEffect(() => {
     if (!open) return;
-    host.current?.querySelectorAll<HTMLButtonElement>("button")[focusedIndex]?.focus();
+    setFocusedIndex(value => Math.min(value, actions.length - 1));
+  }, [actions.length, open]);
+  useEffect(() => {
+    if (!open) return;
+    focusableButtons(host.current)[focusedIndex]?.focus();
   }, [focusedIndex, open]);
   if (!open) return null;
   return (
@@ -35,6 +40,16 @@ export function SourceDrawer({ open, roots, onClose, onHome, onSelect }: {
         onClick={event => event.stopPropagation()}
         onKeyDown={event => {
           event.stopPropagation();
+          if (event.key === "Home") {
+            setFocusedIndex(0);
+            event.preventDefault();
+            return;
+          }
+          if (event.key === "End") {
+            setFocusedIndex(actions.length - 1);
+            event.preventDefault();
+            return;
+          }
           const action = normalizeTvKey(event);
           if (!action || !shouldHandleTvKey(action, event.repeat)) return;
           if (action === "down" || action === "right") setFocusedIndex(value => Math.min(actions.length - 1, value + 1));
@@ -45,17 +60,28 @@ export function SourceDrawer({ open, roots, onClose, onHome, onSelect }: {
           event.preventDefault();
         }}
       >
-        <header><div><small>Program desk</small><strong>Choose a collection</strong></div><button type="button" onClick={onClose}>Close <kbd>Back</kbd></button></header>
-        <button className="drawer-home" type="button" onClick={onHome}><span className="drawer-cue" />Household program</button>
+        <header><div><small>Program desk</small><strong>Choose a collection</strong></div><button type="button" onClick={onClose} data-drawer-focusable="true" tabIndex={focusedIndex === 0 ? 0 : -1}>Close <kbd>Back</kbd></button></header>
+        <button className="drawer-home" type="button" onClick={onHome} data-drawer-focusable="true" tabIndex={focusedIndex === 1 ? 0 : -1}><span className="drawer-cue" />Household program</button>
         <div className="drawer-list">
-          {roots.map(root => (
-            <button type="button" key={root.id} onClick={() => root.nodeId && onSelect(root)} aria-disabled={!root.nodeId}>
+          {roots.map(root => {
+            const readyIndex = readyRoots.findIndex(candidate => candidate.id === root.id);
+            const ready = readyIndex >= 0;
+            return (
+            <button type="button" key={root.id} onClick={() => ready && onSelect(root)} aria-disabled={!ready} data-drawer-focusable={ready ? "true" : undefined} tabIndex={ready && focusedIndex === readyIndex + 2 ? 0 : -1}>
               <span className={`provider-monogram ${root.provider}`}>{root.provider === "google" ? "G" : "1"}</span>
               <span><strong>{root.displayName}</strong><small>{root.accountLabel}</small><ProgramStatus readiness={root.readiness} message={root.readinessMessage} compact /></span>
             </button>
-          ))}
+          );})}
         </div>
       </aside>
     </div>
   );
+}
+
+function isReadyRoot(root: TvRootCardDto): boolean {
+  return root.readiness === "ready" && root.nodeId !== null;
+}
+
+function focusableButtons(host: HTMLElement | null): NodeListOf<HTMLButtonElement> | [] {
+  return host?.querySelectorAll<HTMLButtonElement>("button[data-drawer-focusable='true']") ?? [];
 }
