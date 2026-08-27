@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
-import type { ApproveDeviceRequestBody, AssignedRootDto, DeviceRequestDto, SourceDto } from "@cloudframe/shared";
+import type { ApproveDeviceRequestBody, ControlRequestDto, ControlRootDto, ControlSourceDto } from "@cloudframe/shared";
 import { Clock3Icon, FolderOpenIcon, MonitorIcon } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -10,12 +10,13 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegen
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
-import { INDEX_COPY, providerName } from "../design/ledger";
+import { AdminApiError } from "../api/client";
+import { providerName } from "../design/ledger";
 
 export function ApprovalSheet({ request, roots, sources, onApprove, onClose }: {
-  request: DeviceRequestDto;
-  roots: AssignedRootDto[];
-  sources: SourceDto[];
+  request: ControlRequestDto;
+  roots: ControlRootDto[];
+  sources: ControlSourceDto[];
   onApprove(body: ApproveDeviceRequestBody): Promise<void>;
   onClose(): void;
 }) {
@@ -26,7 +27,7 @@ export function ApprovalSheet({ request, roots, sources, onApprove, onClose }: {
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState("");
   const enabledRoots = roots.filter(root => root.enabled);
-  const sourceFor = (root: AssignedRootDto) => sources.find(source => source.id === root.sourceId);
+  const sourceFor = (root: ControlRootDto) => sources.find(source => source.id === root.sourceId);
 
   useEffect(() => {
     returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -43,7 +44,7 @@ export function ApprovalSheet({ request, roots, sources, onApprove, onClose }: {
     setPending(true);
     setFailure("");
     try { await onApprove({ name: name.trim(), rootIds: selected }); }
-    catch (error) { setFailure(error instanceof Error ? error.message : "Approval failed. Try again."); }
+    catch (error) { setFailure(error instanceof AdminApiError ? error.message : "Approval failed. Try again."); }
     finally { setPending(false); }
   };
 
@@ -68,11 +69,10 @@ export function ApprovalSheet({ request, roots, sources, onApprove, onClose }: {
               <div className="grid gap-2">{enabledRoots.length ? enabledRoots.map(root => {
                 const source = sourceFor(root);
                 const checked = selected.includes(root.id);
-                const indexCopy = source ? INDEX_COPY[source.indexState.kind] : null;
                 return <Label key={root.id} htmlFor={`approval-root-${root.id}`} className="approval-root-row flex min-h-20 cursor-pointer items-start gap-3 border p-3 transition-colors hover:bg-muted/50 has-[[data-state=checked]]:border-primary/50 has-[[data-state=checked]]:bg-primary/8">
                   <Checkbox id={`approval-root-${root.id}`} aria-label={root.displayName} checked={checked} onCheckedChange={() => setSelected(value => value.includes(root.id) ? value.filter(id => id !== root.id) : [...value, root.id])} />
                   <span className="root-cue flex size-10 items-center justify-center text-muted-foreground"><FolderOpenIcon /></span>
-                  <span className="min-w-0 flex-1"><strong className="block truncate text-sm font-medium">{root.displayName}</strong><small className="mt-0.5 block truncate text-xs text-muted-foreground">{source ? `${providerName(source.provider)} · ${source.accountLabel}` : "Source unavailable"}</small>{indexCopy && <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs"><span className="font-medium text-foreground">{indexCopy.title}</span><span className="text-muted-foreground">{source?.indexState.kind === "quota-exhausted" ? "Content appears after indexing resumes." : "Available after approval"}</span></span>}</span>
+                  <span className="min-w-0 flex-1"><strong className="block truncate text-sm font-medium">{root.displayName}</strong><small className="mt-0.5 block truncate text-xs text-muted-foreground">{source ? `${providerName(source.provider)} · ${source.accountLabel}` : "Source unavailable"}</small><span className="mt-2 block text-xs text-muted-foreground">Access begins immediately after approval.</span></span>
                 </Label>;
               }) : <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">Connect a source and add an enabled folder before approving a device.</p>}</div>
               {errors.includes("Select at least one root.") && <FieldError>Select at least one root.</FieldError>}

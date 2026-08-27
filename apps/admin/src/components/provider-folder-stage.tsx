@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AdminProviderFolderPageResponse, ProviderFolderDto, SourceDto } from "@cloudframe/shared";
+import type { ControlSourceDto, ProviderFolderDto } from "@cloudframe/shared";
 import { ChevronRightIcon, FolderIcon, FolderPlusIcon, LoaderCircleIcon, RefreshCwIcon, XIcon } from "lucide-react";
-import type { AdminApi } from "../api/client";
+import type { AdminApi, AdminProviderFolderPage } from "../api/client";
 import { providerName } from "../design/ledger";
 import { AdminApiError } from "../api/client";
 import { Button } from "./ui/button";
@@ -11,9 +11,9 @@ type BrowseLocation = { providerFolderId?: string; name: string };
 
 export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRootAdded, onClose }: {
   api: AdminApi;
-  source: SourceDto;
+  source: ControlSourceDto;
   selectedProviderNodeIds: ReadonlySet<string>;
-  onRootAdded(root: Awaited<ReturnType<AdminApi["createRoot"]>>["root"]): void;
+  onRootAdded(root: Awaited<ReturnType<AdminApi["createRoot"]>>["root"], providerNodeId: string): void;
   onClose(): void;
 }) {
   const providerRootName = source.provider === "google" ? "My Drive" : "OneDrive";
@@ -79,7 +79,7 @@ export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRo
     setPending(folder.providerNodeId); setError(null);
     try {
       const result = await api.createRoot(source.id, { providerNodeId: folder.providerNodeId });
-      onRootAdded(result.root);
+      onRootAdded(result.root, folder.providerNodeId);
       setPages(value => value.map(item => item.providerNodeId === folder.providerNodeId ? { ...item, assignedRootId: result.root.id } : item));
     } catch (cause) { setError(stageError(cause, "Folder could not be added")); }
     finally { setPending(null); }
@@ -111,7 +111,7 @@ export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRo
   </section>;
 }
 
-function applyResponse(response: AdminProviderFolderPageResponse, append: boolean, setPages: React.Dispatch<React.SetStateAction<ProviderFolderDto[]>>) {
+function applyResponse(response: AdminProviderFolderPage, append: boolean, setPages: React.Dispatch<React.SetStateAction<ProviderFolderDto[]>>) {
   setPages(value => uniqueFolders(append ? [...value, ...response.folders] : response.folders));
 }
 function uniqueFolders(folders: ProviderFolderDto[]) { return [...new Map(folders.map(folder => [folder.providerNodeId, folder])).values()]; }
@@ -119,8 +119,7 @@ function isAbort(cause: unknown) { return cause instanceof DOMException && cause
 type StageError = { title: string; description: string; action: "retry" | "reconnect" };
 function stageError(cause: unknown, fallback = "Folder listing failed"): StageError {
   if (cause instanceof AdminApiError && cause.code === "PROVIDER_REAUTH_REQUIRED" || isCode(cause, "PROVIDER_REAUTH_REQUIRED")) return { title: "Reconnect this account", description: "The provider needs renewed authorization before live browsing can continue.", action: "reconnect" };
-  const description = cause instanceof Error ? cause.message : "The provider folder list could not be loaded.";
-  return { title: fallback, description, action: "retry" };
+  return { title: fallback, description: "Provider temporarily unavailable", action: "retry" };
 }
 function isCode(value: unknown, code: string) { return Boolean(value && typeof value === "object" && "code" in value && (value as { code: unknown }).code === code); }
 function StageErrorPanel({ error, onRetry, onReconnect }: { error: StageError; onRetry(): void; onReconnect(): void }) { return <div className="grid min-h-52 place-items-center rounded-xl border border-destructive/30 p-6 text-center" role="alert"><div><p className="font-medium text-destructive">{error.title}</p><p className="mt-1 max-w-md text-sm text-muted-foreground">{error.description}</p><Button className="mt-4" variant="outline" onClick={error.action === "reconnect" ? onReconnect : onRetry}><RefreshCwIcon />{error.action === "reconnect" ? "Return to reconnect" : "Try again"}</Button></div></div>; }

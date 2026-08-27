@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { AssignedRootDto, DeviceRequestDto, SourceDto } from "@cloudframe/shared";
+import type { ControlRequestDto, ControlRootDto, ControlSourceDto } from "@cloudframe/shared";
 import { CheckIcon, Clock3Icon, FolderOpenIcon, MonitorIcon, ShieldAlertIcon, XIcon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -8,13 +8,13 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Empty as EmptyPrimitive, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 
 export function Requests({ requests, roots, sources, disabled, pendingId, onApprove, onDeny }: {
-  requests: DeviceRequestDto[];
-  roots: AssignedRootDto[];
-  sources: SourceDto[];
+  requests: ControlRequestDto[];
+  roots: ControlRootDto[];
+  sources: ControlSourceDto[];
   disabled: boolean;
   pendingId: string | null;
-  onApprove(request: DeviceRequestDto): void;
-  onDeny(request: DeviceRequestDto): void;
+  onApprove(request: ControlRequestDto): void;
+  onDeny(request: ControlRequestDto): void;
 }) {
   const sorted = [...requests].filter(request => request.status === "pending").sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return <section aria-labelledby="device-requests-title" className="flex flex-col gap-5">
