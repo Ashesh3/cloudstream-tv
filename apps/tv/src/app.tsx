@@ -1,6 +1,6 @@
-import type { MediaNodeDto, ThumbnailUrlItem, TvRootCardDto, WatchHistoryDto } from "@cloudframe/shared";
+import type { MediaNodeDto, ThumbnailUrlItem, TvRootCardDto } from "@cloudframe/shared";
 import { normalizeTvKey, pushNavigationEntry, restoreNavigationEntry, shouldHandleTvKey, type NavigationEntry } from "@cloudframe/tv-core";
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import { tvApi, type TvApi, type TvFolderResponse } from "./api/client";
 import { DeviceRequest, StatePanel } from "./components/device-request";
@@ -12,6 +12,7 @@ import { TvHeader } from "./components/tv-header";
 import { VirtualGrid } from "./components/virtual-grid";
 import { Viewer } from "./components/viewer";
 import { WaitingScreen } from "./components/waiting-screen";
+import { createLocalWatchHistory, type LocalWatchHistory, type LocalWatchHistoryEntry } from "./state/local-watch-history";
 import { useTvSession } from "./state/use-tv-session";
 
 type BrowseItem =
@@ -42,10 +43,15 @@ export function TvApp({ api = tvApi, browserSupported = detectBrowserSupport() }
   if (session.state.status === "revoked") return <TerminalState state="revoked" title="TV access removed" body="This device has been disabled or revoked by the administrator." onRetry={session.refresh} />;
   if (session.state.status === "offline") return <StatePanel title="Cloudframe is offline" body="Check the TV network connection, then retry."><button className="primary-action" onClick={session.refresh}>Retry</button></StatePanel>;
   if (session.state.status !== "ready") return null;
-  return <BrowserShell api={api} onUnauthorized={session.refresh} slideshowSeconds={session.state.device.slideshowSeconds ?? session.state.household.defaultSlideshowSeconds} />;
+  return <ReadyBrowserShell api={api} deviceId={session.state.device.id} onUnauthorized={session.refresh} slideshowSeconds={session.state.device.slideshowSeconds ?? session.state.household.defaultSlideshowSeconds} />;
 }
 
-function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; onUnauthorized: () => void; slideshowSeconds: number }) {
+function ReadyBrowserShell({ api, deviceId, onUnauthorized, slideshowSeconds }: { api: TvApi; deviceId: string; onUnauthorized: () => void; slideshowSeconds: number }) {
+  const history = useMemo(() => createLocalWatchHistory(localWatchHistoryStorage(), deviceId), [deviceId]);
+  return <BrowserShell key={deviceId} api={api} history={history} onUnauthorized={onUnauthorized} slideshowSeconds={slideshowSeconds} />;
+}
+
+function BrowserShell({ api, history, onUnauthorized, slideshowSeconds }: { api: TvApi; history: LocalWatchHistory; onUnauthorized: () => void; slideshowSeconds: number }) {
   const [browse, setBrowse] = useState<BrowseState>({ folder: null, roots: [], items: [], nextCursor: null, loading: true, error: null });
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [scrollTop, setScrollTop] = useState(0);
@@ -56,7 +62,7 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
   const [loadedPageCursors, setLoadedPageCursors] = useState<(string | null)[]>([]);
   const [restoredFocusTick, setRestoredFocusTick] = useState(0);
   const [viewer, setViewer] = useState<{ items: MediaNodeDto[]; selectedItemId: string } | null>(null);
-  const [history, setHistory] = useState<Record<string, WatchHistoryDto>>({});
+  const [, setHistoryRevision] = useState(0);
   const loadVersion = useRef(0);
   const pageRequest = useRef<Promise<void> | null>(null);
   const pendingFocus = useRef<number | null>(null);
@@ -129,19 +135,6 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
 
   useEffect(() => { void loadHome(); }, [loadHome]);
 
-  const loadHistory = useCallback(async () => {
-    try {
-      const response = await api.history();
-      const next: Record<string, WatchHistoryDto> = {};
-      response.history.forEach(value => { next[value.nodeId] = value; });
-      setHistory(next);
-    } catch (error) {
-      if ((error as { code?: string }).code === "DEVICE_UNAUTHORIZED") onUnauthorized();
-    }
-  }, [api, onUnauthorized]);
-
-  useEffect(() => { void loadHistory(); }, [loadHistory]);
-
   useEffect(() => {
     mountedRequest.current?.abort();
     const ids = coverAndMediaIds(browse.items, mountedIds);
@@ -209,7 +202,7 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
     const index = browse.items.findIndex(item => item.id === restorationItemId);
     if (index >= 0) setFocusedIndex(index);
     window.setTimeout(() => setRestoredFocusTick(value => value + 1), 0);
-    void loadHistory();
+    setHistoryRevision(value => value + 1);
   };
 
   const goBack = () => {
@@ -243,7 +236,7 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
   if (browse.error && browse.items.length === 0) return <StatePanel title="Source temporarily unavailable" body={browse.error}><button className="primary-action" onClick={() => browse.folder ? loadFolder(browse.folder.parent.id) : loadHome()}>Retry</button></StatePanel>;
   if (!browse.folder && browse.items.length === 0) return <StatePanel title="No folders assigned" body="Ask the household administrator to assign at least one folder to this TV."><button className="primary-action" onClick={loadHome}>Refresh</button></StatePanel>;
 
-  if (viewer) return <Viewer api={api} items={viewer.items} selectedItemId={viewer.selectedItemId} slideshowSeconds={slideshowSeconds} previews={thumbnails} onClose={closeViewer} onUnauthorized={onUnauthorized} />;
+  if (viewer) return <Viewer api={api} history={history} items={viewer.items} selectedItemId={viewer.selectedItemId} slideshowSeconds={slideshowSeconds} previews={thumbnails} onClose={closeViewer} onUnauthorized={onUnauthorized} />;
 
   const title = browse.folder?.parent.name ?? "Home";
   const currentProgram = !browse.folder && browse.items[focusedIndex]?.itemType === "root"
@@ -304,7 +297,7 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
               kind={item.kind}
               thumbnailUrl={thumbnails[item.id]?.url}
               focused={state.focused}
-              resumeProgress={item.kind === "video" ? resumeProgress(history[item.id]) : 0}
+              resumeProgress={item.kind === "video" ? resumeProgress(history.get(item.id)) : 0}
               onSelect={() => openItem(item, state.index)}
             />
           )}
@@ -382,9 +375,17 @@ function programViewportHeight() { return window.innerHeight <= 760 ? 194 : 224;
 function detectBrowserSupport() { return typeof Promise !== "undefined" && typeof fetch !== "undefined" && typeof URL !== "undefined"; }
 function providerLabel(value: string) { return value === "google" ? "Google Drive" : "OneDrive"; }
 function folderCount(value: { childFolderCount: number; childMediaCount: number }) { return `${value.childFolderCount} folders · ${value.childMediaCount} media`; }
-function resumeProgress(value?: WatchHistoryDto) {
+function resumeProgress(value?: LocalWatchHistoryEntry | null) {
   if (!value || value.completed || !Number.isFinite(value.durationSeconds) || value.durationSeconds <= 0) return 0;
   return Math.max(0, Math.min(1, value.positionSeconds / value.durationSeconds));
+}
+
+function localWatchHistoryStorage() {
+  try {
+    return typeof window !== "undefined" ? window.localStorage : null;
+  } catch {
+    return null;
+  }
 }
 
 function coverAndMediaIds(items: BrowseItem[], mountedIds: string[]): string[] {

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TvApp } from "./app";
 import type { TvApi } from "./api/client";
@@ -13,14 +13,17 @@ const api = (): TvApi => ({
   home: vi.fn(),
   folder: vi.fn(),
   thumbnailUrls: vi.fn(),
-  mediaUrl: vi.fn(),
-  history: vi.fn(),
-  saveHistory: vi.fn()
+  mediaUrl: vi.fn()
 });
 
 describe("TV enrollment and browse states", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   afterEach(() => {
     cleanup();
+    window.localStorage.clear();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -270,8 +273,6 @@ describe("TV enrollment and browse states", () => {
     });
     vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
     vi.mocked(client.mediaUrl).mockImplementation(async nodeId => ({ url: `https://provider.example/${nodeId}`, expiresAt: "2026-08-26T01:00:00.000Z", revision: "r1" }));
-    vi.mocked(client.history).mockResolvedValue({ history: [] });
-    vi.mocked(client.saveHistory).mockImplementation(async (nodeId, value) => ({ history: { nodeId, ...value, updatedAt: "2026-08-26T00:00:00.000Z" } }));
     render(<TvApp api={client} browserSupported />);
     fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
     const grid = await screen.findByRole("grid", { name: "Parent" });
@@ -284,29 +285,52 @@ describe("TV enrollment and browse states", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Second/ })).toHaveFocus());
   });
 
-  it("shows persisted video resume progress and refreshes it after the viewer closes", async () => {
+  it("uses the ready device's local history and refreshes progress synchronously after viewer close", async () => {
+    window.localStorage.setItem("cloudframe.tv.watch-history.v1:device-1", JSON.stringify({
+      version: 1,
+      entries: {
+        item_video_1: { positionSeconds: 30, durationSeconds: 120, completed: false, updatedAt: "2026-08-26T00:00:00.000Z" }
+      }
+    }));
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
     vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
     vi.mocked(client.folder).mockResolvedValue({
       parent: node("folder-parent", "folder", "Parent"), breadcrumbs: [],
-      children: [videoNode("video-1", "Lake")], nextCursor: null
+      children: [videoNode("item_video_1", "Lake")], nextCursor: null
     });
     vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
-    vi.mocked(client.mediaUrl).mockResolvedValue({ url: "https://provider.example/video-1", expiresAt: "2026-08-26T01:00:00.000Z", revision: "r1" });
-    vi.mocked(client.history)
-      .mockResolvedValueOnce({ history: [{ nodeId: "video-1", positionSeconds: 30, durationSeconds: 120, completed: false, updatedAt: "2026-08-26T00:00:00.000Z" }] })
-      .mockResolvedValue({ history: [{ nodeId: "video-1", positionSeconds: 60, durationSeconds: 120, completed: false, updatedAt: "2026-08-26T00:05:00.000Z" }] });
-    vi.mocked(client.saveHistory).mockImplementation(async (nodeId, value) => ({ history: { nodeId, ...value, updatedAt: "2026-08-26T00:05:00.000Z" } }));
+    vi.mocked(client.mediaUrl).mockResolvedValue({ url: "https://provider.example/item_video_1", expiresAt: "2026-08-26T01:00:00.000Z", revision: "r1" });
 
     render(<TvApp api={client} browserSupported />);
     fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
     expect(await screen.findByRole("progressbar", { name: "Watched" })).toHaveAttribute("aria-valuenow", "25");
     fireEvent.click(screen.getByRole("button", { name: /Lake/ }));
-    await screen.findByLabelText("Playing Lake");
+    const video = await screen.findByLabelText("Playing Lake") as HTMLVideoElement;
+    Object.defineProperty(video, "duration", { configurable: true, value: 120 });
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 60 });
     fireEvent.keyDown(window, { key: "Escape" });
     expect(await screen.findByRole("progressbar", { name: "Watched" })).toHaveAttribute("aria-valuenow", "50");
-    expect(vi.mocked(client.history).mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(window.localStorage.getItem("cloudframe.tv.watch-history.v1:device-1")).toContain('"positionSeconds":60');
+  });
+
+  it("does not reuse another ready device's local history after the session changes", async () => {
+    window.localStorage.setItem("cloudframe.tv.watch-history.v1:device-1", JSON.stringify({
+      version: 1,
+      entries: { item_video_1: { positionSeconds: 90, durationSeconds: 120, completed: false, updatedAt: "2026-08-26T00:00:00.000Z" } }
+    }));
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: { ...readyDevice, id: "device-2" }, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.folder).mockResolvedValue({
+      parent: node("folder-parent", "folder", "Parent"), breadcrumbs: [],
+      children: [videoNode("item_video_1", "Lake")], nextCursor: null
+    });
+    vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
+
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    expect(screen.queryByRole("progressbar", { name: "Watched" })).not.toBeInTheDocument();
   });
 
   it("leaves Back unhandled at the virtual root", async () => {
@@ -329,7 +353,6 @@ describe("TV enrollment and browse states", () => {
       children: [node("image-1", "image", "First")], nextCursor: null
     });
     vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
-    vi.mocked(client.history).mockResolvedValue({ history: [] });
     vi.mocked(client.mediaUrl).mockRejectedValue(Object.assign(new Error("revoked"), { code: "DEVICE_UNAUTHORIZED" }));
     render(<TvApp api={client} browserSupported />);
     fireEvent.click(await screen.findByRole("button", { name: /Family/ }));

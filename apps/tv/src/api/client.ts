@@ -5,8 +5,7 @@ import type {
   MediaUrlResponse,
   MediaNodeDto,
   ThumbnailUrlItem,
-  TvRootCardDto,
-  WatchHistoryDto
+  TvRootCardDto
 } from "@cloudframe/shared";
 
 export interface TvHomeResponse {
@@ -28,8 +27,6 @@ export interface TvApi {
   folder(nodeId: string, cursor?: string | null): Promise<TvFolderResponse>;
   thumbnailUrls(nodeIds: string[], signal?: AbortSignal): Promise<{ items: ThumbnailUrlItem[] }>;
   mediaUrl(nodeId: string, signal?: AbortSignal): Promise<MediaUrlResponse>;
-  history(signal?: AbortSignal): Promise<{ history: WatchHistoryDto[] }>;
-  saveHistory(nodeId: string, value: Pick<WatchHistoryDto, "positionSeconds" | "durationSeconds" | "completed">): Promise<{ history: WatchHistoryDto }>;
 }
 
 export class TvApiError extends Error {
@@ -76,10 +73,5 @@ export const tvApi: TvApi = {
     method: "POST",
     body: JSON.stringify({ nodeId }),
     signal
-  }),
-  history: signal => request("/api/tv/watch-history", { signal }),
-  saveHistory: (nodeId, value) => request(`/api/tv/watch-history/${encodeURIComponent(nodeId)}`, {
-    method: "PUT",
-    body: JSON.stringify(value)
   })
 };

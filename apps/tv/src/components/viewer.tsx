@@ -1,4 +1,4 @@
-import type { MediaNodeDto, ThumbnailUrlItem, WatchHistoryDto } from "@cloudframe/shared";
+import type { MediaNodeDto, ThumbnailUrlItem } from "@cloudframe/shared";
 import {
   activeViewerItem,
   calculateBufferedPercent,
@@ -11,15 +11,17 @@ import {
   viewerReducer,
   type ViewerMediaItem
 } from "@cloudframe/tv-core";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState } from "preact/hooks";
 
 import type { TvApi } from "../api/client";
+import type { LocalWatchHistory } from "../state/local-watch-history";
 import { ImageViewer } from "./image-viewer";
 import { VideoPlayer } from "./video-player";
 import { ViewerOverlay } from "./viewer-overlay";
 
-export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews, onClose, onUnauthorized = () => undefined }: {
+export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, previews, onClose, onUnauthorized = () => undefined }: {
   api: TvApi;
+  history: LocalWatchHistory;
   items: MediaNodeDto[];
   selectedItemId: string;
   slideshowSeconds: number;
@@ -29,12 +31,22 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
 }) {
   const viewerItems = useMemo(() => items.map(toViewerItem), [items]);
   const [state, dispatch] = useReducer(viewerReducer, undefined, () => createViewerState(viewerItems, selectedItemId));
-  const [history, setHistory] = useState<Record<string, WatchHistoryDto>>({});
+  const [historyAvailable, setHistoryAvailable] = useState(history.available);
   const [buffering, setBuffering] = useState(false);
   const [currentSeconds, setCurrentSeconds] = useState(0);
   const [durationSeconds, setDurationSeconds] = useState(0);
   const [bufferedPercent, setBufferedPercent] = useState(0);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const lastVideoElement = useRef<HTMLVideoElement | null>(null);
+  const videoRef = useMemo(() => {
+    let current: HTMLVideoElement | null = null;
+    return {
+      get current() { return current; },
+      set current(value: HTMLVideoElement | null) {
+        current = value;
+        if (value) lastVideoElement.current = value;
+      }
+    };
+  }, []);
   const active = activeViewerItem(state);
   const activeUrl = state.urls[active.id];
   const urlRequests = pendingViewerUrlRequests(state);
@@ -44,18 +56,17 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
   const startedUrlRequests = useRef<Record<string, boolean>>({});
   const latestResumeOverrides = useRef<Record<string, number>>({});
   const latestVideoPositions = useRef<Record<string, number>>({});
+  const lastSavedSnapshots = useRef<Record<string, string>>({});
   const [resumeOverrides, setResumeOverrides] = useState<Record<string, number>>({});
   const closed = useRef(false);
   const unauthorized = useRef(false);
   const mounted = useRef(true);
-  const historyController = useRef<AbortController | null>(null);
 
   const propagateUnauthorized = useCallback((error: unknown): boolean => {
     if (!isDeviceUnauthorized(error)) return false;
     if (unauthorized.current) return true;
     unauthorized.current = true;
     closed.current = true;
-    historyController.current?.abort();
     Object.keys(inflightUrls.current).forEach(nodeId => inflightUrls.current[nodeId]!.controller.abort());
     inflightUrls.current = {};
     const element = videoRef.current;
@@ -65,26 +76,15 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
   }, [onUnauthorized]);
 
   const saveElementHistory = useCallback((nodeId: string, element: HTMLVideoElement | null) => {
-    if (!element || unauthorized.current || !mounted.current) return;
+    if (!element || unauthorized.current) return;
     latestVideoPositions.current[nodeId] = Number.isFinite(element.currentTime) ? Math.max(0, element.currentTime) : 0;
     const value = historySnapshot(element.currentTime, element.duration);
-    void api.saveHistory(nodeId, value).catch(error => { propagateUnauthorized(error); });
-  }, [api, propagateUnauthorized]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    historyController.current = controller;
-    void api.history(controller.signal).then(response => {
-      if (controller.signal.aborted || unauthorized.current || !mounted.current) return;
-      const next: Record<string, WatchHistoryDto> = {};
-      response.history.forEach(value => { next[value.nodeId] = value; });
-      setHistory(next);
-    }).catch(error => { if (!controller.signal.aborted) propagateUnauthorized(error); });
-    return () => {
-      controller.abort();
-      if (historyController.current === controller) historyController.current = null;
-    };
-  }, [api, propagateUnauthorized]);
+    const snapshotKey = `${value.positionSeconds}:${value.durationSeconds}:${value.completed ? 1 : 0}:${history.available ? 1 : 0}`;
+    if (lastSavedSnapshots.current[nodeId] === snapshotKey) return;
+    lastSavedSnapshots.current[nodeId] = snapshotKey;
+    history.save(nodeId, value);
+    if (!history.available) setHistoryAvailable(false);
+  }, [history]);
 
   useEffect(() => {
     if (unauthorized.current) return;
@@ -124,7 +124,11 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
     Object.keys(inflightUrls.current).forEach(nodeId => inflightUrls.current[nodeId]!.controller.abort());
     inflightUrls.current = {};
     startedUrlRequests.current = {};
-  }, []);
+  }, [saveElementHistory]);
+
+  useLayoutEffect(() => () => {
+    if (!closed.current && !unauthorized.current && active.kind === "video") saveElementHistory(active.id, lastVideoElement.current);
+  }, [active.id, active.kind, saveElementHistory]);
 
   useEffect(() => {
     const currentVideo = active.kind === "video" ? videoRef.current : null;
@@ -167,8 +171,8 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
 
   const close = useCallback(() => {
     if (closed.current || unauthorized.current || !mounted.current) return;
-    closed.current = true;
     if (active.kind === "video") saveElementHistory(active.id, videoRef.current);
+    closed.current = true;
     dispatch({ type: "back" });
     onClose(state.restorationItemId);
   }, [active.id, active.kind, onClose, saveElementHistory, state.restorationItemId]);
@@ -235,7 +239,8 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
     dispatch({ type: "media-error", nodeId: active.id, kind: elementError?.code === 4 ? "codec" : "generic" });
   };
 
-  const historyResume = history[active.id]?.completed ? 0 : history[active.id]?.positionSeconds ?? 0;
+  const historyEntry = history.get(active.id);
+  const historyResume = historyEntry?.completed ? 0 : historyEntry?.positionSeconds ?? 0;
   return (
     <section className="viewer-shell" aria-label="Media viewer" data-media-kind={active.kind}>
       <span className="viewer-frame-corners" aria-hidden="true"><i /><i /><b /><b /></span>
@@ -244,6 +249,7 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
         <strong>{active.name}</strong>
         <span>Up: details · Back: collection</span>
       </div>
+      {!historyAvailable ? <p className="viewer-history-status" role="status">Watch progress is unavailable on this TV, but playback will continue.</p> : null}
       {resumeOverrides[active.id] ? <span className="viewer-resume-note">Resuming at {formatResume(resumeOverrides[active.id]!)}</span> : null}
       <div className="viewer-stage">
         {state.mediaError?.kind === "codec" ? (
@@ -290,7 +296,7 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
               setBufferedPercent(calculateBufferedPercent(element.buffered.end(element.buffered.length - 1), element.duration));
             }}
             onSeeked={() => saveElementHistory(active.id, videoRef.current)}
-            onEnded={() => dispatch({ type: "video-ended", nodeId: active.id })}
+            onEnded={() => { saveElementHistory(active.id, videoRef.current); dispatch({ type: "video-ended", nodeId: active.id }); }}
             onError={onMediaError}
           />
         )}
