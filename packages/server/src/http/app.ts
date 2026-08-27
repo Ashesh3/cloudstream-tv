@@ -1,5 +1,4 @@
 import type {
-  AssignedRoot,
   ApproveDeviceRequestBody,
   Device,
   Household,

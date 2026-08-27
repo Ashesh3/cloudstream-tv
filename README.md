@@ -4,9 +4,10 @@ Cloudframe is a private household cloud-media browser built for televisions. The
 
 ## What it does
 
-- Connects Google Drive and OneDrive globally for one household.
-- Lets an administrator approve named TVs and assign specific folder roots.
-- Browses an indexed, folder-only library without provider round trips.
+- Connects Google Drive and OneDrive globally for one household without automatically indexing the whole drive.
+- Browses provider folders live in the admin app through authenticated, no-store API responses, then indexes only the roots the administrator selects.
+- Lets an administrator approve named TVs and assign specific selected roots.
+- Browses the resulting indexed, folder-only TV library without provider round trips.
 - Opens images and videos in one remote-controlled fullscreen viewer.
 - Streams provider bytes directly to the browser; Vercel and Firebase never proxy media.
 - Stores metadata, sessions, settings, roots, and watch history in Firestore.
@@ -72,6 +73,8 @@ The checked-in Vercel cron is daily (`02:00 UTC`) because the current project is
 
 Production cutover is blocked by `STAGING_BACKUP_RESTORE_PENDING`: Firestore scheduled backup and a full restore drill must be enabled and exercised in staging first. The current development project cannot complete that gate until an approved billing account is linked.
 
+If a source reports **quota exhausted**, Cloudframe pauses indexing without hiding the failure. Reduce the selected library or obtain Firestore billing/quota headroom, then use **Sync now** to resume. The application limits indexing to selected roots, but it cannot enable billing or create Firestore capacity.
+
 Detailed Firebase, WIF, OAuth, deployment, migration, rollback, and observability procedures are in [docs/operations/firebase-vercel-setup.md](docs/operations/firebase-vercel-setup.md). Real LG webOS acceptance is in [docs/operations/webos-acceptance.md](docs/operations/webos-acceptance.md).
 
 ## Security boundaries
@@ -94,3 +97,5 @@ node scripts/migrate-vercel-blob.mjs --apply
 ```
 
 It reads legacy aggregate and split records, honors tombstones, prefers split token records, redacts all values, and never migrates browser sessions. Legacy sources have no verifiable stable provider account ID, so they are intentionally imported as `reauth-required` with disabled roots until a verified reconnect.
+
+Older installations may also contain an enabled whole-drive root. Migrate it without interrupting televisions: reconnect the source if required, choose the desired replacement roots, and run **Sync now** if indexing does not start automatically. Reassign every affected TV to the selected roots and confirm content is available before removing the legacy whole-drive root.

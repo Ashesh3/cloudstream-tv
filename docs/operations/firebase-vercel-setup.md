@@ -102,6 +102,18 @@ https://tv-video-ui-git-dev-ashsec.vercel.app/api/admin/oauth/onedrive/callback
 
 The callback host must equal `APP_ORIGIN`; do not accept an arbitrary redirect URI from the browser. Google needs Drive read-only/offline access. Microsoft needs `Files.Read`/`Files.Read.All` as approved plus `offline_access`. Provider-console redirect changes remain a manual external action until authenticated console access is available.
 
+## Source browsing and selected-root indexing
+
+Connecting or reconnecting a source verifies the provider account and records its provider-root identity. It does not create an enabled whole-drive root and does not launch a whole-drive crawl. A connected source with no selected roots remains in `unselected` state and can still be browsed in the admin app.
+
+**Browse & choose folders** reads folder pages directly from Google Drive or OneDrive through the authenticated server endpoint. These live provider responses, like all JSON API responses, are sent with `Cache-Control: no-store`; they are not derived from Firestore's indexed nodes and return folders only. The TV app continues to browse indexed metadata and never receives provider credentials.
+
+Selecting a provider folder creates or re-enables that assigned root and launches an `initial` durable sync for the selected root. Additional selected roots reset the initial crawl so the enabled-root set is indexed consistently. **Sync now** resumes an unfinished initial crawl or starts an initial crawl when no completed cursor exists; otherwise it runs delta sync. Removing a root immediately removes it from device assignments, and reconciliation makes metadata outside all enabled roots unavailable.
+
+The admin index state is operational truth: `unselected`, `queued`, `indexing`, `reconciling`, `healthy`, `quota-exhausted`, `reauth-required`, or `provider-error`. A successful live provider response with no folders may say the folder is empty; an incomplete or failed index must not be presented as provider-empty.
+
+When Firestore returns `RESOURCE_EXHAUSTED`, the source becomes `quota-exhausted`. Reduce the selected library or obtain Firestore quota headroom, then choose **Sync now**. Reconnect only when authorization is also invalid. Cloudframe avoids unnecessary whole-drive work and preserves resumable checkpoints, but it cannot link a billing account or increase Firestore capacity. This project is currently free-tier and billing-disabled; sustained indexing may require a different approved billing account or a smaller selected program.
+
 ## Build and deployment
 
 Vercel Framework Preset must be **Other** (not Next.js), with:
@@ -147,10 +159,12 @@ Hobby permits daily cron, so `vercel.json` runs reconciliation at `02:00 UTC`. I
 
 1. Run `node scripts/migrate-vercel-blob.mjs` and review the redacted counts.
 2. Run with `--apply` only after the destination and encryption key version are verified.
-3. Reconnect every `reauth-required` source and re-enable roots deliberately.
-4. Complete a full initial crawl and reconciliation in staging.
-5. Enroll a fresh TV; legacy browser sessions are not migrated.
-6. Keep the previous deployment available until one full reconciliation completes.
+3. Reconnect every `reauth-required` source and choose the desired replacement roots through **Browse & choose folders**.
+4. For an existing source with a legacy enabled whole-drive root, leave that root enabled while the selected roots index. Run **Sync now** if initial indexing did not start automatically.
+5. Reassign every affected TV from the legacy whole-drive root to the selected roots, verify the intended content is available, and only then remove the legacy whole-drive root. Removing it sooner revokes that access immediately.
+6. Complete the selected-root initial crawl and reconciliation in staging.
+7. Enroll a fresh TV; legacy browser sessions are not migrated.
+8. Keep the previous deployment available until one full reconciliation completes.
 
 Rollback the Vercel alias to the previous deployment. Do not delete new Firestore data during an application rollback. Export/backup metadata before destructive schema work; restore into staging first and verify devices, roots, sources, nodes, and watch history before production use.
 
