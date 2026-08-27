@@ -14,6 +14,7 @@ describe("opaque browse handles", () => {
       deviceId: "d1",
       sourceId: "s1",
       rootId: "r1",
+      rootProviderNodeId: "root-secret",
       providerNodeId: "provider-secret",
       parentProviderNodeId: "parent-secret",
       kind: "video",
@@ -24,7 +25,7 @@ describe("opaque browse handles", () => {
       expiresAt: TEST_NOW.getTime() + 30 * 60_000
     });
 
-    expect(handle).not.toMatch(/provider-secret|parent-secret|Lake/);
+    expect(handle).not.toMatch(/root-secret|provider-secret|parent-secret|Lake/);
     expect(codec.openItem(handle)).toMatchObject({
       householdId: "h1",
       deviceId: "d1",
@@ -44,6 +45,7 @@ describe("opaque browse handles", () => {
       deviceId: "d1",
       sourceId: "s1",
       rootId: "r1",
+      rootProviderNodeId: "root-secret",
       providerNodeId: "folder-secret",
       parentProviderNodeId: null,
       kind: "folder",
@@ -59,6 +61,7 @@ describe("opaque browse handles", () => {
       deviceId: "d1",
       sourceId: "s1",
       rootId: "r1",
+      rootProviderNodeId: "root-secret",
       folderProviderNodeId: "folder-secret",
       providerCursor: "cursor-secret",
       credentialVersion: 4,
@@ -88,6 +91,7 @@ describe("opaque browse handles", () => {
       deviceId: "d1",
       sourceId: "s1",
       rootId: "r1",
+      rootProviderNodeId: "root-secret",
       folderProviderNodeId: "folder-secret",
       providerCursor: "cursor-secret",
       credentialVersion: 4,
@@ -125,6 +129,7 @@ describe("opaque browse handles", () => {
       deviceId: "d1",
       sourceId: "s1",
       rootId: "r1",
+      rootProviderNodeId: "root-secret",
       providerNodeId: "node-1",
       parentProviderNodeId: null,
       kind: "video" as const,
@@ -145,5 +150,73 @@ describe("opaque browse handles", () => {
         expect.objectContaining({ code: "SEALED_VALUE_INVALID", message: "SEALED_VALUE_INVALID" })
       );
     }
+  });
+
+  it("requires and preserves the encrypted root provider identity on items and cursors", () => {
+    const keyring = testAeadKeyring();
+    const codec = createBrowseHandleCodec(keyring, "id-secret", () => TEST_NOW);
+    const common = {
+      version: 2 as const,
+      householdId: "h1",
+      deviceId: "d1",
+      sourceId: "s1",
+      rootId: "r1",
+      credentialVersion: 4,
+      issuedAt: TEST_NOW.getTime(),
+      expiresAt: TEST_NOW.getTime() + 30 * 60_000
+    };
+
+    expect(
+      codec.openItem(
+        codec.sealItem({
+          ...common,
+          rootProviderNodeId: "root-secret",
+          providerNodeId: "child-secret",
+          parentProviderNodeId: "parent-secret",
+          kind: "folder",
+          name: "Child",
+          mimeType: null
+        } as never)
+      )
+    ).toMatchObject({ rootProviderNodeId: "root-secret" });
+    expect(
+      codec.openCursor(
+        codec.sealCursor({
+          ...common,
+          rootProviderNodeId: "root-secret",
+          folderProviderNodeId: "child-secret",
+          providerCursor: "cursor-secret"
+        } as never)
+      )
+    ).toMatchObject({ rootProviderNodeId: "root-secret" });
+
+    const itemWithoutRootIdentity = sealJson(
+      "cloudframe/browse-item/v2",
+      {
+        ...common,
+        providerNodeId: "child-secret",
+        parentProviderNodeId: "parent-secret",
+        kind: "folder",
+        name: "Child",
+        mimeType: null
+      },
+      keyring
+    );
+    const cursorWithoutRootIdentity = sealJson(
+      "cloudframe/browse-cursor/v2",
+      {
+        ...common,
+        folderProviderNodeId: "child-secret",
+        providerCursor: "cursor-secret"
+      },
+      keyring
+    );
+
+    expect(() => codec.openItem(itemWithoutRootIdentity)).toThrowError(
+      expect.objectContaining({ code: "SEALED_VALUE_INVALID" })
+    );
+    expect(() => codec.openCursor(cursorWithoutRootIdentity)).toThrowError(
+      expect.objectContaining({ code: "SEALED_VALUE_INVALID" })
+    );
   });
 });

@@ -25,6 +25,7 @@ import type {
 } from "./control-auth";
 import {
   CredentialBrokerError,
+  type BrokeredProviderCredentials,
   type CredentialBroker
 } from "./credential-broker";
 
@@ -106,6 +107,7 @@ function activeRootAndSource(
     | "deviceId"
     | "sourceId"
     | "rootId"
+    | "rootProviderNodeId"
     | "credentialVersion"
   >
 ): { root: ControlPlaneRoot; source: ControlPlaneSource } {
@@ -121,7 +123,8 @@ function activeRootAndSource(
     !root ||
     !root.enabled ||
     !device.assignedRootIds.includes(root.id) ||
-    root.sourceId !== claims.sourceId
+    root.sourceId !== claims.sourceId ||
+    root.providerNodeId !== claims.rootProviderNodeId
   ) {
     throw browseError("ITEM_NOT_FOUND");
   }
@@ -238,6 +241,7 @@ function rootClaims(
     deviceId: auth.deviceId,
     sourceId: source.id,
     rootId: root.id,
+    rootProviderNodeId: root.providerNodeId,
     providerNodeId: root.providerNodeId,
     parentProviderNodeId: null,
     kind: "folder",
@@ -295,6 +299,16 @@ function safeProviderNode(
   ) {
     return null;
   }
+  const capturedAt = value.capturedAt;
+  const createdAt = value.createdAt;
+  const modifiedAt = value.modifiedAt;
+  if (
+    (capturedAt !== null && !(capturedAt instanceof Date)) ||
+    (createdAt !== null && !(createdAt instanceof Date)) ||
+    (modifiedAt !== null && !(modifiedAt instanceof Date))
+  ) {
+    return null;
+  }
   const mimeType = value.kind === "folder" ? null : value.mimeType;
   if (
     value.kind !== "folder" &&
@@ -310,9 +324,9 @@ function safeProviderNode(
     size: nullableNonNegativeInteger(value.size),
     width: nullableNonNegativeInteger(value.width),
     height: nullableNonNegativeInteger(value.height),
-    capturedAt: nullableIso(value.capturedAt),
-    createdAtProvider: nullableIso(value.createdAt),
-    modifiedAtProvider: nullableIso(value.modifiedAt),
+    capturedAt: nullableIso(capturedAt),
+    createdAtProvider: nullableIso(createdAt),
+    modifiedAtProvider: nullableIso(modifiedAt),
     thumbnailRevision:
       typeof value.thumbnailRevision === "string" &&
       value.thumbnailRevision.length > 0
@@ -325,7 +339,8 @@ function safeProviderNode(
 function itemClaims(
   parent: AuthorizedBrowseItem,
   node: SafeProviderNode,
-  now: Date
+  now: Date,
+  credentialVersion: number
 ): BrowseItemClaims {
   return {
     version: 2,
@@ -333,12 +348,13 @@ function itemClaims(
     deviceId: parent.claims.deviceId,
     sourceId: parent.claims.sourceId,
     rootId: parent.claims.rootId,
+    rootProviderNodeId: parent.claims.rootProviderNodeId,
     providerNodeId: node.providerNodeId,
     parentProviderNodeId: parent.claims.providerNodeId,
     kind: node.kind,
     name: node.name,
     mimeType: node.mimeType,
-    credentialVersion: parent.claims.credentialVersion,
+    credentialVersion,
     ...issueTimes(now)
   };
 }
@@ -393,6 +409,38 @@ function normalizeDependencyError(error: unknown): never {
   });
 }
 
+interface ValidProviderPage {
+  items: ProviderNode[];
+  nextCursor: string | null;
+}
+
+function validProviderPage(value: unknown): ValidProviderPage {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("INVALID_PROVIDER_PAGE");
+  }
+  const page = value as Record<string, unknown>;
+  const items = page.items;
+  const nextCursor = page.nextCursor;
+  if (
+    !Array.isArray(items) ||
+    (nextCursor !== null &&
+      (typeof nextCursor !== "string" || nextCursor.length === 0))
+  ) {
+    throw new Error("INVALID_PROVIDER_PAGE");
+  }
+  return { items: items as ProviderNode[], nextCursor };
+}
+
+function normalizeProviderPage(value: unknown): ValidProviderPage {
+  try {
+    return validProviderPage(value);
+  } catch {
+    throw new ProviderError("PROVIDER_BAD_RESPONSE", "Provider request failed.", {
+      retryable: false
+    });
+  }
+}
+
 export function createLiveBrowseService(
   options: CreateLiveBrowseServiceOptions
 ): LiveBrowseService {
@@ -436,8 +484,8 @@ export function createLiveBrowseService(
     item: AuthorizedBrowseItem,
     providerCursor: string | null,
     pageSize: number
-  ) {
-    let credentials: ProviderCredentials;
+  ): Promise<{ page: ValidProviderPage; credentialVersion: number }> {
+    let credentials: BrokeredProviderCredentials;
     try {
       credentials = await options.credentialBroker.get(
         item.source.id,
@@ -460,7 +508,11 @@ export function createLiveBrowseService(
         pageSize
       });
     try {
-      return await operation(credentials!);
+      const page = await operation(credentials!);
+      return {
+        page: normalizeProviderPage(page),
+        credentialVersion: credentials!.credentialVersion
+      };
     } catch (error) {
       if (
         error instanceof ProviderError &&
@@ -472,7 +524,11 @@ export function createLiveBrowseService(
             item.source.id,
             item.claims.householdId
           );
-          return await operation(credentials);
+          const page = await operation(credentials);
+          return {
+            page: normalizeProviderPage(page),
+            credentialVersion: credentials.credentialVersion
+          };
         } catch (retryError) {
           normalizeDependencyError(retryError);
         }
@@ -492,7 +548,7 @@ export function createLiveBrowseService(
     if (item.claims.kind !== "folder") {
       throw browseError("ITEM_NOT_FOUND");
     }
-    const cursor = sealedCursor
+    const cursor = sealedCursor !== null
       ? authorizeCursor(
           auth,
           auth.context,
@@ -501,19 +557,34 @@ export function createLiveBrowseService(
           item
         )
       : null;
-    const page = await listFolder(item, cursor?.providerCursor ?? null, pageSize);
+    const listed = await listFolder(
+      item,
+      cursor?.providerCursor ?? null,
+      pageSize
+    );
     const issuedAt = now();
     const renewedParentClaims: BrowseItemClaims = {
       ...item.claims,
+      credentialVersion: listed.credentialVersion,
       ...issueTimes(issuedAt)
     };
-    const children = page.items
-      .map((node) => safeProviderNode(node, item.claims.providerNodeId))
-      .filter((node): node is SafeProviderNode => node !== null)
-      .map((node) => {
-        const claims = itemClaims(item, node, issuedAt);
-        return itemDto(options.handles, claims, node);
-      });
+    let children: TvBrowseItemDto[];
+    try {
+      children = listed.page.items
+        .map((node) => safeProviderNode(node, item.claims.providerNodeId))
+        .filter((node): node is SafeProviderNode => node !== null)
+        .map((node) => {
+          const claims = itemClaims(
+            item,
+            node,
+            issuedAt,
+            listed.credentialVersion
+          );
+          return itemDto(options.handles, claims, node);
+        });
+    } catch (error) {
+      normalizeDependencyError(error);
+    }
     const order =
       auth.context.document.devices[auth.deviceId]?.mediaOrder ??
       auth.context.document.household.defaultMediaOrder;
@@ -521,16 +592,17 @@ export function createLiveBrowseService(
       parent: itemDto(options.handles, renewedParentClaims),
       children: sortBrowseItems(children, order),
       nextCursor:
-        typeof page.nextCursor === "string" && page.nextCursor.length > 0
+        listed.page.nextCursor !== null
           ? options.handles.sealCursor({
               version: 2,
               householdId: item.claims.householdId,
               deviceId: item.claims.deviceId,
               sourceId: item.claims.sourceId,
               rootId: item.claims.rootId,
+              rootProviderNodeId: item.claims.rootProviderNodeId,
               folderProviderNodeId: item.claims.providerNodeId,
-              providerCursor: page.nextCursor,
-              credentialVersion: item.claims.credentialVersion,
+              providerCursor: listed.page.nextCursor,
+              credentialVersion: listed.credentialVersion,
               ...issueTimes(issuedAt)
             })
           : null

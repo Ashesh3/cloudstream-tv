@@ -166,11 +166,11 @@ function createHarness(
   const broker: CredentialBroker = {
     async get() {
       credentialGets += 1;
-      return credentials("initial-access");
+      return { ...credentials("initial-access"), credentialVersion: 1 };
     },
     async refresh() {
       credentialRefreshes += 1;
-      return credentials("refreshed-access");
+      return { ...credentials("refreshed-access"), credentialVersion: 1 };
     },
   };
   const service = createLiveProviderFolderService({

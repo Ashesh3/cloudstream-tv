@@ -1,7 +1,6 @@
 import {
   ProviderError,
   type ProviderAdapter,
-  type ProviderCredentials,
   type ProviderNode,
   type ProviderRegistry
 } from "@cloudframe/providers";
@@ -21,10 +20,11 @@ import {
   testControlDocument
 } from "./helpers/control-plane";
 
-const credentials = (accessToken: string): ProviderCredentials => ({
+const credentials = (accessToken: string, credentialVersion = 1) => ({
   accessToken,
   refreshToken: null,
-  accessTokenExpiresAt: new Date(TEST_NOW.getTime() + 60 * 60_000)
+  accessTokenExpiresAt: new Date(TEST_NOW.getTime() + 60 * 60_000),
+  credentialVersion
 });
 
 function node(
@@ -70,6 +70,7 @@ class ProviderHarness {
   listFolderError: unknown;
   failListFolderOnce: unknown;
   registryError: unknown;
+  rawPage: unknown;
   readonly inputs: Array<{
     accessToken: string;
     folderId: string;
@@ -97,6 +98,7 @@ class ProviderHarness {
         throw error;
       }
       if (this.listFolderError !== undefined) throw this.listFolderError;
+      if (this.rawPage !== undefined) return this.rawPage as never;
       return {
         items: structuredClone(this.folderItems),
         nextCursor: this.nextCursor
@@ -113,6 +115,7 @@ function createHarness(document = testControlDocument()) {
   const provider = new ProviderHarness();
   let credentialGets = 0;
   let credentialRefreshes = 0;
+  let refreshCredentialVersion = 1;
   const broker: CredentialBroker = {
     async get() {
       credentialGets += 1;
@@ -120,7 +123,7 @@ function createHarness(document = testControlDocument()) {
     },
     async refresh() {
       credentialRefreshes += 1;
-      return credentials("refreshed-access");
+      return credentials("refreshed-access", refreshCredentialVersion);
     }
   };
   const providers: ProviderRegistry = {
@@ -165,6 +168,9 @@ function createHarness(document = testControlDocument()) {
     auth,
     setNow(value: Date) {
       now = new Date(value);
+    },
+    setRefreshCredentialVersion(value: number) {
+      refreshCredentialVersion = value;
     },
     get credentialGets() {
       return credentialGets;
@@ -228,6 +234,7 @@ describe("live TV browsing", () => {
       sourceId: "source-1",
       rootId: "root-1",
       providerNodeId: "provider-trips",
+      rootProviderNodeId: "provider-trips",
       parentProviderNodeId: null,
       kind: "folder",
       name: "Trips",
@@ -292,6 +299,7 @@ describe("live TV browsing", () => {
     const childClaims = harness.codec.openItem(page.children[0]!.handle);
     expect(childClaims).toMatchObject({
       rootId: "root-1",
+      rootProviderNodeId: "provider-trips",
       providerNodeId: "folder-a",
       parentProviderNodeId: "provider-trips",
       credentialVersion: 1,
@@ -345,6 +353,7 @@ describe("live TV browsing", () => {
       deviceId: "device-1",
       sourceId: "source-1",
       rootId: "root-1",
+      rootProviderNodeId: "provider-trips",
       folderProviderNodeId: "provider-trips",
       providerCursor: "raw-provider-cursor",
       credentialVersion: 1,
@@ -385,6 +394,127 @@ describe("live TV browsing", () => {
     );
   });
 
+  it.each(["", "   "])(
+    "treats non-null empty cursor %j as expired navigation",
+    async (cursor) => {
+      const harness = createHarness();
+
+      await expect(
+        harness.service.folder(
+          harness.auth(),
+          await rootHandle(harness),
+          cursor,
+          50
+        )
+      ).rejects.toEqual(new LiveBrowseError("NAVIGATION_EXPIRED"));
+      expect(harness.credentialGets).toBe(0);
+      expect(harness.provider.listFolderCalls).toBe(0);
+    }
+  );
+
+  it.each([
+    ["null page", null],
+    ["null items", { items: null, nextCursor: null }],
+    ["non-array items", { items: {}, nextCursor: null }],
+    ["empty next cursor", { items: [], nextCursor: "" }],
+    ["non-string next cursor", { items: [], nextCursor: 7 }]
+  ])("rejects malformed successful provider page: %s", async (_case, rawPage) => {
+    const harness = createHarness();
+    harness.provider.rawPage = rawPage;
+
+    await expect(
+      harness.service.folder(
+        harness.auth(),
+        await rootHandle(harness),
+        null,
+        50
+      )
+    ).rejects.toEqual(
+      expect.objectContaining({
+        code: "PROVIDER_BAD_RESPONSE",
+        message: "Provider request failed."
+      })
+    );
+  });
+
+  it("filters a provider node with malformed timestamp fields", async () => {
+    const harness = createHarness();
+    harness.provider.rawPage = {
+      items: [
+        {
+          ...node("bad-time", "Bad Time.jpg", "provider-trips", "image"),
+          capturedAt: "provider-node-secret"
+        }
+      ],
+      nextCursor: null
+    };
+
+    await expect(
+      harness.service.folder(
+        harness.auth(),
+        await rootHandle(harness),
+        null,
+        50
+      )
+    ).resolves.toMatchObject({ children: [] });
+  });
+
+  it("scrubs a throwing provider-node accessor during successful page mapping", async () => {
+    const harness = createHarness();
+    const malformed = node("bad-getter", "Bad Getter.jpg", "provider-trips", "image");
+    Object.defineProperty(malformed, "capturedAt", {
+      get() {
+        throw new Error("provider-node-secret getter");
+      }
+    });
+    harness.provider.rawPage = { items: [malformed], nextCursor: null };
+
+    await expect(
+      harness.service.folder(
+        harness.auth(),
+        await rootHandle(harness),
+        null,
+        50
+      )
+    ).rejects.toEqual(
+      expect.objectContaining({
+        code: "PROVIDER_BAD_RESPONSE",
+        message: "Provider request failed."
+      })
+    );
+  });
+
+  it("does not refresh when a successful page accessor throws a reauth-shaped error", async () => {
+    const harness = createHarness();
+    const rawPage = { items: [], nextCursor: null };
+    Object.defineProperty(rawPage, "items", {
+      get() {
+        throw new ProviderError(
+          "PROVIDER_REAUTH_REQUIRED",
+          "provider-page-secret getter",
+          { retryable: false }
+        );
+      }
+    });
+    harness.provider.rawPage = rawPage;
+
+    await expect(
+      harness.service.folder(
+        harness.auth(),
+        await rootHandle(harness),
+        null,
+        50
+      )
+    ).rejects.toEqual(
+      expect.objectContaining({
+        code: "PROVIDER_BAD_RESPONSE",
+        message: "Provider request failed."
+      })
+    );
+    expect(harness.credentialRefreshes).toBe(0);
+    expect(harness.provider.listFolderCalls).toBe(1);
+  });
+
   it.each([0, 101, 1.5])(
     "rejects invalid page size %s before credentials or provider access",
     async (pageSize) => {
@@ -419,6 +549,31 @@ describe("live TV browsing", () => {
       "initial-access",
       "refreshed-access"
     ]);
+  });
+
+  it("mints renewed handles with the credential version won during refresh rotation", async () => {
+    const harness = createHarness();
+    harness.provider.failListFolderOnce = new ProviderError(
+      "PROVIDER_REAUTH_REQUIRED",
+      "expired access",
+      { retryable: false }
+    );
+    harness.setRefreshCredentialVersion(2);
+
+    const page = await harness.service.folder(
+      harness.auth(),
+      await rootHandle(harness),
+      null,
+      50
+    );
+
+    expect(harness.codec.openItem(page.parent.handle).credentialVersion).toBe(2);
+    expect(harness.codec.openItem(page.children[0]!.handle).credentialVersion).toBe(2);
+    expect(harness.codec.openCursor(page.nextCursor!).credentialVersion).toBe(2);
+    harness.document.sources["source-1"].credentialVersion = 2;
+    await expect(
+      harness.service.folder(harness.auth(), page.parent.handle, null, 50)
+    ).resolves.toMatchObject({ parent: { name: "Trips" } });
   });
 
   it("does not retry a definitive invalid grant or arbitrary provider failure", async () => {
@@ -599,6 +754,88 @@ describe("live browse authorization", () => {
         50
       )
     ).rejects.toEqual(new LiveBrowseError("ITEM_NOT_FOUND"));
+    expect(harness.provider.listFolderCalls).toBe(1);
+  });
+
+  it("rejects previously issued descendant handles and cursors after root identity changes", async () => {
+    const harness = createHarness();
+    const rootPage = await harness.service.folder(
+      harness.auth(),
+      await rootHandle(harness),
+      null,
+      50
+    );
+    const descendant = rootPage.children.find((item) => item.kind === "folder")!;
+    const descendantPage = await harness.service.folder(
+      harness.auth(),
+      descendant.handle,
+      null,
+      50
+    );
+    harness.document.roots["root-1"].providerNodeId = "replacement-root";
+
+    await expect(
+      harness.service.folder(harness.auth(), descendant.handle, null, 50)
+    ).rejects.toEqual(new LiveBrowseError("ITEM_NOT_FOUND"));
+    await expect(
+      harness.service.folder(
+        harness.auth(),
+        descendantPage.parent.handle,
+        descendantPage.nextCursor,
+        50
+      )
+    ).rejects.toEqual(new LiveBrowseError("ITEM_NOT_FOUND"));
+    expect(harness.credentialGets).toBe(2);
+    expect(harness.provider.listFolderCalls).toBe(2);
+  });
+
+  it("rejects validly sealed descendant and cursor claims with bogus root identity", async () => {
+    const harness = createHarness();
+    const times = {
+      issuedAt: TEST_NOW.getTime(),
+      expiresAt: TEST_NOW.getTime() + 30 * 60_000
+    };
+    const descendant = harness.codec.sealItem({
+      version: 2,
+      householdId: "h1",
+      deviceId: "device-1",
+      sourceId: "source-1",
+      rootId: "root-1",
+      rootProviderNodeId: "bogus-root",
+      providerNodeId: "folder-a",
+      parentProviderNodeId: "provider-trips",
+      kind: "folder",
+      name: "albums",
+      mimeType: null,
+      credentialVersion: 1,
+      ...times
+    } as never);
+    const validDescendant = (await harness.service.folder(
+      harness.auth(),
+      await rootHandle(harness),
+      null,
+      50
+    )).children.find((item) => item.kind === "folder")!;
+    const cursor = harness.codec.sealCursor({
+      version: 2,
+      householdId: "h1",
+      deviceId: "device-1",
+      sourceId: "source-1",
+      rootId: "root-1",
+      rootProviderNodeId: "bogus-root",
+      folderProviderNodeId: "folder-a",
+      providerCursor: "raw-provider-cursor",
+      credentialVersion: 1,
+      ...times
+    } as never);
+
+    await expect(
+      harness.service.folder(harness.auth(), descendant, null, 50)
+    ).rejects.toEqual(new LiveBrowseError("ITEM_NOT_FOUND"));
+    await expect(
+      harness.service.folder(harness.auth(), validDescendant.handle, cursor, 50)
+    ).rejects.toEqual(new LiveBrowseError("ITEM_NOT_FOUND"));
+    expect(harness.credentialGets).toBe(1);
     expect(harness.provider.listFolderCalls).toBe(1);
   });
 

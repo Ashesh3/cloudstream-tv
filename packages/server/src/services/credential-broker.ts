@@ -37,9 +37,13 @@ export interface CredentialRuntimeCache {
   delete(key: string): Promise<void>;
 }
 
+export interface BrokeredProviderCredentials extends ProviderCredentials {
+  credentialVersion: number;
+}
+
 export interface CredentialBroker {
-  get(sourceId: string, householdId: string): Promise<ProviderCredentials>;
-  refresh(sourceId: string, householdId: string): Promise<ProviderCredentials>;
+  get(sourceId: string, householdId: string): Promise<BrokeredProviderCredentials>;
+  refresh(sourceId: string, householdId: string): Promise<BrokeredProviderCredentials>;
 }
 
 export interface CreateCredentialBrokerOptions {
@@ -70,7 +74,7 @@ interface RotationResult {
   rotated: boolean;
 }
 
-const refreshes = new Map<string, Promise<ProviderCredentials>>();
+const refreshes = new Map<string, Promise<BrokeredProviderCredentials>>();
 
 function notFound(): CredentialBrokerError {
   return new CredentialBrokerError("SOURCE_NOT_FOUND");
@@ -154,6 +158,13 @@ function accessCredentials(
   accessTokenExpiresAt: Date,
 ): ProviderCredentials {
   return { accessToken, refreshToken: null, accessTokenExpiresAt };
+}
+
+function brokeredCredentials(
+  credentials: ProviderCredentials,
+  source: ControlPlaneSource,
+): BrokeredProviderCredentials {
+  return { ...credentials, credentialVersion: source.credentialVersion };
 }
 
 function revisioned<T>(
@@ -369,7 +380,7 @@ export function createCredentialBroker(
   async function refresh(
     source: ControlPlaneSource,
     householdId: string,
-  ): Promise<ProviderCredentials> {
+  ): Promise<BrokeredProviderCredentials> {
     let refreshToken: string;
     try {
       refreshToken = decryptProviderToken(source.encryptedRefreshToken, keys);
@@ -406,7 +417,9 @@ export function createCredentialBroker(
         ) {
           if (winner.status === "reauth-required") throw error;
           const cached = await readCached(winner);
-          return cached ?? refreshDeduplicated(winner, householdId);
+          return cached
+            ? brokeredCredentials(cached, winner)
+            : refreshDeduplicated(winner, householdId);
         }
       }
       throw error;
@@ -433,7 +446,7 @@ export function createCredentialBroker(
       returnedRefreshToken === refreshToken
     ) {
       await cacheAccess(source, access);
-      return access;
+      return brokeredCredentials(access, source);
     }
 
     const rotation = await rotateRefreshToken(
@@ -443,19 +456,19 @@ export function createCredentialBroker(
     );
     if (rotation.rotated) {
       await cacheAccess(rotation.source, access);
-      return access;
+      return brokeredCredentials(access, rotation.source);
     }
 
     if (rotation.source.status === "reauth-required") throw reauthRequired();
     const winning = await readCached(rotation.source);
-    if (winning) return winning;
+    if (winning) return brokeredCredentials(winning, rotation.source);
     return refreshDeduplicated(rotation.source, householdId);
   }
 
   async function refreshDeduplicated(
     source: ControlPlaneSource,
     householdId: string,
-  ): Promise<ProviderCredentials> {
+  ): Promise<BrokeredProviderCredentials> {
     const key = refreshKey(householdId, source);
     const running = refreshes.get(key);
     if (running) return running;
@@ -471,15 +484,15 @@ export function createCredentialBroker(
   async function getForSource(
     source: ControlPlaneSource,
     householdId: string,
-  ): Promise<ProviderCredentials> {
+  ): Promise<BrokeredProviderCredentials> {
     if (source.status === "disabled") throw notFound();
     if (source.status === "reauth-required") throw reauthRequired();
     const cached = await readCached(source);
-    if (cached) return cached;
+    if (cached) return brokeredCredentials(cached, source);
     const initial = await bootstrap(source);
     if (initial) {
       await cacheAccess(source, initial);
-      return initial;
+      return brokeredCredentials(initial, source);
     }
     return refreshDeduplicated(source, householdId);
   }
@@ -487,7 +500,7 @@ export function createCredentialBroker(
   async function get(
     sourceId: string,
     householdId: string,
-  ): Promise<ProviderCredentials> {
+  ): Promise<BrokeredProviderCredentials> {
     const source = activeSource(options.controlState(), sourceId, householdId);
     return getForSource(source, householdId);
   }
@@ -495,7 +508,7 @@ export function createCredentialBroker(
   async function forceRefresh(
     sourceId: string,
     householdId: string,
-  ): Promise<ProviderCredentials> {
+  ): Promise<BrokeredProviderCredentials> {
     const source = activeSource(options.controlState(), sourceId, householdId);
     return refreshDeduplicated(source, householdId);
   }

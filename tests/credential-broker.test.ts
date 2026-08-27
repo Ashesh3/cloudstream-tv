@@ -213,6 +213,7 @@ describe("credential broker", () => {
       accessToken: "cached-access",
       refreshToken: null,
       accessTokenExpiresAt: new Date(TEST_NOW.getTime() + 30 * 60_000),
+      credentialVersion: 1,
     });
     expect(harness.provider.refreshCalls).toBe(0);
     expect(harness.loadCount).toBe(0);
@@ -245,6 +246,7 @@ describe("credential broker", () => {
 
     expect(credentials.accessToken).toBe("bootstrap-access");
     expect(credentials.refreshToken).toBeNull();
+    expect(credentials.credentialVersion).toBe(1);
     expect(harness.provider.refreshCalls).toBe(0);
     expect(harness.cache.sets).toHaveLength(1);
     expect(harness.cache.sets[0]).toMatchObject({
@@ -267,6 +269,7 @@ describe("credential broker", () => {
 
     expect(credentials.accessToken).toBe("fresh-access");
     expect(credentials.refreshToken).toBeNull();
+    expect(credentials.credentialVersion).toBe(1);
     expect(harness.provider.refreshCalls).toBe(1);
     expect(harness.provider.inputs[0].credentials).toEqual({
       accessToken: "",
@@ -292,6 +295,7 @@ describe("credential broker", () => {
     const credentials = await harness.broker.refresh("source-1", "h1");
 
     expect(credentials.accessToken).toBe("fresh-access");
+    expect(credentials.credentialVersion).toBe(1);
     expect(harness.provider.refreshCalls).toBe(1);
     expect(harness.mutationCount).toBe(0);
   });
@@ -325,6 +329,7 @@ describe("credential broker", () => {
     await harness.control.deferred.flush();
 
     expect(credentials.accessToken).toBe("fresh-access");
+    expect(credentials.credentialVersion).toBe(2);
     expect(harness.mutationCount).toBe(1);
     expect(
       harness.control.durable.currentDocument?.sources["source-1"],
@@ -384,6 +389,7 @@ describe("credential broker", () => {
     const credentials = await harness.broker.get("source-1", "h1");
 
     expect(credentials.accessToken).toBe("winning-access");
+    expect(credentials.credentialVersion).toBe(2);
     expect(provider.refreshCalls).toBe(1);
     expect(mutateCalls).toBe(1);
     expect(cache.sets.some((entry) => entry.key.endsWith(":1"))).toBe(false);
@@ -450,6 +456,7 @@ describe("credential broker", () => {
     const credentials = await harness.broker.get("source-1", "h1");
 
     expect(credentials.accessToken).toBe("winning-access");
+    expect(credentials.credentialVersion).toBe(2);
     expect(provider.refreshCalls).toBe(2);
     expect(mutateCalls).toBe(1);
     expect(cache.sets.at(-1)?.key).toBe("source:source-1:credentials:2");

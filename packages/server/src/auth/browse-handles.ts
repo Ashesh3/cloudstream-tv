@@ -17,6 +17,7 @@ export interface BrowseItemClaims {
   deviceId: string;
   sourceId: string;
   rootId: string;
+  rootProviderNodeId: string;
   providerNodeId: string;
   parentProviderNodeId: string | null;
   kind: "folder" | "image" | "video";
@@ -33,6 +34,7 @@ export interface BrowseCursorClaims {
   deviceId: string;
   sourceId: string;
   rootId: string;
+  rootProviderNodeId: string;
   folderProviderNodeId: string;
   providerCursor: string;
   credentialVersion: number;
@@ -102,6 +104,7 @@ function common(value: UnknownRecord, now: Date) {
     deviceId: string(value.deviceId),
     sourceId: string(value.sourceId),
     rootId: string(value.rootId),
+    rootProviderNodeId: string(value.rootProviderNodeId),
     credentialVersion: positiveInteger(value.credentialVersion),
     issuedAt,
     expiresAt
