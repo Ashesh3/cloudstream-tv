@@ -12,7 +12,7 @@ import type {
   SealedSessionCodec
 } from "../auth/sealed-sessions";
 import type { ControlPlaneStore } from "../control-plane/store";
-import { parseCookies } from "../http/request";
+import { readUniqueCookie } from "../http/request";
 import { csrfToken } from "./admin-auth";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -113,9 +113,9 @@ function openAdmin(
   request: Request,
   codec: SealedSessionCodec
 ): AdminSessionClaims {
-  const token = parseCookies(request).admin_session;
-  if (!token) throw unauthorizedAdmin();
   try {
+    const token = readUniqueCookie(request, "admin_session");
+    if (!token) throw unauthorizedAdmin();
     return codec.openAdmin(token);
   } catch {
     throw unauthorizedAdmin();
@@ -126,9 +126,9 @@ function openDevice(
   request: Request,
   codec: SealedSessionCodec
 ): DeviceSessionClaims {
-  const token = parseCookies(request).device_session;
-  if (!token) throw unauthorizedDevice();
   try {
+    const token = readUniqueCookie(request, "device_session");
+    if (!token) throw unauthorizedDevice();
     return codec.openDevice(token);
   } catch {
     throw unauthorizedDevice();
@@ -218,14 +218,18 @@ export function createControlAuth(
   ): Promise<ControlAdminLoginResult> {
     const startedAt = monotonicNow();
     const { document } = await dependencies.store.load();
-    if (document.householdId !== dependencies.householdId) {
-      throw new ControlAuthError("INVALID_CREDENTIALS");
+    let valid = false;
+    if (document.householdId === dependencies.householdId) {
+      try {
+        valid = await verifyPassphrase(
+          document.household.adminPassphraseHash,
+          passphrase,
+          dependencies.passphrasePepper
+        );
+      } catch {
+        valid = false;
+      }
     }
-    const valid = await verifyPassphrase(
-      document.household.adminPassphraseHash,
-      passphrase,
-      dependencies.passphrasePepper
-    );
     if (!valid) {
       const elapsed = Math.max(0, monotonicNow() - startedAt);
       const remaining = Math.max(0, dependencies.failedLoginDelayMs - elapsed);

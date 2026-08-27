@@ -157,6 +157,11 @@ function invalidRequest(): ControlEnrollmentError {
   );
 }
 
+interface ClaimedEnrollment {
+  document: ControlPlaneDocumentV2;
+  device: ControlPlaneDocumentV2["devices"][string];
+}
+
 export function createControlEnrollmentService(
   dependencies: ControlEnrollmentDependencies
 ): ControlEnrollmentService {
@@ -277,20 +282,57 @@ export function createControlEnrollmentService(
           clearRequestCookie: clearSessionCookie("request")
         };
       }
+      const expectedSecretHash = request.requestSecretHash;
+      const expectedDeviceId = request.approvedDeviceId;
+      const claimed = await mutate<ClaimedEnrollment>(
+        "claim-approved-device-request",
+        (current) => {
+          const currentRequest = current.pendingDeviceRequests[claims.requestId];
+          if (
+            !currentRequest ||
+            currentRequest.id !== claims.requestId ||
+            currentRequest.status !== "approved" ||
+            currentRequest.approvedDeviceId !== expectedDeviceId ||
+            Date.parse(currentRequest.expiresAt) <= now.getTime() ||
+            !sameHash(currentRequest.requestSecretHash, expectedSecretHash) ||
+            !sameHash(hashOpaqueToken(claims.requestSecret), currentRequest.requestSecretHash)
+          ) {
+            throw invalidRequest();
+          }
+          const currentDevice = current.devices[expectedDeviceId];
+          if (
+            !currentDevice ||
+            !currentDevice.enabled ||
+            currentDevice.revokedAt !== null
+          ) {
+            throw invalidRequest();
+          }
+          const next = structuredClone(current);
+          delete next.pendingDeviceRequests[claims.requestId];
+          return {
+            changed: true,
+            next,
+            result: {
+              document: next,
+              device: structuredClone(currentDevice)
+            }
+          };
+        }
+      );
       const expiresAt = new Date(now.getTime() + CONTROL_SESSION_LIFETIME_MS);
       const deviceCookie = dependencies.codec.issueDevice({
         version: 2,
         householdId: dependencies.householdId,
-        deviceId: device.id,
-        sessionVersion: device.sessionVersion,
+        deviceId: claimed.device.id,
+        sessionVersion: claimed.device.sessionVersion,
         issuedAt: now.getTime(),
         expiresAt: expiresAt.getTime()
       });
       return {
         enrollment: {
           state: "ready",
-          device: encodeDevice(device),
-          household: household(active.document)
+          device: encodeDevice(claimed.device),
+          household: household(claimed.document)
         },
         deviceCookie,
         setDeviceCookie: createSessionCookie("device", deviceCookie, expiresAt),

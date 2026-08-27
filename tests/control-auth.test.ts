@@ -226,6 +226,36 @@ describe("sealed control authentication", () => {
   });
 
   it.each([
+    ["admin_session", "admin"],
+    ["device_session", "device"]
+  ] as const)(
+    "rejects duplicate %s cookies without loading control state",
+    async (cookieName, kind) => {
+      const harness = await authHarness();
+      const token = kind === "admin"
+        ? harness.codec.issueAdmin(adminClaims())
+        : harness.codec.issueDevice(deviceClaims());
+      const request = new Request("https://app.test/api", {
+        headers: {
+          cookie: `${cookieName}=${encodeURIComponent(token)}; ${cookieName}=${encodeURIComponent(token)}`
+        }
+      });
+
+      const promise = kind === "admin"
+        ? harness.auth.admin(request, harness.context, TEST_NOW)
+        : harness.auth.device(request, harness.context, TEST_NOW);
+
+      await expect(promise).rejects.toMatchObject({
+        code: kind === "admin" ? "ADMIN_UNAUTHORIZED" : "DEVICE_UNAUTHORIZED",
+        clearCookie: expect.stringMatching(
+          new RegExp(`${cookieName}=;.*Max-Age=0`)
+        )
+      });
+      expect(harness.loadCount).toBe(0);
+    }
+  );
+
+  it.each([
     ["cross-household", { householdId: "other" }],
     ["stale passphrase", { adminPassphraseVersion: 2 }]
   ])("rejects an admin cookie with %s claims", async (_scenario, patch) => {
@@ -309,6 +339,59 @@ describe("sealed control authentication", () => {
     ).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
 
     expect(waited).toEqual([150]);
+  });
+
+  it("normalizes a household mismatch to delayed invalid credentials", async () => {
+    const harness = await authHarness();
+    const current = harness.memory.durable.currentDocument!;
+    current.householdId = "other-household";
+    harness.memory.durable.replaceOutOfBand(current, testAeadKeyring());
+
+    await expect(
+      harness.auth.login(PASSPHRASE, TEST_NOW)
+    ).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+
+    expect(harness.waited).toEqual([275]);
+    expect(harness.loadCount).toBe(1);
+  });
+
+  it("normalizes a malformed Argon2 hash to delayed invalid credentials", async () => {
+    const harness = await authHarness();
+    const current = harness.memory.durable.currentDocument!;
+    current.household.adminPassphraseHash = "malformed-argon2-hash";
+    harness.memory.durable.replaceOutOfBand(current, testAeadKeyring());
+
+    await expect(
+      harness.auth.login(PASSPHRASE, TEST_NOW)
+    ).rejects.toMatchObject({ code: "INVALID_CREDENTIALS" });
+
+    expect(harness.waited).toEqual([275]);
+    expect(harness.loadCount).toBe(1);
+  });
+
+  it("preserves control-store errors that happen before a login document is obtained", async () => {
+    const expected = new Error("CONTROL_PLANE_UNAVAILABLE");
+    const waited: number[] = [];
+    const harness = await authHarness();
+    const auth = createControlAuth({
+      store: {
+        load: async () => {
+          throw expected;
+        },
+        mutate: (name, reducer) => harness.memory.store.mutate(name, reducer)
+      },
+      codec: harness.codec,
+      householdId: "h1",
+      passphrasePepper: PEPPER,
+      csrfSecret: CSRF_SECRET,
+      failedLoginDelayMs: 275,
+      wait: async (milliseconds) => {
+        waited.push(milliseconds);
+      }
+    });
+
+    await expect(auth.login(PASSPHRASE, TEST_NOW)).rejects.toBe(expected);
+    expect(waited).toEqual([]);
   });
 
   it("logs out by clearing the sealed cookie only", async () => {

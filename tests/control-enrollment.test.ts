@@ -190,10 +190,74 @@ describe("sealed control enrollment", () => {
       expiresAt: TEST_NOW.getTime() + SESSION_LIFETIME_MS
     });
     expect(harness.memory.durable.currentDocument?.pendingDeviceRequests["request-1"])
-      .toMatchObject({ status: "approved", approvedDeviceId: "device-1" });
+      .toBeUndefined();
     expect(harness.memory.durable.currentDocument?.devices["device-1"])
       .toMatchObject({ sessionVersion: 1, revokedAt: null, enabled: true });
     expect(harness.firestoreReads).toBe(0);
+  });
+
+  it("consumes an approved request so a sequential replay cannot claim another device cookie", async () => {
+    const harness = enrollmentHarness();
+    const created = await harness.enrollment.createRequest(
+      "Living Room",
+      "203.0.113.8",
+      TEST_NOW
+    );
+    await harness.enrollment.approve(
+      "request-1",
+      { name: "Living Room", rootIds: ["root-1"] },
+      TEST_NOW
+    );
+
+    const first = await harness.enrollment.status(created.cookie, TEST_NOW);
+
+    expect(first.setDeviceCookie).toBeTruthy();
+    expect(harness.memory.durable.currentDocument?.pendingDeviceRequests["request-1"])
+      .toBeUndefined();
+    expect(harness.memory.durable.currentDocument?.revision).toBe(4);
+    expect(harness.memory.durable.writeAttempts).toBe(3);
+    await expect(
+      harness.enrollment.status(created.cookie, TEST_NOW)
+    ).rejects.toMatchObject({
+      code: "DEVICE_REQUEST_REQUIRED",
+      clearCookie: expect.stringMatching(/device_request=;.*Max-Age=0/)
+    });
+  });
+
+  it("allows exactly one of two concurrent approved-request claims to receive a device cookie", async () => {
+    const harness = enrollmentHarness();
+    const created = await harness.enrollment.createRequest(
+      "Living Room",
+      "203.0.113.8",
+      TEST_NOW
+    );
+    await harness.enrollment.approve(
+      "request-1",
+      { name: "Living Room", rootIds: ["root-1"] },
+      TEST_NOW
+    );
+
+    const claims = await Promise.allSettled([
+      harness.enrollment.status(created.cookie, TEST_NOW),
+      harness.enrollment.status(created.cookie, TEST_NOW)
+    ]);
+
+    const fulfilled = claims.filter(
+      (claim): claim is PromiseFulfilledResult<Awaited<ReturnType<typeof harness.enrollment.status>>> =>
+        claim.status === "fulfilled"
+    );
+    const rejected = claims.filter(
+      (claim): claim is PromiseRejectedResult => claim.status === "rejected"
+    );
+    expect(fulfilled).toHaveLength(1);
+    expect(fulfilled[0]!.value.setDeviceCookie).toBeTruthy();
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]!.reason).toMatchObject({
+      code: "DEVICE_REQUEST_REQUIRED",
+      clearCookie: expect.stringMatching(/device_request=;.*Max-Age=0/)
+    });
+    expect(harness.memory.durable.currentDocument?.pendingDeviceRequests["request-1"])
+      .toBeUndefined();
   });
 
   it("uses the supplied approval time for the device and approved request record", async () => {
