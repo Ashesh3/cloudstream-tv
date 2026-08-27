@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import type { MediaNode } from "@cloudframe/shared";
-import { selectFolderCoverNodeIds, sortFolderListing } from "@cloudframe/shared";
+import type { MediaNode, TvBrowseItemDto } from "@cloudframe/shared";
+import { selectFolderCoverNodeIds, sortBrowseItems } from "@cloudframe/shared";
 
 describe("folder listing sorting", () => {
   it("places alphabetized folders before media sorted by captured newest", () => {
     const items = [
-      node({ id: "m-old", name: "Old", kind: "image", capturedAt: date("2024-01-01") }),
-      node({ id: "f-z", name: "Zoo", kind: "folder" }),
-      node({ id: "m-new", name: "New", kind: "video", capturedAt: date("2025-01-01") }),
-      node({ id: "f-a", name: "albums", kind: "folder" })
+      item({ id: "m-old", name: "Old", kind: "image", capturedAt: iso("2024-01-01") }),
+      item({ id: "f-z", name: "Zoo", kind: "folder" }),
+      item({ id: "m-new", name: "New", kind: "video", capturedAt: iso("2025-01-01") }),
+      item({ id: "f-a", name: "albums", kind: "folder" })
     ];
 
-    expect(sortFolderListing(items, "captured-desc").map(item => item.id)).toEqual([
+    expect(sortBrowseItems(items, "captured-desc").map(item => item.id)).toEqual([
       "f-a",
       "f-z",
       "m-new",
@@ -22,34 +22,34 @@ describe("folder listing sorting", () => {
 
   it("falls back from captured to created and then modified timestamps", () => {
     const items = [
-      node({
+      item({
         id: "modified",
         name: "Modified",
         kind: "image",
-        modifiedAtProvider: date("2025-01-01")
+        modifiedAtProvider: iso("2025-01-01")
       }),
-      node({
+      item({
         id: "created",
         name: "Created",
         kind: "image",
-        createdAtProvider: date("2024-01-01"),
-        modifiedAtProvider: date("2026-01-01")
+        createdAtProvider: iso("2024-01-01"),
+        modifiedAtProvider: iso("2026-01-01")
       }),
-      node({
+      item({
         id: "captured",
         name: "Captured",
         kind: "image",
-        capturedAt: date("2023-01-01"),
-        createdAtProvider: date("2027-01-01")
+        capturedAt: iso("2023-01-01"),
+        createdAtProvider: iso("2027-01-01")
       })
     ];
 
-    expect(sortFolderListing(items, "captured-desc").map(item => item.id)).toEqual([
+    expect(sortBrowseItems(items, "captured-desc").map(item => item.id)).toEqual([
       "modified",
       "created",
       "captured"
     ]);
-    expect(sortFolderListing(items, "captured-asc").map(item => item.id)).toEqual([
+    expect(sortBrowseItems(items, "captured-asc").map(item => item.id)).toEqual([
       "captured",
       "created",
       "modified"
@@ -57,10 +57,10 @@ describe("folder listing sorting", () => {
   });
 
   it("keeps equal items in their original order", () => {
-    const first = node({ id: "first", providerNodeId: "same", name: "Same", kind: "image" });
-    const second = node({ id: "second", providerNodeId: "same", name: "same", kind: "image" });
+    const first = item({ id: "first", name: "Same", kind: "image" });
+    const second = item({ id: "second", name: "same", kind: "image" });
 
-    expect(sortFolderListing([first, second], "name-asc").map(item => item.id)).toEqual([
+    expect(sortBrowseItems([first, second], "name-asc").map(item => item.id)).toEqual([
       "first",
       "second"
     ]);
@@ -107,6 +107,34 @@ describe("folder cover selection", () => {
 
 function date(value: string): Date {
   return new Date(`${value}T00:00:00Z`);
+}
+
+function iso(value: string): string {
+  return date(value).toISOString();
+}
+
+function item(
+  overrides: Partial<TvBrowseItemDto> & Pick<TvBrowseItemDto, "id" | "kind">
+): TvBrowseItemDto {
+  const { id, kind, ...optional } = overrides;
+  const name = optional.name ?? id;
+  return {
+    id,
+    handle: `handle-${id}`,
+    name,
+    normalizedName: name.toLocaleLowerCase("en"),
+    kind,
+    mimeType: kind === "folder" ? null : `${kind}/synthetic`,
+    size: null,
+    width: null,
+    height: null,
+    capturedAt: null,
+    createdAtProvider: null,
+    modifiedAtProvider: null,
+    thumbnailRevision: null,
+    hasPreview: false,
+    ...optional
+  };
 }
 
 function node(overrides: Partial<MediaNode> & Pick<MediaNode, "id" | "kind">): MediaNode {

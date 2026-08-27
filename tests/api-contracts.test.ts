@@ -15,7 +15,7 @@ import {
   encodeBootstrapResponse,
   encodeMediaNodeDto,
   encodeSourceDto,
-  sortFolderListing
+  sortBrowseItems
 } from "@cloudframe/shared";
 
 const now = new Date("2026-08-26T00:00:00Z");
@@ -106,7 +106,7 @@ describe("public API DTOs", () => {
 
     const wirePayload = JSON.parse(
       JSON.stringify([encodeMediaNodeDto(older), encodeMediaNodeDto(newer)])
-    );
+    ) as Array<ReturnType<typeof encodeMediaNodeDto>>;
 
     for (const forbidden of ["householdId", "providerNodeId", "ancestorNodeIds", "syncGeneration", "indexedAt"]) {
       expect(JSON.stringify(wirePayload)).not.toContain(`"${forbidden}"`);
@@ -115,7 +115,7 @@ describe("public API DTOs", () => {
     expect(wirePayload[0].capturedAt).toBe("2024-01-01T00:00:00.000Z");
     const decoded = wirePayload.map(decodeMediaNodeDto);
     expect(decoded[0]?.capturedAt).toBeInstanceOf(Date);
-    expect(sortFolderListing(decoded, "captured-desc").map(node => node.id)).toEqual([
+    expect(sortBrowseItems(wirePayload, "captured-desc").map(node => node.id)).toEqual([
       "newer",
       "older"
     ]);
