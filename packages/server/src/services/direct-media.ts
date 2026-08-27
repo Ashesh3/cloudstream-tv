@@ -227,12 +227,33 @@ function hasExactSharePointDownloadHandler(pathname: string): boolean {
   );
 }
 
-function validOneDriveUrl(url: URL): boolean {
+function rawPath(value: string): string | null {
+  const authorityStart = value.indexOf("://");
+  if (authorityStart < 0) return null;
+  const pathStart = value.indexOf("/", authorityStart + 3);
+  if (pathStart < 0) return "";
+  const queryStart = value.indexOf("?", pathStart);
+  const fragmentStart = value.indexOf("#", pathStart);
+  const candidates = [queryStart, fragmentStart].filter((index) => index >= 0);
+  const pathEnd = candidates.length > 0 ? Math.min(...candidates) : value.length;
+  return value.slice(pathStart, pathEnd);
+}
+
+function validRawSharePointPath(value: string): boolean {
+  const path = rawPath(value);
+  if (path === null || /%(?:25|2e|2f|5c)/iu.test(path)) return false;
+  return !path.split("/").some((segment) => segment === "." || segment === "..");
+}
+
+function validOneDriveUrl(url: URL, rawUrl: string): boolean {
   if (url.pathname === "/" || url.pathname.length === 0) return false;
   if (!hasDownloadCapability(url)) return false;
   const hostname = url.hostname.toLowerCase();
   if (hostnameMatchesSubdomain(hostname, "sharepoint.com")) {
-    return hasExactSharePointDownloadHandler(url.pathname);
+    return (
+      validRawSharePointPath(rawUrl) &&
+      hasExactSharePointDownloadHandler(url.pathname)
+    );
   }
   if (hostnameMatchesSubdomain(hostname, "files.1drv.com")) return true;
   if (hostname === "storage.live.com") return true;
@@ -268,7 +289,7 @@ function validTemporaryUrl(
       url.hash !== "" ||
       (item.source.provider === "google"
         ? !validGoogleUrl(url, item, credentials)
-        : !validOneDriveUrl(url))
+        : !validOneDriveUrl(url, rawUrl))
     ) {
       throw directMediaError("INVALID_PROVIDER_URL");
     }

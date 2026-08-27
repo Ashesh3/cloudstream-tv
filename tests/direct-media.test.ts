@@ -605,6 +605,48 @@ describe("direct provider URL vending", () => {
     ).resolves.toMatchObject({ url });
   });
 
+  it.each([
+    "https://tenant.sharepoint.com/personal/%2e/user/_layouts/15/download.aspx?token=capability",
+    "https://tenant.sharepoint.com/personal/%2e%2e/user/_layouts/15/download.aspx?token=capability",
+    "https://tenant.sharepoint.com/personal/%2E%2e/user/_layouts/15/download.aspx?token=capability",
+    "https://tenant.sharepoint.com/personal/../user/_layouts/15/download.aspx?token=capability",
+    "https://tenant.sharepoint.com/personal/%252e%252e/user/_layouts/15/download.aspx?token=capability",
+  ])("rejects raw SharePoint traversal before URL normalization %s", async (url) => {
+    const harness = createHarness();
+    harness.oneDrive.mediaResult = { url, expiresAt: harness.expiry };
+
+    await expect(
+      harness.media.media(
+        harness.auth(),
+        harness.handle(
+          "source-onedrive",
+          "root-onedrive",
+          "onedrive-video",
+          "video",
+        ),
+      ),
+    ).rejects.toEqual(new DirectMediaError("INVALID_PROVIDER_URL"));
+  });
+
+  it("does not scan encoded traversal bytes inside the query capability", async () => {
+    const harness = createHarness();
+    const url =
+      "https://tenant.sharepoint.com/personal/user/_layouts/15/download.aspx?token=%252e%252e%252fopaque";
+    harness.oneDrive.mediaResult = { url, expiresAt: harness.expiry };
+
+    await expect(
+      harness.media.media(
+        harness.auth(),
+        harness.handle(
+          "source-onedrive",
+          "root-onedrive",
+          "onedrive-video",
+          "video",
+        ),
+      ),
+    ).resolves.toMatchObject({ url });
+  });
+
   it("returns unavailable for an authenticated Graph thumbnail URL", async () => {
     const harness = createHarness();
     harness.oneDrive.thumbnailResults.set("onedrive-image", {
