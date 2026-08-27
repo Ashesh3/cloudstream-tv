@@ -393,7 +393,8 @@ export function createCredentialBroker(
     } catch (error) {
       if (
         error instanceof ProviderError &&
-        error.code === "PROVIDER_REAUTH_REQUIRED"
+        error.code === "PROVIDER_REAUTH_REQUIRED" &&
+        error.reauthReason === "invalid_grant"
       ) {
         const winner = await markReauth(source.id, householdId, source);
         if (

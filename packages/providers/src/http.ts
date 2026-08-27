@@ -56,7 +56,13 @@ export async function providerFetch(
     );
   }
   const errorCode = await readProviderErrorCode(response);
-  if (response.status === 401 || errorCode === "invalid_grant") {
+  if (errorCode === "invalid_grant") {
+    throw new ProviderError("PROVIDER_REAUTH_REQUIRED", "Provider authorization is required.", {
+      retryable: false,
+      reauthReason: "invalid_grant"
+    });
+  }
+  if (response.status === 401) {
     throw new ProviderError(
       "PROVIDER_REAUTH_REQUIRED",
       "Provider authorization is required.",

@@ -3,7 +3,7 @@ import type {
   ProviderRegistry,
   Source as ProviderSource,
 } from "@cloudframe/providers";
-import { ProviderError } from "@cloudframe/providers";
+import { ProviderError, createGoogleDriveAdapter } from "@cloudframe/providers";
 import type {
   ControlPlaneDocumentV2,
   ControlPlaneSource,
@@ -464,7 +464,7 @@ describe("credential broker", () => {
     harness.provider.error = new ProviderError(
       "PROVIDER_REAUTH_REQUIRED",
       "safe",
-      { retryable: false },
+      { retryable: false, reauthReason: "invalid_grant" },
     );
 
     await expect(harness.broker.get("source-1", "h1")).rejects.toMatchObject({
@@ -477,6 +477,58 @@ describe("credential broker", () => {
       harness.control.durable.currentDocument?.sources["source-1"].status,
     ).toBe("reauth-required");
     expect(harness.control.mirror.writeCount).toBe(1);
+  });
+
+  it("does not persist reauthorization for a same-code error without definitive invalid grant", async () => {
+    const harness = createHarness();
+    harness.provider.error = new ProviderError(
+      "PROVIDER_REAUTH_REQUIRED",
+      "safe",
+      { retryable: false },
+    );
+
+    await expect(harness.broker.get("source-1", "h1")).rejects.toMatchObject({
+      code: "PROVIDER_REAUTH_REQUIRED",
+      reauthReason: null,
+    });
+
+    expect(harness.mutationCount).toBe(0);
+    expect(harness.control.mirror.writeCount).toBe(0);
+    expect(
+      harness.control.durable.currentDocument?.sources["source-1"].status,
+    ).toBe("healthy");
+  });
+
+  it("does not persist reauthorization for a generic provider HTTP 401", async () => {
+    const provider = new RefreshProvider();
+    provider.adapter.refreshCredentials = createGoogleDriveAdapter({
+      clientId: "synthetic-client",
+      clientSecret: "synthetic-secret",
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            error: { message: "synthetic private upstream payload" },
+          }),
+          { status: 401, headers: { "content-type": "application/json" } },
+        ),
+      now: () => new Date(TEST_NOW),
+    }).refreshCredentials;
+    const harness = createHarness({ provider });
+
+    const error = await harness.broker
+      .get("source-1", "h1")
+      .catch((value) => value);
+
+    expect(error).toMatchObject({
+      code: "PROVIDER_REAUTH_REQUIRED",
+      reauthReason: null,
+    });
+    expect(String(error)).not.toContain("private upstream payload");
+    expect(harness.mutationCount).toBe(0);
+    expect(harness.control.mirror.writeCount).toBe(0);
+    expect(
+      harness.control.durable.currentDocument?.sources["source-1"].status,
+    ).toBe("healthy");
   });
 
   it("uses a concurrent credential winner when an invalid grant loses the condition", async () => {
@@ -509,6 +561,7 @@ describe("credential broker", () => {
     const provider = new RefreshProvider();
     provider.error = new ProviderError("PROVIDER_REAUTH_REQUIRED", "safe", {
       retryable: false,
+      reauthReason: "invalid_grant",
     });
     const harness = createHarness({
       document: initial,
@@ -548,6 +601,7 @@ describe("credential broker", () => {
     const provider = new RefreshProvider();
     provider.error = new ProviderError("PROVIDER_REAUTH_REQUIRED", "safe", {
       retryable: false,
+      reauthReason: "invalid_grant",
     });
     provider.adapter.refreshCredentials = async (source) => {
       provider.refreshCalls += 1;

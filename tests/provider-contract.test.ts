@@ -387,7 +387,57 @@ describe("provider failure normalization", () => {
 
     await expect(
       adapter.refreshCredentials({ id: "source-a", provider: "onedrive", credentials })
-    ).rejects.toMatchObject({ code: "PROVIDER_REAUTH_REQUIRED", retryable: false });
+    ).rejects.toMatchObject({
+      code: "PROVIDER_REAUTH_REQUIRED",
+      retryable: false,
+      reauthReason: "invalid_grant"
+    });
+  });
+
+  it("normalizes generic HTTP 401 without marking a definitive invalid grant", async () => {
+    const fetch: typeof globalThis.fetch = async () =>
+      jsonResponse(
+        { error: { message: "synthetic private upstream payload" } },
+        401
+      );
+    const adapter = createGoogleDriveAdapter({
+      clientId: "synthetic-client",
+      clientSecret: "synthetic-secret",
+      fetch,
+      now: () => now
+    });
+
+    const error = await adapter
+      .listFolder({ credentials, folderId: "g-root", cursor: null, pageSize: 10 })
+      .catch(value => value);
+
+    expect(error).toMatchObject({
+      code: "PROVIDER_REAUTH_REQUIRED",
+      retryable: false,
+      reauthReason: null
+    });
+    expect(String(error)).not.toContain("private upstream payload");
+  });
+
+  it("does not mark a locally missing refresh token as definitive invalid grant", async () => {
+    const adapter = createGoogleDriveAdapter({
+      clientId: "synthetic-client",
+      clientSecret: "synthetic-secret",
+      fetch: async () => jsonResponse({}, 500),
+      now: () => now
+    });
+
+    await expect(
+      adapter.refreshCredentials({
+        id: "source-a",
+        provider: "google",
+        credentials: { ...credentials, refreshToken: null }
+      })
+    ).rejects.toMatchObject({
+      code: "PROVIDER_REAUTH_REQUIRED",
+      retryable: false,
+      reauthReason: null
+    });
   });
 
   it("normalizes aborted requests as stable retryable timeouts", async () => {

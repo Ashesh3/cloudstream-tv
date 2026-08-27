@@ -128,16 +128,22 @@ export type ProviderErrorCode =
 export class ProviderError extends Error {
   readonly retryable: boolean;
   readonly retryAfterSeconds: number | null;
+  readonly reauthReason: "invalid_grant" | null;
 
   constructor(
     readonly code: ProviderErrorCode,
     message: string,
-    options: { retryable: boolean; retryAfterSeconds?: number | null }
+    options: {
+      retryable: boolean;
+      retryAfterSeconds?: number | null;
+      reauthReason?: "invalid_grant" | null;
+    }
   ) {
     super(message);
     this.name = "ProviderError";
     this.retryable = options.retryable;
     this.retryAfterSeconds = options.retryAfterSeconds ?? null;
+    this.reauthReason = options.reauthReason ?? null;
   }
 }
 
