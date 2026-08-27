@@ -329,8 +329,8 @@ function ProgramProjection({ program, thumbnails }: {
         <span className="projection-vignette" />
       </div>
       <div className="projection-copy">
-        <span className={`provider-slate ${program.provider}`}>{providerLabel(program.provider)} · {program.accountLabel}</span>
         <h1>{program.displayName}</h1>
+        <span className={`provider-slate ${program.provider}`}>{providerLabel(program.provider)} · {program.accountLabel}</span>
         <ProgramStatus readiness={program.readiness} message={program.readinessMessage} />
         {program.readiness === "ready" && (
           <p className="program-counts"><strong>{program.childFolderCount}</strong> folders <i /> <strong>{program.childMediaCount}</strong> media</p>

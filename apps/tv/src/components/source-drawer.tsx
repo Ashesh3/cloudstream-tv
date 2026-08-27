@@ -60,7 +60,7 @@ export function SourceDrawer({ open, roots, onClose, onHome, onSelect }: {
           event.preventDefault();
         }}
       >
-        <header><div><small>Program desk</small><strong>Choose a collection</strong></div><button type="button" onClick={onClose} data-drawer-focusable="true" tabIndex={focusedIndex === 0 ? 0 : -1}>Close <kbd>Back</kbd></button></header>
+        <header><h2>Choose a collection</h2><button type="button" onClick={onClose} data-drawer-focusable="true" tabIndex={focusedIndex === 0 ? 0 : -1}>Close <kbd>Back</kbd></button></header>
         <button className="drawer-home" type="button" onClick={onHome} data-drawer-focusable="true" tabIndex={focusedIndex === 1 ? 0 : -1}><span className="drawer-cue" />Household program</button>
         <div className="drawer-list">
           {roots.map(root => {

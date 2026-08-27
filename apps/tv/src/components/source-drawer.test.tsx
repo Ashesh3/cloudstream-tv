@@ -22,6 +22,8 @@ const mixedRoots = [
 describe("source drawer remote focus", () => {
   it("focuses the first action and traps directional focus within the drawer", async () => {
     render(<SourceDrawer open roots={roots} onClose={vi.fn()} onHome={vi.fn()} onSelect={vi.fn()} />);
+    expect(screen.getByRole("heading", { name: "Choose a collection" })).toBeVisible();
+    expect(screen.queryByText("Program desk")).not.toBeInTheDocument();
     const all = screen.getAllByRole("button");
     await waitFor(() => expect(all[0]).toHaveFocus());
     fireEvent.keyDown(screen.getByRole("dialog", { name: "Sources" }), { key: "ArrowDown" });

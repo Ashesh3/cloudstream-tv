@@ -72,14 +72,14 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
     void refresh().finally(() => setCheckingSession(false));
   }, [checkSession]);
 
-  if (checkingSession) return <main className="login-stage grid min-h-screen place-items-center p-6" aria-live="polite"><div className="ledger-loading w-full max-w-md"><p className="ledger-caption">Opening the household ledger</p><Skeleton className="mt-5 h-5 w-32" /><Skeleton className="mt-3 h-10 w-full" /><Skeleton className="mt-3 h-10 w-full" /></div></main>;
+  if (checkingSession) return <main className="login-stage grid min-h-screen place-items-center p-6" aria-live="polite"><div className="ledger-loading w-full max-w-md" data-state="opening-ledger"><Skeleton className="h-5 w-32" /><Skeleton className="mt-3 h-10 w-full" /><Skeleton className="mt-3 h-10 w-full" /></div></main>;
   if (!authenticated) return <Login onLogin={login} />;
   if (!overview) return <main className="login-stage grid min-h-screen place-items-center p-6"><Alert variant="destructive" className="max-w-lg"><AlertCircleIcon /><AlertTitle>Household ledger unavailable</AlertTitle><AlertDescription>{error || "Cloudframe could not load the household ledger."}</AlertDescription><AlertAction><Button variant="outline" onClick={() => void refresh()}>Try again</Button></AlertAction></Alert></main>;
   const sourceDtos: SourceDto[] = overview.sources;
   return <TooltipProvider><div className="admin-root" ref={emitDirectionContract} data-direction-seed={DIRECTION_SEED}>
-  <Shell section={section} onSection={value => { setSection(value); setNotice(""); }} pendingCount={overview.pendingRequests.length} onRefresh={() => void refresh()} refreshing={loading}>
+  <Shell section={section} onSection={value => { setSection(value); setNotice(""); }} pendingCount={overview.pendingRequests.length} onRefresh={() => void refresh()} refreshing={loading} contentMode={section === "sources" ? "sources" : "standard"}>
     <div className="flex flex-col gap-7">
-      <LedgerOverview overview={overview} />
+      <LedgerOverview overview={overview} compact={section === "sources"} />
       {loading && <p className="sr-only" role="status">Refreshing household ledger…</p>}
       {notice && <Alert className="notice success" role="status"><CheckCircle2Icon /><AlertTitle>Completed</AlertTitle><AlertDescription>{notice}</AlertDescription></Alert>}
       {error && <Alert variant="destructive"><AlertCircleIcon /><AlertTitle>Action could not be completed</AlertTitle><AlertDescription>{error}</AlertDescription><AlertAction><Button variant="outline" onClick={() => void refresh()}><RefreshCwIcon data-icon="inline-start" />Try again</Button></AlertAction></Alert>}
@@ -103,7 +103,7 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
   </Shell></div></TooltipProvider>;
 }
 
-function LedgerOverview({ overview }: { overview: AdminOverviewResponse }) {
+function LedgerOverview({ overview, compact = false }: { overview: AdminOverviewResponse; compact?: boolean }) {
   const activeDevices = overview.devices.filter(device => !device.revokedAt);
   const enabledRoots = overview.roots.filter(root => root.enabled);
   return <div className="ledger-overview" aria-label="Household ledger overview">
@@ -111,15 +111,15 @@ function LedgerOverview({ overview }: { overview: AdminOverviewResponse }) {
       <div className="truth-strip-title"><ShieldCheckIcon aria-hidden="true" /><span>Private household program</span></div>
       {overview.sources.length ? <div className="truth-reels">{overview.sources.map(source => <div className="truth-reel" key={source.id} data-index-state={source.indexState.kind}><span className="provider-mark" aria-hidden="true">{source.provider === "google" ? "G" : "1"}</span><div><strong>{source.accountLabel}</strong><span>{source.provider === "google" ? "Google Drive" : "OneDrive"}</span></div><span className="truth-state">{source.indexState.kind === "indexing" ? "Indexing selected folders" : source.indexState.kind === "healthy" ? "Program ready" : source.indexState.kind.replaceAll("-", " ")}</span></div>)}</div> : <p className="truth-empty">No cloud source connected</p>}
     </section>
-    <section className="attention-ledger" role="region" aria-label="Attention">
-      <div><p className="ledger-caption">Attention</p><h2>{overview.pendingRequests.length ? `${overview.pendingRequests.length} ${overview.pendingRequests.length === 1 ? "television" : "televisions"} waiting` : "The booth is quiet"}</h2><p>{overview.pendingRequests.length ? "Review each television and write only the approved folders into its program." : "No device requests need review. Source and index truth remain visible above."}</p></div>
+    {!compact && <><section className="attention-ledger" role="region" aria-label="Attention">
+      <div data-ledger-state="attention"><h2>{overview.pendingRequests.length ? `${overview.pendingRequests.length} ${overview.pendingRequests.length === 1 ? "television" : "televisions"} waiting` : "The booth is quiet"}</h2><p>{overview.pendingRequests.length ? "Review each television and write only the approved folders into its program." : "No device requests need review. Source and index truth remain visible above."}</p></div>
       <div className="attention-cue" aria-hidden="true"><span /><MonitorIcon /><span /></div>
     </section>
     <section className="program-figures" role="region" aria-label="Program figures">
       <Figure icon={<MonitorIcon />} value={`${activeDevices.length} approved`} label="televisions" />
       <Figure icon={<CloudIcon />} value={`${overview.sources.length} connected`} label="cloud sources" />
       <Figure icon={<FolderOpenIcon />} value={`${enabledRoots.length} selected`} label="program folders" />
-    </section>
+    </section></>}
   </div>;
 }
 

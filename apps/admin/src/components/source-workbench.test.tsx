@@ -50,6 +50,18 @@ function workbenchApi(): AdminApi {
 }
 
 describe("source workbench", () => {
+  it("renders as an in-layout ledger region and closes from Escape", async () => {
+    const onClose = vi.fn();
+    render(<SourceWorkbench source={source} roots={[]} devices={[]} api={workbenchApi()} onChanged={vi.fn().mockResolvedValue(undefined)} onClose={onClose} />);
+
+    const workbench = await screen.findByRole("region", { name: "Choose source folders" });
+    expect(workbench).toHaveAttribute("data-material", "program-stock");
+    expect(screen.queryByRole("dialog", { name: "Choose source folders" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(workbench, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("navigates breadcrumbs, pages without duplicates, and preserves a selection while browsing", async () => {
     const api = workbenchApi();
     const changed = vi.fn().mockResolvedValue(undefined);

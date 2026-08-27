@@ -6,17 +6,16 @@
   padding: var(--safe-y) var(--safe-x);
   background: linear-gradient(180deg, rgba(224, 211, 185, .04), transparent 42%), var(--projection);
 }
-.state-panel { position: relative; width: 90vw; max-width: 920px; padding: 58px 64px 54px; border: 1px solid var(--hairline); background: var(--stock); color: var(--ink-dark); text-align: left; box-shadow: 0 30px 90px rgba(0, 0, 0, .48); }
-.state-ledger-rule { position: absolute; top: 20px; left: 26px; right: 26px; display: flex; align-items: center; color: #756a58; font-family: "Cloudframe Condensed", sans-serif; font-size: 13px; font-weight: 700; letter-spacing: .15em; }
-.state-ledger-rule i { height: 1px; flex: 1; margin-left: 18px; background: rgba(33, 28, 21, .22); }
+.state-panel { position: relative; width: 90vw; max-width: 1120px; padding: 68px 76px 62px; border: 1px solid rgba(33, 28, 21, .34); background-color: var(--stock); background-image: url("../../../../public/assets/program-stock.webp"); background-position: center; background-size: cover; color: var(--ink-dark); text-align: left; box-shadow: 0 30px 90px rgba(0, 0, 0, .48); }
+.state-panel::after { content: ""; position: absolute; right: 28px; bottom: 28px; width: 44px; height: 44px; border-right: 2px solid var(--cue); border-bottom: 2px solid var(--cue); pointer-events: none; }
 .state-mark, .brand-mark { position: relative; display: inline-block; }
 .state-mark { width: 72px; height: 50px; margin: 9px 0 24px; border: 2px solid var(--ink-dark); }
 .state-mark::before, .state-mark::after, .brand-mark::before, .brand-mark::after { content: ""; position: absolute; }
 .state-mark::before { left: 10px; right: 10px; top: 12px; height: 2px; background: var(--cue); box-shadow: 0 11px var(--ink-dark), 0 22px var(--ink-dark); }
 .state-mark::after { width: 9px; height: 9px; right: -5px; top: -5px; background: var(--cue); }
-.eyebrow { margin: 0 0 12px; color: #756a58; font-family: "Cloudframe Condensed", sans-serif; text-transform: uppercase; letter-spacing: .16em; font-size: 14px; font-weight: 700; }
 .state-panel h1 { max-width: 760px; margin: 0; font-family: "Cloudframe Condensed", sans-serif; font-size: 58px; font-weight: 650; line-height: .94; letter-spacing: -.025em; text-transform: uppercase; }
-.state-panel > p:not(.eyebrow):not(.state-detail), .state-panel section > p { max-width: 720px; margin: 18px 0 0; color: #5d5447; font-size: 21px; line-height: 1.48; }
+.state-panel > p:not(.state-detail):not(.request-identity), .state-panel section > p { max-width: 720px; margin: 18px 0 0; color: #514739; font-size: 21px; line-height: 1.48; }
+.request-identity { max-width: 640px; margin: 24px 0 0; padding: 13px 0; border-top: 1px solid rgba(33, 28, 21, .24); border-bottom: 1px solid rgba(33, 28, 21, .24); color: #382f24; font-size: 17px; font-weight: 700; }
 .state-detail { margin: 20px 0 0; color: #6f6556; font-size: 16px; }
 .enrollment-steps { width: 100%; display: flex; margin: 32px 0 0; padding: 22px 0; border-top: 1px solid rgba(33, 28, 21, .2); border-bottom: 1px solid rgba(33, 28, 21, .2); list-style: none; }
 .enrollment-steps li { width: 33.333%; padding-right: 26px; }
@@ -169,9 +168,7 @@
 .drawer-scrim { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 30; background: rgba(0, 0, 0, .77); }
 .source-drawer { width: 44vw; max-width: 520px; height: 100%; padding: var(--safe-y) 30px; border-right: 1px solid var(--hairline); background: var(--stock); color: var(--ink-dark); box-shadow: 26px 0 78px rgba(0, 0, 0, .62); }
 .source-drawer header { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 27px; padding-bottom: 20px; border-bottom: 1px solid rgba(33, 28, 21, .24); }
-.source-drawer header small, .source-drawer header strong { display: block; }
-.source-drawer header small { color: #766b59; font-size: 10px; letter-spacing: .13em; text-transform: uppercase; }
-.source-drawer header strong { margin-top: 5px; font-family: "Cloudframe Condensed", sans-serif; font-size: 25px; text-transform: uppercase; }
+.source-drawer header h2 { margin: 0; font-family: "Cloudframe Condensed", sans-serif; font-size: 25px; text-transform: uppercase; }
 .source-drawer header button { padding: 8px; border: 0; background: transparent; color: #61584a; font-size: 12px; }
 .source-drawer header kbd { margin-left: 5px; font-family: inherit; color: #8b3b19; }
 .drawer-home, .drawer-list button { width: 100%; display: flex; align-items: center; min-height: 66px; margin-bottom: 7px; padding: 10px 12px; border: 1px solid transparent; border-radius: 0; background: transparent; color: var(--ink-dark); text-align: left; }
@@ -212,7 +209,7 @@
 .viewer-prefetches { position: absolute; width: 1px; height: 1px; left: -9999px; top: -9999px; overflow: hidden; }
 .viewer-prefetch { width: 1px; height: 1px; }
 .viewer-overlay { position: absolute; left: 0; right: 0; bottom: 0; z-index: 5; padding: 48px var(--safe-x) var(--safe-y); background: linear-gradient(0deg, rgba(3, 3, 2, .99) 0%, rgba(3, 3, 2, .94) 68%, transparent 100%); }
-.viewer-details p { margin: 0 0 7px; color: var(--cue-bright); font-size: 11px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
+.viewer-details p { margin: 7px 0 0; color: var(--cue-bright); font-size: 11px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
 .viewer-details h2 { max-width: 72vw; margin: 0; overflow: hidden; color: var(--stock-bright); text-overflow: ellipsis; white-space: nowrap; font-family: "Cloudframe Condensed", sans-serif; font-size: 35px; font-weight: 620; text-transform: uppercase; }
 .viewer-details > span { display: block; margin-top: 5px; color: var(--stock-dim); }
 .viewer-filmstrip { display: flex; overflow: hidden; margin-top: 22px; }
@@ -235,6 +232,6 @@
 @keyframes shimmer { 0% { opacity: .45; } 50% { opacity: .85; } 100% { opacity: .45; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; } }
 @media (min-width: 1700px) { :root { --safe-x: 78px; --safe-y: 52px; } .program-projection { height: 565px; } .projection-copy h1 { font-size: 82px; } .program-card { height: 190px; } .state-panel h1 { font-size: 70px; } .browse-heading h1 { font-size: 58px; } }
-@media (max-height: 760px) { :root { --safe-x: 38px; --safe-y: 27px; } .tv-header { height: 72px; } .program-projection { height: 360px; } .projection-copy { padding: 35px 22px 35px 40px; } .projection-copy h1 { font-size: 52px; margin: 12px 0 16px; } .program-counts, .program-recovery { margin-top: 17px; } .program-card { height: 146px; } .browse-heading { min-height: 88px; padding: 14px 0 11px; } .browse-heading h1 { font-size: 38px; } .card-copy { min-height: 58px; } .state-panel { padding: 45px 48px 38px; } .state-panel h1 { font-size: 44px; } .state-panel > p:not(.eyebrow):not(.state-detail), .state-panel section > p { font-size: 17px; } .viewer-overlay { padding-top: 34px; } .viewer-filmstrip { margin-top: 15px; } .viewer-filmstrip > span { width: 125px; min-width: 125px; padding: 9px; } }
+@media (max-height: 760px) { :root { --safe-x: 38px; --safe-y: 27px; } .tv-header { height: 72px; } .program-projection { height: 360px; } .projection-copy { padding: 35px 22px 35px 40px; } .projection-copy h1 { font-size: 52px; margin: 12px 0 16px; } .program-counts, .program-recovery { margin-top: 17px; } .program-card { height: 146px; } .browse-heading { min-height: 88px; padding: 14px 0 11px; } .browse-heading h1 { font-size: 38px; } .card-copy { min-height: 58px; } .state-panel { padding: 49px 58px 42px; } .state-panel h1 { font-size: 44px; } .state-panel > p:not(.state-detail):not(.request-identity), .state-panel section > p { font-size: 17px; } .viewer-overlay { padding-top: 34px; } .viewer-filmstrip { margin-top: 15px; } .viewer-filmstrip > span { width: 125px; min-width: 125px; padding: 9px; } }
 @media (max-width: 900px) { .sources-action kbd, .brand > span:last-child small { display: none; } .tv-header { column-gap: 16px; } .source-drawer { width: 70vw; } .program-projection { grid-template-columns: 56% 44%; } .projection-copy { padding-left: 32px; } }
 @media (max-width: 800px) { .enrollment-steps { display: block; } .enrollment-steps li { width: 100%; padding: 10px 0; } .enrollment-steps li + li { padding-left: 0; border-left: 0; border-top: 1px solid rgba(33, 28, 21, .17); } .enrollment-steps span { display: inline-block; width: 35px; margin: 0; } .enrollment-steps strong { display: inline; } .enrollment-steps small { margin-left: 39px; } }

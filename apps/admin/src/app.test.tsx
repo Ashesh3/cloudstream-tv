@@ -143,6 +143,43 @@ describe("mobile admin workflows", () => {
     expect(within(attention).getByText("2 televisions waiting")).toBeVisible();
     expect(within(figures).getByText("1 approved")).toBeVisible();
     expect(screen.getByRole("button", { name: "Open admin menu" })).toBeVisible();
+    expect(screen.queryByText("Attention", { exact: true })).not.toBeInTheDocument();
+    expect(document.querySelector(".eyebrow, .ledger-caption")).not.toBeInTheDocument();
+  });
+
+  it("keeps source truth and navigation visible around the in-layout source workbench", async () => {
+    const client = api();
+    await login(client);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Sources" }));
+    const trigger = screen.getByRole("button", { name: "Browse & choose folders" });
+    fireEvent.click(trigger);
+
+    const workbench = await screen.findByRole("region", { name: "Choose source folders" });
+    expect(screen.getByRole("region", { name: "Source health" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Attention" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Program figures" })).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Admin sections" })).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "Choose source folders" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(workbench, { key: "Escape" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Browse & choose folders" })).toHaveFocus());
+  });
+
+  it("returns focus to the source task that opened the workbench", async () => {
+    const client = api();
+    vi.mocked(client.sources).mockResolvedValue({ sources: [
+      { ...source, roots: [root] },
+      { ...source, id: "source-2", accountLabel: "Second Drive", roots: [] }
+    ] });
+    await login(client);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Sources" }));
+    const firstSource = screen.getByRole("heading", { name: "Home Drive" }).closest('[data-slot="card"]')!;
+    const firstTrigger = within(firstSource as HTMLElement).getByRole("button", { name: "Browse & choose folders" });
+    fireEvent.click(firstTrigger);
+    fireEvent.click(await screen.findByRole("button", { name: "Back to sources" }));
+    const restoredSource = screen.getByRole("heading", { name: "Home Drive" }).closest('[data-slot="card"]')!;
+    const restoredTrigger = within(restoredSource as HTMLElement).getByRole("button", { name: "Browse & choose folders" });
+    await waitFor(() => expect(restoredTrigger).toHaveFocus());
   });
 
   it("keeps one section title, four safe-area mobile actions, and labels every icon button", async () => {
@@ -306,6 +343,8 @@ describe("mobile admin workflows", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Remove Home Drive" }));
     const confirm = await screen.findByRole("dialog", { name: "Remove source" });
+    expect(within(confirm).queryByText("Permanent removal")).not.toBeInTheDocument();
+    expect(confirm.querySelector(".eyebrow")).not.toBeInTheDocument();
     expect(within(confirm).getByText("Family Photos")).toBeVisible();
     expect(within(confirm).getByText("Living Room")).toBeVisible();
     fireEvent.click(within(confirm).getByRole("button", { name: "Remove source permanently" }));

@@ -29,8 +29,12 @@ describe("TV enrollment and browse states", () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "unenrolled" } });
     render(<TvApp api={client} browserSupported />);
-    expect(await screen.findByRole("heading", { name: "Name this TV" })).toBeVisible();
-    expect(screen.getByText("Connect this television")).toBeVisible();
+    const heading = await screen.findByRole("heading", { name: "Name this TV" });
+    expect(heading).toBeVisible();
+    expect(heading.closest(".state-panel")).toHaveAttribute("data-material", "program-stock");
+    expect(screen.queryByText("Connect this television")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cloudframe", { exact: true })).not.toBeInTheDocument();
+    expect(document.querySelector(".eyebrow")).not.toBeInTheDocument();
     expect(screen.getByText("1", { selector: "span" })).toBeVisible();
     expect(screen.getByText("2", { selector: "span" })).toBeVisible();
     expect(screen.getByText("3", { selector: "span" })).toBeVisible();
@@ -62,6 +66,8 @@ describe("TV enrollment and browse states", () => {
     fireEvent.input(screen.getByLabelText("TV name"), { target: { value: "Den TV" } });
     fireEvent.click(screen.getByRole("button", { name: "Request access" }));
     expect(await screen.findByRole("heading", { name: "Waiting for approval" })).toBeVisible();
+    expect(screen.getByText(/Den TV is queued/i)).toBeVisible();
+    expect(document.querySelector(".eyebrow")).not.toBeInTheDocument();
     expect(screen.getByText("Request sent securely")).toBeVisible();
     expect(screen.getByText(/keep this screen open/i)).toBeVisible();
     await act(async () => { await Promise.resolve(); });
@@ -100,6 +106,15 @@ describe("TV enrollment and browse states", () => {
     fireEvent.keyDown(window, { keyCode: 457 });
     expect(screen.getByRole("dialog", { name: "Sources" })).toBeVisible();
     expect(screen.getByText("Home Drive")).toBeVisible();
+  });
+
+  it("keeps provider metadata after the program title instead of using a kicker", async () => {
+    const client = readyApiWithRoots();
+    render(<TvApp api={client} browserSupported />);
+    const title = await screen.findByRole("heading", { name: "Family" });
+    const metadata = title.parentElement!.querySelector(".provider-slate")!;
+    expect(metadata).toHaveTextContent("Google Drive · Home");
+    expect(title.compareDocumentPosition(metadata) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("keeps the first approved program as initial focus", async () => {

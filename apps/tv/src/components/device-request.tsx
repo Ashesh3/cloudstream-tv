@@ -10,7 +10,7 @@ interface DeviceRequestProps {
 export function DeviceRequest({ busy, error, onSubmit }: DeviceRequestProps) {
   const [name, setName] = useState("");
   return (
-    <StatePanel eyebrow="Connect this television" title="Name this TV" body="Mark this screen for the program ledger, then approve its collections from Cloudframe Admin.">
+    <StatePanel title="Name this TV" body="Mark this screen for the program ledger, then approve its collections from Cloudframe Admin." state="enrollment">
       <ol className="enrollment-steps" aria-label="Connection steps">
         <li><span>1</span><strong>Name the screen</strong><small>Use the room name your household knows.</small></li>
         <li><span>2</span><strong>Send the request</strong><small>The program desk receives it securely.</small></li>
@@ -41,18 +41,16 @@ export function DeviceRequest({ busy, error, onSubmit }: DeviceRequestProps) {
 }
 
 export function StatePanel(props: {
-  eyebrow?: string;
   title: string;
   body: string;
+  state?: string;
   testId?: string;
   children?: ComponentChild | ComponentChild[];
 }) {
   return (
     <main className="state-shell" data-testid={props.testId}>
-      <section className="state-panel">
-        <div className="state-ledger-rule" aria-hidden="true"><span>Cloudframe</span><i /></div>
+      <section className="state-panel" data-material="program-stock" data-state={props.state}>
         <span className="state-mark" aria-hidden="true"><span /><i /></span>
-        {props.eyebrow && <p className="eyebrow">{props.eyebrow}</p>}
         <h1>{props.title}</h1>
         <p>{props.body}</p>
         {props.children}

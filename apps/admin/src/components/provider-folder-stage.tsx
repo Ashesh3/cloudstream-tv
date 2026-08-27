@@ -86,8 +86,8 @@ export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRo
   };
 
   return <section className="provider-folder-stage flex min-h-0 flex-col" aria-labelledby="provider-folder-stage-title" data-workbench-region="provider-stage">
-    <header className="flex items-start justify-between gap-4 border-b pb-4">
-      <div><p className="text-xs text-muted-foreground">{providerName(source.provider)} · {source.accountLabel}</p><h2 id="provider-folder-stage-title" className="mt-1 font-heading text-lg font-medium">Browse provider folders</h2></div>
+    <header className="stage-header flex items-start justify-between gap-4 border-b pb-4">
+      <div><h2 id="provider-folder-stage-title" className="font-heading text-lg font-medium">Live provider stage</h2><p className="mt-1 text-xs text-muted-foreground">{providerName(source.provider)} · {source.accountLabel}</p></div>
       <Button size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close folder workbench"><XIcon /></Button>
     </header>
     <div className="flex items-center gap-2 border-b py-3">
@@ -97,11 +97,11 @@ export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRo
       </nav>
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto py-4" aria-live="polite">
-      {loading ? <FolderSkeletons /> : error ? <StageErrorPanel error={error} onRetry={() => void load(locationId, null)} onReconnect={onClose} /> : pages.length === 0 ? <div className="grid min-h-52 place-items-center rounded-xl border border-dashed p-6 text-center"><div><FolderIcon className="mx-auto size-6 text-muted-foreground" aria-hidden="true" /><p className="mt-3 font-medium">This provider folder is empty</p><p className="mt-1 text-sm text-muted-foreground">The live provider response contains no child folders at this level.</p></div></div> : <ul className="provider-folder-list divide-y" aria-label={`Folders in ${current?.name ?? providerRootName}`}>
+      {loading ? <FolderSkeletons /> : error ? <StageErrorPanel error={error} onRetry={() => void load(locationId, null)} onReconnect={onClose} /> : pages.length === 0 ? <div className="stage-empty grid min-h-52 place-items-center border border-dashed p-6 text-center"><div><FolderIcon className="mx-auto size-6 text-muted-foreground" aria-hidden="true" /><p className="mt-3 font-medium">This provider folder is empty</p><p className="mt-1 text-sm text-muted-foreground">The live provider response contains no child folders at this level.</p></div></div> : <ul className="provider-folder-list divide-y" aria-label={`Folders in ${current?.name ?? providerRootName}`}>
         {pages.map(folder => {
           const selected = Boolean(folder.assignedRootId || selectedProviderNodeIds.has(folder.providerNodeId));
           return <li className="provider-folder-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-2.5" key={folder.providerNodeId}>
-            <button className="flex min-h-11 min-w-0 items-center gap-3 rounded-lg px-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50" aria-label={`Open ${folder.name}`} onClick={() => navigate(folder)}><span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted"><FolderIcon className="size-4" aria-hidden="true" /></span><span className="truncate font-medium">{folder.name}</span><ChevronRightIcon className="ml-auto size-4 shrink-0 text-muted-foreground" aria-hidden="true" /></button>
+            <button className="folder-row-action flex min-h-11 min-w-0 items-center gap-3 px-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50" aria-label={`Open ${folder.name}`} onClick={() => navigate(folder)}><span className="folder-ticket grid size-8 shrink-0 place-items-center bg-muted"><FolderIcon className="size-4" aria-hidden="true" /></span><span className="truncate font-medium">{folder.name}</span><ChevronRightIcon className="ml-auto size-4 shrink-0 text-muted-foreground" aria-hidden="true" /></button>
             <Button variant={selected ? "secondary" : "outline"} size="sm" disabled={selected || pending === folder.providerNodeId} aria-label={selected ? `${folder.name} is in the household program` : `Add ${folder.name} to household program`} onClick={() => void add(folder)}>{pending === folder.providerNodeId ? <><LoaderCircleIcon className="animate-spin" />Adding…</> : selected ? "Added" : <><FolderPlusIcon />Add</>}</Button>
           </li>;
         })}

@@ -5,8 +5,8 @@ export function ViewerOverlay({ items, activeIndex }: { items: ViewerMediaItem[]
   return (
     <aside className="viewer-overlay" role="dialog" aria-label="Media details">
       <div className="viewer-details">
-        <p>Now screening · {active.kind === "video" ? "Motion" : "Still"}</p>
         <h2>{active.name}</h2>
+        <p>Now screening · {active.kind === "video" ? "Motion" : "Still"}</p>
         <span>{active.mimeType ?? "Original file"}</span>
       </div>
       <div className="viewer-filmstrip" aria-label="Folder media">

@@ -18,7 +18,7 @@ export function Requests({ requests, roots, sources, disabled, pendingId, onAppr
 }) {
   const sorted = [...requests].filter(request => request.status === "pending").sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return <section aria-labelledby="device-requests-title" className="flex flex-col gap-5">
-    <PageHeader eyebrow="Enrollment" title="Device requests" description="Review new televisions and choose exactly which cloud folders each device can browse." />
+    <PageHeader context="Enrollment" title="Device requests" description="Review new televisions and choose exactly which cloud folders each device can browse." />
     {disabled && <Alert className="ledger-warning"><ShieldAlertIcon /><AlertTitle>New requests are paused</AlertTitle><AlertDescription>Turn enrollment back on in Settings when you are ready to add another television.</AlertDescription></Alert>}
     {!sorted.length ? <Empty title="No pending requests" body="New televisions will appear here for 30 minutes after they request household access." icon={<MonitorIcon />} /> : <div className="request-ledger">{sorted.map(request => <Card data-testid="request-card" key={request.id} className="request-entry">
       <CardHeader className="items-start gap-3 sm:grid-cols-[auto_1fr]">
@@ -39,8 +39,8 @@ export function Requests({ requests, roots, sources, disabled, pendingId, onAppr
   </section>;
 }
 
-export function PageHeader({ eyebrow, title, description, action }: { eyebrow: string; title: string; description: string; action?: ReactNode }) {
-  return <header className="page-ledger-header flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-end sm:justify-between" data-context={eyebrow}><div><h1 id={`${title.toLowerCase().replace(/\s/g, "-")}-title`} className="font-heading text-4xl font-semibold tracking-[-.025em] sm:text-5xl">{title}</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">{description}</p></div>{action}</header>;
+export function PageHeader({ context, title, description, action }: { context: string; title: string; description: string; action?: ReactNode }) {
+  return <header className="page-ledger-header flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-end sm:justify-between" data-context={context}><div><h1 id={`${title.toLowerCase().replace(/\s/g, "-")}-title`} className="font-heading text-4xl font-semibold tracking-[-.025em] sm:text-5xl">{title}</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">{description}</p></div>{action}</header>;
 }
 export function Empty({ title, body, icon = <FolderOpenIcon /> }: { title: string; body: string; icon?: ReactNode }) { return <EmptyPrimitive className="ledger-empty min-h-80 border"><EmptyHeader><EmptyMedia variant="icon" className="empty-cue size-12">{icon}</EmptyMedia><EmptyTitle className="font-heading text-xl">{title}</EmptyTitle><EmptyDescription>{body}</EmptyDescription></EmptyHeader></EmptyPrimitive>; }
 export function relativeTime(value: string) { const date = new Date(value); return Number.isNaN(date.getTime()) ? "at an unknown time" : date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }); }

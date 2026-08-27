@@ -9,7 +9,13 @@ test("live source folders stay browsable through indexing and quota recovery", a
 
   await page.getByRole("button", { name: "Sources", exact: true }).click();
   await page.getByRole("button", { name: "Browse & choose folders" }).click();
-  await expect(page.getByRole("dialog", { name: "Choose source folders" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Choose source folders" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Source health" })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: /admin sections/i }).first()).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Choose source folders" })).toHaveCount(0);
+  await expect(page.locator(".admin-topbar")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Live provider stage" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Household program ledger" })).toBeVisible();
 
   await page.getByRole("button", { name: "Open Photos" }).click();
   await expect(page.getByRole("navigation", { name: "Provider folder path" })).toContainText("My Drive");
@@ -30,16 +36,17 @@ test("live source folders stay browsable through indexing and quota recovery", a
   await page.getByRole("button", { name: "Open Photos" }).click();
   await expect(page.getByRole("button", { name: "Trips is in the household program" })).toBeDisabled();
 
-  const dialog = workbench(page);
+  const region = workbench(page);
   if (testInfo.project.name === "admin-mobile") {
     const viewport = page.viewportSize();
-    const bounds = await dialog.boundingBox();
+    const bounds = await region.boundingBox();
     expect(viewport).not.toBeNull();
     expect(bounds).not.toBeNull();
     expect(bounds!.x).toBeLessThanOrEqual(1);
     expect(bounds!.y).toBeLessThanOrEqual(1);
     expect(Math.abs(bounds!.width - viewport!.width)).toBeLessThanOrEqual(1);
-    expect(Math.abs(bounds!.height - viewport!.height)).toBeLessThanOrEqual(1);
+    expect(bounds!.height).toBeGreaterThanOrEqual(viewport!.height);
+    await expect(page.locator(".source-task-layout")).toHaveCSS("overflow-y", "auto");
   }
   await expect(page).toHaveScreenshot("source-workbench-quota.png", { animations: "disabled" });
 
@@ -52,17 +59,17 @@ test("live source folders stay browsable through indexing and quota recovery", a
 });
 
 function workbench(page: import("@playwright/test").Page) {
-  return page.getByRole("dialog", { name: "Choose source folders" });
+  return page.getByRole("region", { name: "Choose source folders" });
 }
 
 async function closeWorkbench(page: import("@playwright/test").Page) {
   await page.getByRole("button", { name: "Close folder workbench" }).click();
-  await expect(page.getByRole("dialog", { name: "Choose source folders" })).toBeHidden();
+  await expect(page.getByRole("region", { name: "Choose source folders" })).toBeHidden();
 }
 
 async function refreshAndOpenWorkbench(page: import("@playwright/test").Page) {
   await page.locator(".admin-topbar").getByRole("button").last().click();
   await expect(page.locator(".truth-reel").first()).toHaveAttribute("data-index-state", /indexing|quota-exhausted/);
   await page.getByRole("button", { name: "Browse & choose folders" }).click();
-  await expect(page.getByRole("dialog", { name: "Choose source folders" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Choose source folders" })).toBeVisible();
 }

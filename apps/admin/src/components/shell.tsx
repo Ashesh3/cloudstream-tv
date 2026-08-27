@@ -35,12 +35,13 @@ const sections = [
   { id: "settings" as const, label: "Settings", icon: SettingsIcon }
 ];
 
-export function Shell({ section, onSection, pendingCount, onRefresh, refreshing, children }: {
+export function Shell({ section, onSection, pendingCount, onRefresh, refreshing, contentMode = "standard", children }: {
   section: AdminSection;
   onSection(value: AdminSection): void;
   pendingCount: number;
   onRefresh(): void;
   refreshing: boolean;
+  contentMode?: "standard" | "sources";
   children: ReactNode;
 }) {
   return (
@@ -90,7 +91,7 @@ export function Shell({ section, onSection, pendingCount, onRefresh, refreshing,
               <span className="hidden sm:inline">Refresh</span>
             </Button>
           </header>
-          <main className="mx-auto w-full max-w-[1440px] p-4 pb-28 md:p-6 md:pb-8 lg:p-8">{children}</main>
+          <main className="admin-main mx-auto w-full max-w-[1440px] p-4 pb-28 md:p-6 md:pb-8 lg:p-8" data-content-mode={contentMode}>{children}</main>
         </SidebarInset>
         <div className="mobile-ledger-nav fixed inset-x-0 bottom-0 z-30 border-t px-2 pb-[max(.5rem,env(safe-area-inset-bottom))] pt-2 md:hidden">
           <Navigation label="Mobile admin sections" section={section} onSection={onSection} pendingCount={pendingCount} mobile safeArea />
