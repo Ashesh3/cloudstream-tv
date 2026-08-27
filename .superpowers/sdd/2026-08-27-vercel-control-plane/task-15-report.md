@@ -328,3 +328,95 @@ node F:\Projects\tv-video-ui\.agents\skills\impeccable\scripts\detect.mjs --json
 ### Fix-round concern
 
 None blocking. As ruled, a duplicate-only provider page terminates pagination; later provider pages require a collection/Home refresh.
+
+## Fix Round 2
+
+Addressed the remaining timer-identity and strict plain-data findings, plus the provider filename limit regression.
+
+### URL and thumbnail timer identity
+
+Viewer ready-URL timers are now owned by the exact `{ nodeId, requestId, expiresAtEpoch }` identity. A status/request/expiry change cancels the prior timer before scheduling the replacement; leaving the URL window also cancels it. Timer callbacks read the current URL map and current active item refs at fire time rather than scheduling-time closures, so a prefetched video that becomes active before expiry samples its exact associated video element position and resumes correctly.
+
+Thumbnail timers are owned by `{ itemId, requestedHandle, expiresAtEpoch }`. A renewed handle or expiry cancels/replaces the prior timer, and callbacks verify the current entry identity before deletion. If a decoded ready thumbnail expires between response decoding and state installation, the result is not installed and a single bounded 25ms retry tick is scheduled while visible. That retry is capped once per handle to prevent a tight race loop, and all retry/expiry timers clear on Home, Back, navigation/session refresh, and unmount.
+
+### Strict plain-data decoding
+
+Successful envelopes must be exact plain data objects with own enumerable data properties `{ ok, data }` and `ok === true`. Custom prototypes, inherited fields, extra enumerable/non-enumerable fields, symbol keys, accessors, sparse/extended arrays, and class-like objects are rejected.
+
+Descriptor/prototype inspection and decoder invocation are guarded. Throwing getters, proxies, `ownKeys`, descriptors, or decoder property access always normalize to fixed `INVALID_RESPONSE`; raw exceptions and strings cannot escape. Error-response compatibility remains separate from success decoding.
+
+### Provider visible-name contract
+
+Durable control device/request/root/account labels keep the 120-character trimmed limit. Live `TvBrowseItemDto.name` now accepts 1–1024 UTF-16 code units, preserves provider leading/trailing spaces, and rejects C0 control characters without mutating or truncating the value. `normalizedName` is separately bounded to 1–2048 safe code units. The TV renders a 121-character accessible media name while existing CSS truncates only visually.
+
+### RED evidence
+
+Plain-data and provider-name boundary:
+
+```text
+npx vitest run --config vitest.core.config.ts apps/tv/src/app.test.tsx -t "fixed invalid response|plain-data violation|1024 code-unit|live provider names containing"
+Test Files 1 failed
+Tests 9 failed | 3 passed
+```
+
+Observed failures included accepted extra/prototyped/symbol/non-enumerable envelopes, raw getter exceptions, accepted nested accessor/symbol objects, rejected valid 121/1024 provider names, and accepted C0 control characters.
+
+Thumbnail identity/race tests:
+
+```text
+npx vitest run --config vitest.core.config.ts apps/tv/src/app.test.tsx -t "renewed thumbnail timer|expires before installation"
+Test Files 1 failed
+Tests 2 failed
+```
+
+The renewed earlier-expiring entry remained governed by the old timer, and a decode-to-install expiry race never re-requested the visible item.
+
+The prefetched-video/current-active test was made deterministic by scheduling the video URL while adjacent, advancing time, then making it active before expiry. The final implementation now reads active and URL identity from refs at callback time; the regression passes with exact `0:37` resume.
+
+### GREEN verification
+
+```text
+npm run typecheck
+Exit code 0
+
+npx eslint apps/tv/src packages/tv-core/src tests/viewer-state.test.ts
+Exit code 0
+
+npx vitest run --config vitest.core.config.ts apps/tv/src/app.test.tsx apps/tv/src/components/viewer.test.tsx apps/tv/src/components/source-drawer.test.tsx apps/tv/src/components/virtual-grid.test.tsx tests/tv-focus.test.ts tests/viewer-state.test.ts
+Test Files 6 passed (6)
+Tests 143 passed (143)
+
+npm run build -w @cloudframe/tv
+39 modules transformed
+Built successfully
+
+node scripts/check-tv-bundle.mjs
+TV bundle compatibility and budget check passed (46392 B JS, 5711 B CSS compressed).
+
+npm run check:chromium68
+Pinned Chromium 555668 executed required TV APIs successfully.
+
+git diff --check
+Exit code 0
+```
+
+Required single detector pass:
+
+```text
+node F:\Projects\tv-video-ui\.agents\skills\impeccable\scripts\detect.mjs --json apps/tv/src/app.tsx apps/tv/src/components/viewer.tsx
+[]
+```
+
+### Fix-round self-review
+
+- Viewer and thumbnail timers have one explicit ready-entry identity and replace rather than coexist when a request, handle, or expiry changes.
+- Timer callbacks verify current identity and use current active/URL refs. No stale scheduling closure can classify a newly active video as adjacent.
+- Direct URL and thumbnail timer chains remain cancellable across Chromium-safe bounded timeout chunks and clear on close/unmount/navigation/device recovery.
+- Decode-to-install thumbnail expiry leaves no stale requested-handle cache entry; the delayed retry is visible-only, bounded, and capped once per handle.
+- Success envelopes and nested DTO objects accept only JSON-like own data properties. Accessors, proxies, prototypes, symbols, hidden extras, and thrown traps normalize to the same fixed safe error.
+- Control labels remain capped at 120. Provider filenames preserve exact safe text through 1024 code units and remain visually ellipsized without accessible-name truncation.
+- Task 14 exact video/history association, sealed-handle/public-ID separation, Back/focus behavior, no-referrer, and Chromium 68 checks remain green.
+
+### Fix-round concern
+
+None blocking. Extremely long provider filenames above 1024 code units are rejected at the TV response boundary as ruled.

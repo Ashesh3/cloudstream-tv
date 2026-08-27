@@ -415,6 +415,71 @@ describe("TV enrollment and browse states", () => {
     expect(document.querySelector(".media-preview img")).not.toBeInTheDocument();
   });
 
+  it("replaces a renewed thumbnail timer when the new entry expires sooner", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [rootCards[0]!] });
+    const parent = node("root-1", "folder", "Parent");
+    const initialChildren = Array.from({ length: 10 }, (_, index) => browseItem(index === 9 ? "item_photo" : `item_${index}`, index === 9 ? "sealed-photo-old" : `sealed-${index}`, index === 9 ? "Photo" : `Item ${index}`, "image"));
+    vi.mocked(client.folder)
+      .mockResolvedValueOnce({ parent, children: initialChildren, nextCursor: "cursor-a" })
+      .mockResolvedValueOnce({ parent, children: [browseItem("item_photo", "sealed-photo-new", "Photo renewed", "image"), browseItem("item_new", "sealed-new", "New", "image")], nextCursor: null });
+    vi.mocked(client.thumbnailUrls)
+      .mockResolvedValueOnce({ items: [{ itemId: "item_photo", status: "ready", url: "https://provider.example/old", expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: null }] })
+      .mockResolvedValueOnce({ items: [
+        { itemId: "item_photo", status: "ready", url: "https://provider.example/renewed", expiresAt: new Date(Date.now() + 1_000).toISOString(), revision: null },
+        { itemId: "item_new", status: "unavailable" }
+      ] })
+      .mockResolvedValueOnce({ items: [{ itemId: "item_photo", status: "ready", url: "https://provider.example/fresh", expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: null }] });
+
+    render(<TvApp api={client} browserSupported />);
+    const family = await findButtonWithFakeTimers(/Family/);
+    fireEvent.click(family);
+    await flushFakeTimersUntil(() => document.querySelector<HTMLImageElement>(".media-preview img")?.src === "https://provider.example/old");
+    const grid = screen.getByRole("grid", { name: "Parent" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    await flushFakeTimersUntil(() => vi.mocked(client.folder).mock.calls.length === 2);
+    await flushFakeTimersUntil(() => screen.queryByRole("button", { name: /Photo renewed/ }) !== null);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); await Promise.resolve(); });
+
+    await flushFakeTimersUntil(() => document.querySelector<HTMLImageElement>(".media-preview img")?.src === "https://provider.example/fresh");
+    expect(client.thumbnailUrls).toHaveBeenCalledTimes(3);
+  });
+
+  it("re-requests when a decoded thumbnail expires before installation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [rootCards[0]!] });
+    vi.mocked(client.folder).mockResolvedValue({ parent: node("root-1", "folder", "Parent"), children: [browseItem("item_photo", "sealed-photo", "Photo", "image")], nextCursor: null });
+    vi.mocked(client.thumbnailUrls)
+      .mockImplementationOnce(async (_handles, signal) => {
+        const expiresAt = new Date(Date.now() + 1).toISOString();
+        return new Promise(resolve => window.setTimeout(() => {
+          if (signal?.aborted) return;
+          resolve({ items: [{ itemId: "item_photo", status: "ready" as const, url: "https://provider.example/raced", expiresAt, revision: null }] });
+        }, 2));
+      })
+      .mockResolvedValueOnce({ items: [{ itemId: "item_photo", status: "ready", url: "https://provider.example/fresh", expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: null }] });
+
+    render(<TvApp api={client} browserSupported />);
+    const family = await findButtonWithFakeTimers(/Family/);
+    fireEvent.click(family);
+    await flushFakeTimersUntil(() => vi.mocked(client.thumbnailUrls).mock.calls.length === 1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(30); await Promise.resolve(); await Promise.resolve(); });
+
+    await flushFakeTimersUntil(() => document.querySelector<HTMLImageElement>(".media-preview img")?.src === "https://provider.example/fresh");
+    expect(client.thumbnailUrls).toHaveBeenCalledTimes(2);
+    expect(document.body.innerHTML).not.toContain("https://provider.example/raced");
+  });
+
   it("deduplicates initial roots and children with the final DTO winning", async () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
@@ -657,6 +722,76 @@ describe("TV API live browse contract", () => {
     vi.stubGlobal("fetch", vi.fn(async () => apiResponse({ itemId: "item_other", kind: "video", url: "https://provider.example/video", expiresAt: futureIso(), revision: null })));
     await expect(tvApi.mediaUrl("sealed-image", undefined, { itemId: "item_image", kind: "image" })).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
+
+  it.each([
+    ["extra success-envelope field", () => tvApi.home(), () => ({ ok: true, data: { roots: [] }, extra: true })],
+    ["custom success-envelope prototype", () => tvApi.bootstrap(), () => Object.assign(Object.create({ inherited: true }), { ok: true, data: { enrollment: { state: "unenrolled" } } })],
+    ["success-envelope getter", () => tvApi.folder("sealed-folder"), () => Object.defineProperty({ ok: true }, "data", { enumerable: true, get() { throw new Error("getter secret"); } })],
+    ["success-envelope symbol", () => tvApi.home(), () => Object.assign({ ok: true, data: { roots: [] } }, { [Symbol("secret")]: true })],
+    ["success-envelope non-enumerable extra", () => tvApi.home(), () => Object.defineProperty({ ok: true, data: { roots: [] } }, "secret", { value: true })],
+    ["proxy ownKeys failure", () => tvApi.mediaUrl("sealed-image"), () => new Proxy({ ok: true, data: {} }, { ownKeys() { throw new Error("proxy secret"); } })]
+  ])("rejects %s as fixed invalid response", async (_name, call, payload) => {
+    vi.stubGlobal("fetch", vi.fn(async () => apiValueResponse(payload())));
+    await expect(call()).rejects.toMatchObject({ code: "INVALID_RESPONSE", message: "The server returned an unexpected response." });
+  });
+
+  it.each([
+    ["custom root prototype", Object.assign(Object.create({ inherited: true }), rootCards[0])],
+    ["folder child accessor", Object.defineProperty({ ...browseItem("item_image", "sealed-image", "Image", "image") }, "name", { enumerable: true, get() { throw new Error("name secret"); } })],
+    ["media symbol field", Object.assign({ itemId: "item_image", kind: "image", url: "https://provider.example/image", expiresAt: futureIso(), revision: null }, { [Symbol("secret")]: true })]
+  ])("rejects nested plain-data violation: %s", async (name, value) => {
+    const data = name === "custom root prototype"
+      ? { roots: [value] }
+      : name === "folder child accessor"
+        ? { parent: browseItem("item_parent", "sealed-parent", "Parent", "folder"), children: [value], nextCursor: null }
+        : value;
+    vi.stubGlobal("fetch", vi.fn(async () => apiValueResponse({ ok: true, data })));
+    const call = name === "custom root prototype" ? tvApi.home() : name === "folder child accessor" ? tvApi.folder("sealed-folder") : tvApi.mediaUrl("sealed-image");
+    await expect(call).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("accepts 121 and 1024 code-unit live provider names without mutating them", async () => {
+    const name121 = ` ${"A".repeat(119)} `;
+    const name1024 = "B".repeat(1024);
+    vi.stubGlobal("fetch", vi.fn(async () => apiResponse({
+      parent: browseItem("item_parent", "sealed-parent", "Parent", "folder"),
+      children: [
+        { ...browseItem("item_121", "sealed-121", name121, "image"), normalizedName: "a".repeat(121) },
+        { ...browseItem("item_1024", "sealed-1024", name1024, "image"), normalizedName: "b".repeat(2048) }
+      ],
+      nextCursor: null
+    })));
+
+    const page = await tvApi.folder("sealed-folder");
+    expect(page.children.map(item => item.name)).toEqual([name121, name1024]);
+  });
+
+  it.each([
+    ["1025 code units", "C".repeat(1025)],
+    ["C0 control", "bad\u0007name"]
+  ])("rejects live provider names containing %s", async (_name, filename) => {
+    vi.stubGlobal("fetch", vi.fn(async () => apiResponse({
+      parent: browseItem("item_parent", "sealed-parent", "Parent", "folder"),
+      children: [{ ...browseItem("item_bad", "sealed-bad", filename, "image"), normalizedName: "bad" }],
+      nextCursor: null
+    })));
+    await expect(tvApi.folder("sealed-folder")).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("renders a 121-character live provider filename without truncating its accessible name", async () => {
+    const filename = "P".repeat(121);
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [rootCards[0]!] });
+    vi.mocked(client.folder).mockResolvedValue({
+      parent: node("root-1", "folder", "Parent"),
+      children: [{ ...browseItem("item_long", "sealed-long", filename, "image"), normalizedName: filename.toLowerCase() }],
+      nextCursor: null
+    });
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    expect(await screen.findByRole("button", { name: `${filename}, image` })).toBeVisible();
+  });
 });
 
 const readyDevice = {
@@ -731,6 +866,12 @@ function apiResponse(data: unknown) {
   });
 }
 
+function apiValueResponse(value: unknown) {
+  const response = new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+  Object.defineProperty(response, "json", { value: async () => value });
+  return response;
+}
+
 function futureIso() {
   return new Date(Date.now() + 60_000).toISOString();
 }
@@ -747,7 +888,7 @@ async function findButtonWithFakeTimers(name: RegExp): Promise<HTMLButtonElement
 async function flushFakeTimersUntil(condition: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (condition()) return;
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(1); });
   }
   throw new Error("Condition did not settle.");
 }

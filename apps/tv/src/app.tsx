@@ -98,7 +98,9 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   const requestedFocusItemId = useRef<string | null>(null);
   const restoreFocusAfterDrawer = useRef<number | null>(null);
   const mountedRequest = useRef<AbortController | null>(null);
-  const thumbnailExpiryTimers = useRef<Record<string, () => void>>({});
+  const thumbnailExpiryTimers = useRef<Record<string, { identity: string; cancel: () => void }>>({});
+  const thumbnailRetryTimer = useRef<number | null>(null);
+  const thumbnailInstallRetries = useRef<Record<string, boolean>>({});
   const browseRef = useRef(browse);
   const scrollTopRef = useRef(scrollTop);
   const columns = useResponsiveColumns();
@@ -106,7 +108,17 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
 
   useEffect(() => { browseRef.current = browse; }, [browse]);
   useEffect(() => { scrollTopRef.current = scrollTop; }, [scrollTop]);
-  useEffect(() => () => clearScheduled(thumbnailExpiryTimers.current), []);
+  useEffect(() => () => {
+    clearScheduled(thumbnailExpiryTimers.current);
+    if (thumbnailRetryTimer.current !== null) window.clearTimeout(thumbnailRetryTimer.current);
+  }, []);
+
+  const clearThumbnailLifecycle = useCallback(() => {
+    clearScheduled(thumbnailExpiryTimers.current);
+    if (thumbnailRetryTimer.current !== null) window.clearTimeout(thumbnailRetryTimer.current);
+    thumbnailRetryTimer.current = null;
+    thumbnailInstallRetries.current = {};
+  }, []);
 
   const closeDrawerAndRestore = useCallback(() => {
     setDrawerOpen(false);
@@ -120,6 +132,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   }, []);
 
   const applyHome = useCallback((response: TvHomeResponse) => {
+    clearThumbnailLifecycle();
     const roots = dedupeLastById(response.roots);
     const items = roots.map(root => ({ ...root, itemType: "root" as const }));
     const next = homeBrowseState(roots, items);
@@ -129,16 +142,18 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     setScrollTop(0);
     setStack([]);
     setThumbnails({});
-  }, []);
+  }, [clearThumbnailLifecycle]);
 
   const handleBrowseError = useCallback((error: unknown, retainItems: boolean) => {
     const code = errorCode(error);
     if (code === "DEVICE_UNAUTHORIZED") {
+      clearThumbnailLifecycle();
       clearSessionState(loadVersion, pageRequest, mountedRequest, setBrowse, setStack, setThumbnails, setViewer);
       onUnauthorized();
       return;
     }
     if (code === "NAVIGATION_EXPIRED" || code === "ITEM_NOT_FOUND") {
+      clearThumbnailLifecycle();
       clearSessionState(loadVersion, pageRequest, mountedRequest, setBrowse, setStack, setThumbnails, setViewer);
       void api.home().then(applyHome).catch(() => setBrowse(current => ({ ...current, loading: false, error: "This collection could not be refreshed." })));
       return;
@@ -149,7 +164,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
         ? "The provider is busy. Try again shortly."
         : "This source is temporarily unavailable.";
     setBrowse(current => ({ ...current, loading: false, error: message, items: retainItems ? current.items : [] }));
-  }, [api, applyHome, onUnauthorized]);
+  }, [api, applyHome, clearThumbnailLifecycle, onUnauthorized]);
 
   const loadHome = useCallback(async () => {
     const version = ++loadVersion.current;
@@ -257,6 +272,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     mountedRequest.current = controller;
     void api.thumbnailUrls(requested.map(item => item.handle), controller.signal).then(response => {
       if (controller.signal.aborted) return;
+      let retryExpired = false;
       const requestedIds: Record<string, boolean> = {};
       requested.forEach(item => { requestedIds[item.id] = true; });
       setThumbnails(current => {
@@ -266,15 +282,30 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
           const requestedItem = requested.find(candidate => candidate.id === item.itemId);
           if (!requestedItem) return;
           if (item.status === "unavailable") {
+            delete thumbnailInstallRetries.current[requestedItem.handle];
             next[item.itemId] = { ...item, requestedHandle: requestedItem.handle };
             return;
           }
           const expiresAtEpoch = futureExpiryEpoch(item.expiresAt);
-          if (expiresAtEpoch === null) return;
+          if (expiresAtEpoch === null) {
+            delete next[item.itemId];
+            if (!thumbnailInstallRetries.current[requestedItem.handle]) {
+              thumbnailInstallRetries.current[requestedItem.handle] = true;
+              retryExpired = true;
+            }
+            return;
+          }
+          delete thumbnailInstallRetries.current[requestedItem.handle];
           next[item.itemId] = { ...item, requestedHandle: requestedItem.handle, expiresAtEpoch };
         });
         return next;
       });
+      if (retryExpired && thumbnailRetryTimer.current === null) {
+        thumbnailRetryTimer.current = window.setTimeout(() => {
+          thumbnailRetryTimer.current = null;
+          setThumbnailRequestRevision(value => value + 1);
+        }, 25);
+      }
     }).catch(error => {
       if (controller.signal.aborted) return;
       const code = errorCode(error);
@@ -288,23 +319,31 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     visibleThumbnailItems(browse.items, mountedIds).forEach(item => { visible[item.id] = true; });
     Object.keys(thumbnails).forEach(itemId => {
       const entry = thumbnails[itemId]!;
-      if (entry.status !== "ready" || entry.expiresAtEpoch === undefined || !visible[itemId] || thumbnailExpiryTimers.current[itemId]) return;
-      thumbnailExpiryTimers.current[itemId] = scheduleBoundedAt(entry.expiresAtEpoch, () => {
+      if (entry.status !== "ready" || entry.expiresAtEpoch === undefined || !visible[itemId]) return;
+      const identity = `${entry.requestedHandle}:${entry.expiresAtEpoch}`;
+      const previous = thumbnailExpiryTimers.current[itemId];
+      if (previous?.identity === identity) return;
+      previous?.cancel();
+      const timer: { identity: string; cancel: () => void } = { identity, cancel: () => undefined };
+      timer.cancel = scheduleBoundedAt(entry.expiresAtEpoch, () => {
+        if (thumbnailExpiryTimers.current[itemId]?.identity !== identity) return;
         delete thumbnailExpiryTimers.current[itemId];
         setThumbnails(current => {
           const active = current[itemId];
-          if (!active || active.status !== "ready" || active.expiresAt !== entry.expiresAt) return current;
+          if (!active || active.status !== "ready" || active.requestedHandle !== entry.requestedHandle || active.expiresAtEpoch !== entry.expiresAtEpoch) return current;
           const next = { ...current };
           delete next[itemId];
           return next;
         });
         setThumbnailRequestRevision(value => value + 1);
       });
+      thumbnailExpiryTimers.current[itemId] = timer;
     });
     Object.keys(thumbnailExpiryTimers.current).forEach(itemId => {
       const entry = thumbnails[itemId];
-      if (visible[itemId] && entry?.status === "ready") return;
-      thumbnailExpiryTimers.current[itemId]!();
+      const identity = entry?.status === "ready" && entry.expiresAtEpoch !== undefined ? `${entry.requestedHandle}:${entry.expiresAtEpoch}` : null;
+      if (visible[itemId] && identity === thumbnailExpiryTimers.current[itemId]!.identity) return;
+      thumbnailExpiryTimers.current[itemId]!.cancel();
       delete thumbnailExpiryTimers.current[itemId];
     });
   }, [browse.items, mountedIds.join("|"), thumbnails]);
@@ -315,6 +354,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     loadVersion.current += 1;
     pageRequest.current = null;
     mountedRequest.current?.abort();
+    clearThumbnailLifecycle();
     setStack(current => current.slice(0, -1));
     const restoredIndex = restoredFocusIndex(entry, entry.items);
     const next: BrowseState = {
@@ -333,7 +373,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     setFocusedIndex(restoredIndex);
     setScrollTop(entry.scrollTop);
     window.setTimeout(() => setRestoredFocusTick(value => value + 1), 0);
-  }, [stack]);
+  }, [clearThumbnailLifecycle, stack]);
 
   useEffect(() => {
     if (viewer) return;
@@ -409,9 +449,10 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   };
 
   const refreshExpiredNavigation = useCallback(() => {
+    clearThumbnailLifecycle();
     clearSessionState(loadVersion, pageRequest, mountedRequest, setBrowse, setStack, setThumbnails, setViewer);
     void api.home().then(applyHome).catch(() => setBrowse(current => ({ ...current, loading: false, error: "This collection could not be refreshed." })));
-  }, [api, applyHome]);
+  }, [api, applyHome, clearThumbnailLifecycle]);
 
   if (browse.loading && browse.items.length === 0) return <BrowseSkeleton />;
   if (browse.error && browse.items.length === 0) return <StatePanel title="Source temporarily unavailable" body={browse.error}><button className="primary-action" onClick={() => browse.parent ? loadFolder(browse.parent.handle, { expectedParentId: browse.parent.id, breadcrumbs: browse.breadcrumbs }) : loadHome()}>Retry</button></StatePanel>;
@@ -646,7 +687,7 @@ function scheduleBoundedAt(expiresAtEpoch: number, callback: () => void): () => 
   };
 }
 
-function clearScheduled(timers: Record<string, () => void>): void {
-  Object.keys(timers).forEach(key => timers[key]!());
+function clearScheduled(timers: Record<string, { identity: string; cancel: () => void }>): void {
+  Object.keys(timers).forEach(key => timers[key]!.cancel());
   Object.keys(timers).forEach(key => { delete timers[key]; });
 }

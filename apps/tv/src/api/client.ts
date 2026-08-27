@@ -1,6 +1,5 @@
 import type {
   ApiError,
-  ApiResult,
   ControlDeviceDto,
   ControlHouseholdDto,
   ControlRequestDto,
@@ -57,10 +56,14 @@ async function request<T>(path: string, decoder: Decoder<T>, init: RequestInit =
   }
   const payload = await safeJson(response);
   if (!response.ok) throw normalizeError(payload, response.status);
-  if (!isApiResult(payload) || !payload.ok) throw invalidResponse(response.status);
-  const decoded = decoder(payload.data);
-  if (decoded === null) throw invalidResponse(response.status);
-  return decoded;
+  try {
+    if (!exactRecord(payload, ["ok", "data"]) || payload.ok !== true) throw new Error("INVALID_RESPONSE");
+    const decoded = decoder(payload.data);
+    if (decoded === null) throw new Error("INVALID_RESPONSE");
+    return decoded;
+  } catch {
+    throw invalidResponse(response.status);
+  }
 }
 
 export const tvApi: TvApi = {
@@ -92,7 +95,7 @@ export const tvApi: TvApi = {
 function decodeBootstrap(value: unknown): TvBootstrapResponse | null {
   if (!exactRecord(value, ["enrollment"])) return null;
   const enrollment = value.enrollment;
-  if (!isRecord(enrollment) || typeof enrollment.state !== "string") return null;
+  if (!plainDataRecord(enrollment) || typeof enrollment.state !== "string") return null;
   if (["requests-disabled", "unenrolled", "denied", "expired", "revoked"].includes(enrollment.state)) {
     return exactRecord(enrollment, ["state"])
       ? { enrollment: { state: enrollment.state as "requests-disabled" | "unenrolled" | "denied" | "expired" | "revoked" } }
@@ -117,7 +120,7 @@ function decodeCreateRequest(value: unknown): { request: ControlRequestDto } | n
 }
 
 function decodeHome(value: unknown): TvHomeResponse | null {
-  if (!exactRecord(value, ["roots"]) || !boundedArray(value.roots, 32)) return null;
+  if (!exactRecord(value, ["roots"]) || !ordinaryArray(value.roots, 32)) return null;
   const roots: TvRootDto[] = [];
   for (const raw of value.roots) {
     const root = decodeRoot(raw);
@@ -128,7 +131,7 @@ function decodeHome(value: unknown): TvHomeResponse | null {
 }
 
 function decodeFolder(value: unknown): TvFolderPageResponse | null {
-  if (!exactRecord(value, ["parent", "children", "nextCursor"]) || !boundedArray(value.children, 100)) return null;
+  if (!exactRecord(value, ["parent", "children", "nextCursor"]) || !ordinaryArray(value.children, 100)) return null;
   const parent = decodeBrowseItem(value.parent);
   if (!parent || parent.kind !== "folder") return null;
   const children: TvBrowseItemDto[] = [];
@@ -142,7 +145,7 @@ function decodeFolder(value: unknown): TvFolderPageResponse | null {
 }
 
 function decodeThumbnails(value: unknown): { items: DirectThumbnailItem[] } | null {
-  if (!exactRecord(value, ["items"]) || !boundedArray(value.items, 100)) return null;
+  if (!exactRecord(value, ["items"]) || !ordinaryArray(value.items, 100)) return null;
   const items: DirectThumbnailItem[] = [];
   for (const raw of value.items) {
     const item = decodeThumbnail(raw);
@@ -165,7 +168,7 @@ function decodeMedia(value: unknown, expected?: { itemId: string; kind: "image" 
 }
 
 function decodeThumbnail(value: unknown): DirectThumbnailItem | null {
-  if (!isRecord(value) || !validItemId(value.itemId)) return null;
+  if (!plainDataRecord(value) || !validItemId(value.itemId)) return null;
   const itemId = value.itemId as string;
   if (value.status === "unavailable") {
     return exactRecord(value, ["itemId", "status"]) ? { itemId, status: "unavailable" } : null;
@@ -196,8 +199,8 @@ function decodeBrowseItem(value: unknown): TvBrowseItemDto | null {
   ])) return null;
   const id = validItemId(value.id);
   const handle = validOpaque(value.handle, 8192);
-  const name = visibleName(value.name);
-  const normalizedName = typeof value.normalizedName === "string" && value.normalizedName.length <= 240 ? value.normalizedName : null;
+  const name = providerName(value.name);
+  const normalizedName = providerNormalizedName(value.normalizedName);
   const kind = value.kind === "folder" || value.kind === "image" || value.kind === "video" ? value.kind : null;
   const mimeType = nullableString(value.mimeType, 256);
   const size = nullableNonNegative(value.size);
@@ -233,7 +236,7 @@ function decodeControlRequest(value: unknown): ControlRequestDto | null {
 
 function decodeControlDevice(value: unknown): ControlDeviceDto | null {
   if (!exactRecord(value, ["id", "name", "enabled", "assignedRootIds", "mediaOrder", "slideshowSeconds", "createdAt", "approvedAt", "revokedAt"])) return null;
-  if (!boundedArray(value.assignedRootIds, 32)) return null;
+  if (!ordinaryArray(value.assignedRootIds, 32)) return null;
   const assignedRootIds: string[] = [];
   for (const raw of value.assignedRootIds) {
     const id = validControlId(raw);
@@ -269,10 +272,6 @@ async function safeJson(response: Response): Promise<unknown> {
   }
 }
 
-function isApiResult(value: unknown): value is ApiResult<unknown> {
-  return Boolean(value && typeof value === "object" && "ok" in value && typeof (value as { ok?: unknown }).ok === "boolean");
-}
-
 function invalidResponse(status: number): TvApiError {
   return new TvApiError(status, "INVALID_RESPONSE", "The server returned an unexpected response.");
 }
@@ -285,18 +284,36 @@ function normalizeError(value: unknown, status: number): TvApiError {
   return new TvApiError(status, code, safeMessage(code), retryAfterSeconds);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function exactRecord(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
-  if (!isRecord(value)) return false;
-  const actual = Object.keys(value);
-  return actual.length === keys.length && actual.every(key => keys.indexOf(key) >= 0);
+  if (!plainDataRecord(value)) return false;
+  const actual = Reflect.ownKeys(value);
+  return actual.length === keys.length && actual.every(key => typeof key === "string" && keys.indexOf(key) >= 0);
 }
 
-function boundedArray(value: unknown, limit: number): value is unknown[] {
-  return Array.isArray(value) && value.length <= limit;
+function plainDataRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  const keys = Reflect.ownKeys(value);
+  for (const key of keys) {
+    if (typeof key !== "string") return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor) || descriptor.get !== undefined || descriptor.set !== undefined) return false;
+  }
+  return true;
+}
+
+function ordinaryArray(value: unknown, limit: number): value is unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > limit) return false;
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== value.length + 1 || keys[keys.length - 1] !== "length") return false;
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (!lengthDescriptor || lengthDescriptor.enumerable || !("value" in lengthDescriptor)) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor) || descriptor.get !== undefined || descriptor.set !== undefined) return false;
+  }
+  return true;
 }
 
 function validItemId(value: unknown): string | null {
@@ -313,6 +330,21 @@ function validOpaque(value: unknown, maxLength: number): string | null {
 
 function visibleName(value: unknown): string | null {
   return typeof value === "string" && value.length >= 1 && value.length <= 120 && value === value.trim() ? value : null;
+}
+
+function providerName(value: unknown): string | null {
+  return typeof value === "string" && value.length >= 1 && value.length <= 1024 && !hasC0Control(value) ? value : null;
+}
+
+function providerNormalizedName(value: unknown): string | null {
+  return typeof value === "string" && value.length >= 1 && value.length <= 2048 && !hasC0Control(value) ? value : null;
+}
+
+function hasC0Control(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    if (value.charCodeAt(index) <= 31) return true;
+  }
+  return false;
 }
 
 function mediaOrder(value: unknown): MediaOrder | null {

@@ -460,6 +460,72 @@ describe("unified TV viewer", () => {
     expect(renewed.currentTime).toBe(37);
   });
 
+  it("samples a prefetched video at fire time after it becomes active", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const api = viewerApi();
+    let videoCalls = 0;
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => {
+      const result = mediaResponse(handle);
+      if (result.kind === "video") videoCalls += 1;
+      return {
+        ...result,
+        url: result.kind === "video" ? `https://provider.example/prefetched-video-${videoCalls}` : result.url,
+        expiresAt: new Date(Date.now() + (result.kind === "video" && videoCalls === 1 ? 1_000 : 60_000)).toISOString()
+      };
+    });
+    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    for (let attempt = 0; attempt < 10 && vi.getTimerCount() < 2; attempt += 1) {
+      await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    }
+    expect(vi.getTimerCount()).toBeGreaterThanOrEqual(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(600); });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    const activeVideo = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(activeVideo, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(activeVideo, "currentTime", { configurable: true, value: 37 });
+    fireEvent.timeUpdate(activeVideo);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(401); await Promise.resolve(); });
+    const renewed = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(renewed, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(renewed, "currentTime", { configurable: true, writable: true, value: 0 });
+    fireEvent.loadedMetadata(renewed);
+
+    expect(renewed.src).toBe("https://provider.example/prefetched-video-2");
+    expect(renewed.currentTime).toBe(37);
+  });
+
+  it("replaces the old expiry timer when a new ready request expires sooner", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const api = viewerApi();
+    let activeCalls = 0;
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => {
+      const result = mediaResponse(handle);
+      if (handle !== "sealed-item_image_1") return { ...result, expiresAt: new Date(Date.now() + 60_000).toISOString() };
+      activeCalls += 1;
+      return {
+        ...result,
+        url: `https://provider.example/active-${activeCalls}`,
+        expiresAt: new Date(Date.now() + (activeCalls === 1 ? 60_000 : 1_000)).toISOString()
+      };
+    });
+    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const firstEntry = vi.mocked(api.mediaUrl).mock.calls.find(call => call[0] === "sealed-item_image_1")!;
+    fireEvent.error(screen.getByRole("img", { name: "First.jpg" }));
+    fireEvent.click(screen.getByRole("button", { name: "Try fresh URL" }));
+    await waitFor(() => expect(screen.getByRole("img", { name: "First.jpg" })).toHaveAttribute("src", "https://provider.example/active-2"));
+    expect(firstEntry[2]).toEqual({ itemId: "item_image_1", kind: "image" });
+    const timersBefore = vi.getTimerCount();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); await Promise.resolve(); });
+
+    expect(activeCalls).toBe(3);
+    expect(vi.getTimerCount()).toBeLessThanOrEqual(timersBefore);
+  });
+
   it("renews an expired adjacent URL and ignores later timers after close", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));

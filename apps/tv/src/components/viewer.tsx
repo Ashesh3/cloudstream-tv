@@ -50,7 +50,9 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
   const lastVideoElements = useRef<Record<string, HTMLVideoElement>>({});
   const inflightUrls = useRef<Record<string, { requestId: number; controller: AbortController }>>({});
   const startedUrlRequests = useRef<Record<string, boolean>>({});
-  const urlExpiryTimers = useRef<Record<string, () => void>>({});
+  const urlExpiryTimers = useRef<Record<string, { identity: string; cancel: () => void }>>({});
+  const activeRef = useRef({ id: active.id, kind: active.kind });
+  const urlsRef = useRef(state.urls);
   const latestResumeOverrides = useRef<Record<string, number>>({});
   const latestVideoPositions = useRef<Record<string, number>>({});
   const lastSavedSnapshots = useRef<Record<string, string>>({});
@@ -59,6 +61,8 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
   const unauthorized = useRef(false);
   const navigationExpired = useRef(false);
   const mounted = useRef(true);
+  activeRef.current = { id: active.id, kind: active.kind };
+  urlsRef.current = state.urls;
 
   const abortUrlRequests = useCallback(() => {
     Object.keys(inflightUrls.current).forEach(nodeId => inflightUrls.current[nodeId]!.controller.abort());
@@ -67,7 +71,7 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
   }, []);
 
   const clearUrlExpiryTimers = useCallback(() => {
-    Object.keys(urlExpiryTimers.current).forEach(nodeId => urlExpiryTimers.current[nodeId]!());
+    Object.keys(urlExpiryTimers.current).forEach(nodeId => urlExpiryTimers.current[nodeId]!.cancel());
     urlExpiryTimers.current = {};
   }, []);
 
@@ -187,30 +191,37 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
   }, [api, invalidateNavigation, itemHandles, items, propagateNavigationExpired, propagateUnauthorized, urlRequestKey]);
 
   useEffect(() => {
-    const wanted: Record<string, boolean> = {};
+    const wanted: Record<string, string> = {};
     Object.keys(state.urls).forEach(nodeId => {
       const entry = state.urls[nodeId]!;
       if (entry.status !== "ready" || entry.expiresAtEpoch === undefined) return;
-      wanted[nodeId] = true;
-      if (urlExpiryTimers.current[nodeId] !== undefined) return;
-      urlExpiryTimers.current[nodeId] = scheduleAt(entry.expiresAtEpoch, () => {
+      const identity = `${entry.requestId}:${entry.expiresAtEpoch}`;
+      wanted[nodeId] = identity;
+      const previous = urlExpiryTimers.current[nodeId];
+      if (previous?.identity === identity) return;
+      previous?.cancel();
+      const timer: { identity: string; cancel: () => void } = { identity, cancel: () => undefined };
+      timer.cancel = scheduleAt(entry.expiresAtEpoch, () => {
+        if (urlExpiryTimers.current[nodeId]?.identity !== identity) return;
         delete urlExpiryTimers.current[nodeId];
         if (unauthorized.current || navigationExpired.current || closed.current || !mounted.current) return;
-        const current = state.urls[nodeId];
+        const current = urlsRef.current[nodeId];
         if (!current || current.status !== "ready" || current.requestId !== entry.requestId || current.expiresAtEpoch !== entry.expiresAtEpoch) return;
-        const resumeSeconds = active.id === nodeId && active.kind === "video"
+        const currentActive = activeRef.current;
+        const resumeSeconds = currentActive.id === nodeId && currentActive.kind === "video"
           ? videoElementFor(nodeId)?.currentTime ?? latestVideoPositions.current[nodeId] ?? 0
           : 0;
         latestResumeOverrides.current[nodeId] = resumeSeconds;
         dispatch({ type: "url-expired", nodeId, requestId: entry.requestId, resumeSeconds });
       });
+      urlExpiryTimers.current[nodeId] = timer;
     });
     Object.keys(urlExpiryTimers.current).forEach(nodeId => {
-      if (wanted[nodeId]) return;
-      urlExpiryTimers.current[nodeId]!();
+      if (wanted[nodeId] === urlExpiryTimers.current[nodeId]!.identity) return;
+      urlExpiryTimers.current[nodeId]!.cancel();
       delete urlExpiryTimers.current[nodeId];
     });
-  }, [active.id, active.kind, state.urls]);
+  }, [state.urls]);
 
   useEffect(() => () => {
     mounted.current = false;
