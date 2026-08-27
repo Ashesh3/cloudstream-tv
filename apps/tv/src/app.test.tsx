@@ -4,7 +4,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TvApp } from "./app";
-import type { TvApi } from "./api/client";
+import { tvApi, type TvApi } from "./api/client";
 
 const api = (): TvApi => ({
   bootstrap: vi.fn(),
@@ -12,7 +12,7 @@ const api = (): TvApi => ({
   requestStatus: vi.fn(),
   home: vi.fn(),
   folder: vi.fn(),
-  thumbnailUrls: vi.fn(),
+  thumbnailUrls: vi.fn(async () => ({ items: [] })),
   mediaUrl: vi.fn()
 });
 
@@ -26,6 +26,7 @@ describe("TV enrollment and browse states", () => {
     window.localStorage.clear();
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("shows a remote-operable name form for an unenrolled TV", async () => {
@@ -100,9 +101,8 @@ describe("TV enrollment and browse states", () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
     vi.mocked(client.home).mockResolvedValue({ roots: [{
-      id: "root-1", sourceId: "source-1", displayName: "Family Photos", provider: "google",
-      accountLabel: "Home Drive", nodeId: "folder-1", folderCoverNodeIds: [], childFolderCount: 2, childMediaCount: 8,
-      readiness: "ready", readinessMessage: "Ready to screen"
+      id: "root-1", handle: "sealed-folder-1", displayName: "Family Photos", provider: "google",
+      accountLabel: "Home Drive"
     }] });
     render(<TvApp api={client} browserSupported />);
     expect(await screen.findByRole("heading", { name: "Family Photos" })).toBeVisible();
@@ -132,26 +132,13 @@ describe("TV enrollment and browse states", () => {
     expect(screen.getByRole("button", { name: "Manage sources" })).not.toHaveFocus();
   });
 
-  it("shows unavailable or indexing programs without pretending they are empty", async () => {
-    const client = api();
-    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
-    vi.mocked(client.home).mockResolvedValue({ roots: [{
-      ...rootCards[0]!,
-      nodeId: null,
-      folderCoverNodeIds: [],
-      childFolderCount: 0,
-      childMediaCount: 0,
-      readiness: "preparing",
-      readinessMessage: "Preparing this collection"
-    }] });
+  it("shows neutral root metadata without readiness, index, count, or mosaic copy", async () => {
+    const client = readyApiWithRoots();
     render(<TvApp api={client} browserSupported />);
-
-    const program = await screen.findByTestId("program-card");
-    expect(screen.getAllByText("Preparing this collection").length).toBeGreaterThan(0);
-    expect(screen.queryByText("This folder is empty")).not.toBeInTheDocument();
-    expect(screen.queryByText(/0 folders/i)).not.toBeInTheDocument();
-    fireEvent.click(program);
-    expect(client.folder).not.toHaveBeenCalled();
+    await screen.findAllByTestId("program-card");
+    expect(screen.getAllByText("Google Drive · Home")).toHaveLength(2);
+    expect(screen.queryByText(/ready to screen|preparing this collection|indexing|\d+ folders|\d+ media/i)).not.toBeInTheDocument();
+    expect(document.querySelector(".folder-mosaic")).not.toBeInTheDocument();
   });
 
   it("restores exact grid focus after the source drawer closes", async () => {
@@ -178,10 +165,27 @@ describe("TV enrollment and browse states", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Trips/ })).toHaveFocus());
   });
 
+  it("returns from a drawer-selected collection to the local household program", async () => {
+    const client = readyApiWithRoots();
+    vi.mocked(client.folder).mockResolvedValue(folderPage("folder-2", 0, 0, null, "Trips collection"));
+    render(<TvApp api={client} browserSupported />);
+    await screen.findByRole("grid");
+    fireEvent.keyDown(window, { keyCode: 457 });
+    const trips = screen.getAllByRole("button", { name: /Trips/ });
+    fireEvent.click(trips[trips.length - 1]!);
+    await screen.findByRole("heading", { name: "Trips collection" });
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(await screen.findByRole("heading", { name: "Trips" })).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("button", { name: /Trips/ })).toHaveFocus());
+    expect(client.home).toHaveBeenCalledTimes(1);
+  });
+
   it("loads missing pages once and focuses the same-column destination after append", async () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
-    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, handle: "sealed-folder-parent" }] });
     vi.mocked(client.folder)
       .mockResolvedValueOnce(folderPage("folder-parent", 0, 10, "page-2"))
       .mockResolvedValueOnce(folderPage("folder-parent", 10, 6, null));
@@ -196,16 +200,14 @@ describe("TV enrollment and browse states", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Node 12/ })).toHaveFocus());
   });
 
-  it("refetches every saved page before Back restores a later-page item", async () => {
+  it("restores accumulated pages and focus from the local stack without refetching ancestry", async () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
-    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, handle: "sealed-folder-parent" }] });
     vi.mocked(client.folder)
       .mockResolvedValueOnce(folderPage("folder-parent", 0, 10, "page-2"))
       .mockResolvedValueOnce(folderPage("folder-parent", 10, 6, null))
-      .mockResolvedValueOnce(folderPage("node-12", 0, 0, null, "Child"))
-      .mockResolvedValueOnce(folderPage("folder-parent", 0, 10, "page-2"))
-      .mockResolvedValueOnce(folderPage("folder-parent", 10, 6, null));
+      .mockResolvedValueOnce(folderPage("node-12", 0, 0, null, "Child"));
     render(<TvApp api={client} browserSupported />);
     fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
     const grid = await screen.findByRole("grid", { name: "Parent" });
@@ -217,33 +219,74 @@ describe("TV enrollment and browse states", () => {
     fireEvent.click(screen.getByRole("button", { name: /Node 12/ }));
     await screen.findByRole("heading", { name: "Child" });
     fireEvent.keyDown(window, { key: "Escape" });
-    await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(5));
+    await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(screen.getByRole("button", { name: /Node 12/ })).toHaveFocus());
   });
 
-  it("replays more than twenty saved pages before exact Back restoration", async () => {
+  it("deduplicates appended public IDs and re-sorts the accumulated folder entries", async () => {
     const client = api();
-    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
-    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
-    for (let page = 0; page < 22; page += 1) {
-      vi.mocked(client.folder).mockResolvedValueOnce(folderPage("folder-parent", page, 1, page < 21 ? `page-${page + 1}` : null, "Parent"));
-    }
-    vi.mocked(client.folder).mockResolvedValueOnce(folderPage("node-21", 0, 0, null, "Child"));
-    for (let page = 0; page < 22; page += 1) {
-      vi.mocked(client.folder).mockResolvedValueOnce(folderPage("folder-parent", page, 1, page < 21 ? `page-${page + 1}` : null, "Parent"));
-    }
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: { ...readyDevice, mediaOrder: "name-asc" }, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, handle: "sealed-folder-parent" }] });
+    vi.mocked(client.folder)
+      .mockResolvedValueOnce({
+        parent: node("folder-parent", "folder", "Parent"),
+        children: [node("item_z", "image", "Zulu"), node("item_b", "image", "Bravo")],
+        nextCursor: "page-2"
+      })
+      .mockResolvedValueOnce({
+        parent: node("folder-parent", "folder", "Parent"),
+        children: [node("item_b", "image", "Bravo duplicate"), node("item_a", "image", "Alpha")],
+        nextCursor: null
+      });
     render(<TvApp api={client} browserSupported />);
     fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
-    await screen.findByRole("grid", { name: "Parent" });
-    for (let page = 1; page < 22; page += 1) {
-      fireEvent.keyDown(screen.getByRole("grid", { name: "Parent" }), { key: "ArrowDown" });
-      await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(page + 1));
-    }
-    fireEvent.click(await screen.findByRole("button", { name: /Node 21/ }));
-    await screen.findByRole("heading", { name: "Child" });
-    fireEvent.keyDown(window, { key: "Escape" });
-    await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(45));
-    await waitFor(() => expect(screen.getByRole("button", { name: /Node 21/ })).toHaveFocus());
+    const grid = await screen.findByRole("grid", { name: "Parent" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(2));
+    const cards = screen.getAllByRole("button", { name: /image/ });
+    expect(cards.map(card => card.getAttribute("aria-label"))).toEqual(["Alpha, image", "Bravo duplicate, image", "Zulu, image"]);
+  });
+
+  it("refreshes home and clears local navigation when a folder handle expires", async () => {
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home)
+      .mockResolvedValueOnce({ roots: rootCards })
+      .mockResolvedValueOnce({ roots: [{ ...rootCards[1]!, displayName: "Fresh Trips" }] });
+    vi.mocked(client.folder).mockRejectedValue(Object.assign(new Error("Navigation has expired."), { code: "NAVIGATION_EXPIRED" }));
+
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+
+    expect(await screen.findByRole("heading", { name: "Fresh Trips" })).toBeVisible();
+    expect(client.home).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText("NAVIGATION_EXPIRED")).not.toBeInTheDocument();
+    const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    screen.getByRole("grid").dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("maps thumbnail results by public item ID and ignores unrelated responses", async () => {
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [rootCards[0]!] });
+    vi.mocked(client.folder).mockResolvedValue({
+      parent: node("folder-parent", "folder", "Parent"),
+      children: [browseItem("item_photo", "sealed-photo", "Photo", "image")],
+      nextCursor: null
+    });
+    vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [
+      { itemId: "item_other", status: "ready", url: "https://provider.example/wrong", expiresAt: "2026-08-28T01:00:00.000Z", revision: null },
+      { itemId: "item_photo", status: "ready", url: "https://provider.example/photo", expiresAt: "2026-08-28T01:00:00.000Z", revision: null }
+    ] });
+
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    await waitFor(() => expect(document.querySelector(".media-preview img")).toBeInTheDocument());
+    const image = document.querySelector<HTMLImageElement>(".media-preview img")!;
+    expect(image.src).toBe("https://provider.example/photo");
+    expect(client.thumbnailUrls).toHaveBeenCalledWith(["sealed-photo"], expect.any(AbortSignal));
+    expect(document.body.innerHTML).not.toContain("https://provider.example/wrong");
   });
 
   it("shows no-roots, empty-folder and offline retry states", async () => {
@@ -265,14 +308,14 @@ describe("TV enrollment and browse states", () => {
   it("opens media in the loaded-folder viewer and restores the exact grid item after Back", async () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
-    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, handle: "sealed-folder-parent" }] });
     vi.mocked(client.folder).mockResolvedValue({
-      parent: node("folder-parent", "folder", "Parent"), breadcrumbs: [],
+      parent: node("folder-parent", "folder", "Parent"),
       children: [node("image-1", "image", "First"), node("folder-2", "folder", "Nested"), node("image-2", "image", "Second")],
       nextCursor: null
     });
     vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
-    vi.mocked(client.mediaUrl).mockImplementation(async nodeId => ({ url: `https://provider.example/${nodeId}`, expiresAt: "2026-08-26T01:00:00.000Z", revision: "r1" }));
+    vi.mocked(client.mediaUrl).mockImplementation(async handle => mediaResponse(handle));
     render(<TvApp api={client} browserSupported />);
     fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
     const grid = await screen.findByRole("grid", { name: "Parent" });
@@ -294,13 +337,13 @@ describe("TV enrollment and browse states", () => {
     }));
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
-    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, handle: "sealed-folder-parent" }] });
     vi.mocked(client.folder).mockResolvedValue({
-      parent: node("folder-parent", "folder", "Parent"), breadcrumbs: [],
+      parent: node("folder-parent", "folder", "Parent"),
       children: [videoNode("item_video_1", "Lake")], nextCursor: null
     });
     vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
-    vi.mocked(client.mediaUrl).mockResolvedValue({ url: "https://provider.example/item_video_1", expiresAt: "2026-08-26T01:00:00.000Z", revision: "r1" });
+    vi.mocked(client.mediaUrl).mockResolvedValue({ itemId: "item_video_1", kind: "video", url: "https://provider.example/item_video_1", expiresAt: "2026-08-26T01:00:00.000Z", revision: "r1" });
 
     render(<TvApp api={client} browserSupported />);
     fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
@@ -321,9 +364,9 @@ describe("TV enrollment and browse states", () => {
     }));
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: { ...readyDevice, id: "device-2" }, household } });
-    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, handle: "sealed-folder-parent" }] });
     vi.mocked(client.folder).mockResolvedValue({
-      parent: node("folder-parent", "folder", "Parent"), breadcrumbs: [],
+      parent: node("folder-parent", "folder", "Parent"),
       children: [videoNode("item_video_1", "Lake")], nextCursor: null
     });
     vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
@@ -347,9 +390,9 @@ describe("TV enrollment and browse states", () => {
     vi.mocked(client.bootstrap)
       .mockResolvedValueOnce({ enrollment: { state: "ready", device: readyDevice, household } })
       .mockResolvedValueOnce({ enrollment: { state: "revoked" } });
-    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, nodeId: "folder-parent" }] });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, handle: "sealed-folder-parent" }] });
     vi.mocked(client.folder).mockResolvedValue({
-      parent: node("folder-parent", "folder", "Parent"), breadcrumbs: [],
+      parent: node("folder-parent", "folder", "Parent"),
       children: [node("image-1", "image", "First")], nextCursor: null
     });
     vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
@@ -362,20 +405,66 @@ describe("TV enrollment and browse states", () => {
   });
 });
 
+describe("TV API live browse contract", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends only sealed handles and sealed cursors to TV browse and media routes", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(apiResponse({
+        parent: browseItem("item_folder", "sealed-parent", "Folder", "folder"),
+        children: [],
+        nextCursor: null
+      }))
+      .mockResolvedValueOnce(apiResponse({ items: [] }))
+      .mockResolvedValueOnce(apiResponse({
+        itemId: "item_video",
+        kind: "video",
+        url: "https://provider.example/video",
+        expiresAt: "2026-08-28T01:00:00.000Z",
+        revision: "r1"
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+
+    await tvApi.folder("sealed/folder", "sealed cursor");
+    await tvApi.thumbnailUrls(["sealed-image"], controller.signal);
+    await tvApi.mediaUrl("sealed-video", controller.signal);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/tv/folders/sealed%2Ffolder?cursor=sealed%20cursor", expect.objectContaining({ credentials: "include" }));
+    expect(JSON.parse(fetchMock.mock.calls[1]![1]!.body as string)).toEqual({ handles: ["sealed-image"], maxDimension: 720 });
+    expect(JSON.parse(fetchMock.mock.calls[2]![1]!.body as string)).toEqual({ handle: "sealed-video" });
+  });
+
+  it("preserves bounded raw server error codes while replacing internal messages", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      code: "NAVIGATION_EXPIRED",
+      message: "secret internal navigation detail",
+      retryAfterSeconds: 5
+    }), { status: 404, headers: { "content-type": "application/json" } })));
+
+    await expect(tvApi.folder("sealed-folder")).rejects.toMatchObject({
+      status: 404,
+      code: "NAVIGATION_EXPIRED",
+      message: "This collection needs to be refreshed.",
+      retryAfterSeconds: 5
+    });
+  });
+});
+
 const readyDevice = {
   id: "device-1", name: "Living room", enabled: true, assignedRootIds: ["root-1"], mediaOrder: null,
   slideshowSeconds: null, createdAt: "2026-08-26T00:00:00.000Z", approvedAt: "2026-08-26T00:00:00.000Z",
-  lastSeenAt: "2026-08-26T00:00:00.000Z", revokedAt: null
+  revokedAt: null
 };
 
 const household = {
-  id: "household-primary", createdAt: "2026-08-26T00:00:00.000Z", allowNewDeviceRequests: true,
+  allowNewDeviceRequests: true,
   defaultMediaOrder: "captured-desc" as const, defaultSlideshowSeconds: 8
 };
 
 const rootCards = [
-  { id: "root-1", sourceId: "source-1", displayName: "Family", provider: "google" as const, accountLabel: "Home", nodeId: "folder-1", folderCoverNodeIds: [], childFolderCount: 2, childMediaCount: 8, readiness: "ready" as const, readinessMessage: "Ready to screen" },
-  { id: "root-2", sourceId: "source-2", displayName: "Trips", provider: "onedrive" as const, accountLabel: "Cloud", nodeId: "folder-2", folderCoverNodeIds: [], childFolderCount: 1, childMediaCount: 5, readiness: "ready" as const, readinessMessage: "Ready to screen" }
+  { id: "root-1", handle: "sealed-folder-1", displayName: "Family", provider: "google" as const, accountLabel: "Home" },
+  { id: "root-2", handle: "sealed-folder-2", displayName: "Trips", provider: "onedrive" as const, accountLabel: "Cloud" }
 ];
 
 function readyApiWithRoots() {
@@ -388,16 +477,43 @@ function readyApiWithRoots() {
 
 function folderPage(parentId: string, start: number, count: number, nextCursor: string | null, parentName = "Parent") {
   return {
-    parent: node(parentId, "folder", parentName), breadcrumbs: [],
+    parent: node(parentId, "folder", parentName),
     children: Array.from({ length: count }, (_, offset) => node(`node-${start + offset}`, start + offset === 12 || start + offset === 21 ? "folder" : "image", `Node ${start + offset}`)),
     nextCursor
   };
 }
 
 function node(id: string, kind: "folder" | "image", name: string) {
-  return { id, sourceId: "source-1", provider: "google" as const, parentNodeId: null, name, normalizedName: name.toLowerCase(), kind, mimeType: kind === "image" ? "image/jpeg" : null, size: null, width: null, height: null, capturedAt: null, createdAtProvider: null, modifiedAtProvider: null, thumbnailRevision: null, hasPreview: false, folderCoverNodeIds: [], childFolderCount: 0, childMediaCount: 0, available: true };
+  return browseItem(id, `sealed-${id}`, name, kind);
 }
 
 function videoNode(id: string, name: string) {
   return { ...node(id, "image", name), kind: "video" as const, mimeType: "video/mp4" };
+}
+
+function browseItem(id: string, handle: string, name: string, kind: "folder" | "image" | "video") {
+  return {
+    id, handle, name, normalizedName: name.toLowerCase(), kind,
+    mimeType: kind === "folder" ? null : kind === "video" ? "video/mp4" : "image/jpeg",
+    size: null, width: null, height: null, capturedAt: null, createdAtProvider: null,
+    modifiedAtProvider: null, thumbnailRevision: null, hasPreview: kind !== "folder"
+  };
+}
+
+function apiResponse(data: unknown) {
+  return new Response(JSON.stringify({ ok: true, data }), {
+    status: 200,
+    headers: { "content-type": "application/json" }
+  });
+}
+
+function mediaResponse(handle: string) {
+  const itemId = handle.replace(/^sealed-/, "");
+  return {
+    itemId,
+    kind: itemId.indexOf("video") >= 0 ? "video" as const : "image" as const,
+    url: `https://provider.example/${itemId}`,
+    expiresAt: "2026-08-26T01:00:00.000Z",
+    revision: "r1"
+  };
 }

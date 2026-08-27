@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MediaNodeDto } from "@cloudframe/shared";
+import type { DirectMediaUrlResponse, TvBrowseItemDto } from "@cloudframe/shared";
 import type { TvApi } from "../api/client";
 import { createLocalWatchHistory, type LocalWatchHistory } from "../state/local-watch-history";
 import { Viewer } from "./viewer";
@@ -93,12 +93,12 @@ describe("unified TV viewer", () => {
   it("automatically retries one URL-vending authorization failure and then stops", async () => {
     const api = viewerApi();
     let selectedAttempts = 0;
-    vi.mocked(api.mediaUrl).mockImplementation(async nodeId => {
-      if (nodeId === "item_image_1") {
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => {
+      if (handle === "sealed-item_image_1") {
         selectedAttempts += 1;
         if (selectedAttempts < 2) throw Object.assign(new Error("expired"), { code: "PROVIDER_UNAUTHORIZED" });
       }
-      return { url: `https://provider.example/${nodeId}`, expiresAt: "2026-08-26T01:00:00.000Z", revision: "revision-1" };
+      return mediaResponse(handle);
     });
     render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     expect(await screen.findByRole("img", { name: "First.jpg" })).toHaveAttribute("src", "https://provider.example/item_image_1");
@@ -106,12 +106,12 @@ describe("unified TV viewer", () => {
 
     cleanup();
     selectedAttempts = 0;
-    vi.mocked(api.mediaUrl).mockImplementation(async nodeId => {
-      if (nodeId === "item_image_1") {
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => {
+      if (handle === "sealed-item_image_1") {
         selectedAttempts += 1;
         throw Object.assign(new Error("expired"), { code: "PROVIDER_UNAUTHORIZED" });
       }
-      return { url: `https://provider.example/${nodeId}`, expiresAt: "2026-08-26T01:00:00.000Z", revision: "revision-1" };
+      return mediaResponse(handle);
     });
     render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     expect(await screen.findByText("A fresh link did not solve this media error.")).toBeVisible();
@@ -297,7 +297,7 @@ describe("unified TV viewer", () => {
     render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     expect(video.src).toBe("https://provider.example/item_video_1");
-    expect(api.mediaUrl).toHaveBeenCalledWith("item_video_1", expect.any(AbortSignal));
+    expect(api.mediaUrl).toHaveBeenCalledWith("sealed-item_video_1", expect.any(AbortSignal));
   });
 
   it("prefetches at most one adjacent image on each side", async () => {
@@ -346,20 +346,20 @@ describe("unified TV viewer", () => {
 
   it("ignores stale URL completions after navigation cancels an obsolete request", async () => {
     const api = viewerApi();
-    let resolveFirst: ((value: { url: string; expiresAt: string; revision: string | null }) => void) | null = null;
-    vi.mocked(api.mediaUrl).mockImplementation((nodeId, signal) => {
-      if (nodeId === "item_image_1") return new Promise(resolve => {
+    let resolveFirst: ((value: DirectMediaUrlResponse) => void) | null = null;
+    vi.mocked(api.mediaUrl).mockImplementation((handle, signal) => {
+      if (handle === "sealed-item_image_1") return new Promise(resolve => {
         resolveFirst = resolve;
         signal?.addEventListener("abort", () => undefined);
       });
-      return Promise.resolve({ url: `https://provider.example/${nodeId}`, expiresAt: "2026-08-26T01:00:00.000Z", revision: "revision-1" });
+      return Promise.resolve(mediaResponse(handle));
     });
     render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await act(async () => { await Promise.resolve(); });
     fireEvent.keyDown(window, { key: "ArrowRight" });
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(await screen.findByRole("img", { name: "Last.jpg" })).toBeVisible();
-    await act(async () => { resolveFirst?.({ url: "https://provider.example/stale", expiresAt: "2026-08-26T01:00:00.000Z", revision: "revision-1" }); });
+    await act(async () => { resolveFirst?.({ itemId: "item_image_1", kind: "image", url: "https://provider.example/stale", expiresAt: "2026-08-26T01:00:00.000Z", revision: "revision-1" }); });
     expect(screen.getByRole("img", { name: "Last.jpg" })).toHaveAttribute("src", "https://provider.example/item_image_2");
     expect(screen.queryByDisplayValue("https://provider.example/stale")).not.toBeInTheDocument();
   });
@@ -400,21 +400,31 @@ describe("unified TV viewer", () => {
     expect(closed).not.toHaveBeenCalled();
   });
 
+  it("requests fresh navigation once when a media handle expires", async () => {
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockRejectedValue(Object.assign(new Error("Navigation has expired."), { code: "NAVIGATION_EXPIRED" }));
+    const expired = vi.fn();
+    const closed = vi.fn();
+    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} onNavigationExpired={expired} />);
+    await waitFor(() => expect(expired).toHaveBeenCalledTimes(1));
+    expect(closed).not.toHaveBeenCalled();
+    expect(screen.queryByText("NAVIGATION_EXPIRED")).not.toBeInTheDocument();
+  });
+
 });
 
-const items: MediaNodeDto[] = [
+const items: TvBrowseItemDto[] = [
   media("item_image_1", "image", "First.jpg", "image/jpeg"),
   media("item_video_1", "video", "Clip.mp4", "video/mp4"),
   media("item_image_2", "image", "Last.jpg", "image/jpeg")
 ];
 
-function media(id: string, kind: "image" | "video", name: string, mimeType: string): MediaNodeDto {
+function media(id: string, kind: "image" | "video", name: string, mimeType: string): TvBrowseItemDto {
   return {
-    id, sourceId: "source-1", provider: "google", parentNodeId: "folder-1", name,
+    id, handle: `sealed-${id}`, name,
     normalizedName: name.toLowerCase(), kind, mimeType, size: 1_000, width: kind === "image" ? 1920 : 1280,
     height: kind === "image" ? 1080 : 720, capturedAt: "2026-08-01T00:00:00.000Z",
-    createdAtProvider: null, modifiedAtProvider: null, thumbnailRevision: "revision-1", hasPreview: true,
-    folderCoverNodeIds: [], childFolderCount: 0, childMediaCount: 0, available: true
+    createdAtProvider: null, modifiedAtProvider: null, thumbnailRevision: "revision-1", hasPreview: true
   };
 }
 
@@ -422,7 +432,20 @@ function viewerApi(): TvApi {
   return {
     bootstrap: vi.fn(), createDeviceRequest: vi.fn(), requestStatus: vi.fn(), home: vi.fn(), folder: vi.fn(),
     thumbnailUrls: vi.fn(),
-    mediaUrl: vi.fn(async nodeId => ({ url: `https://provider.example/${nodeId}`, expiresAt: "2026-08-26T01:00:00.000Z", revision: "revision-1" }))
+    mediaUrl: vi.fn(async handle => mediaResponse(handle))
+  };
+}
+
+function mediaResponse(handle: string): DirectMediaUrlResponse {
+  const id = handle.replace(/^sealed-/, "");
+  const item = items.find(candidate => candidate.id === id);
+  const kind = item && item.kind !== "folder" ? item.kind : id.indexOf("video") >= 0 ? "video" : "image";
+  return {
+    itemId: id,
+    kind,
+    url: `https://provider.example/${id}`,
+    expiresAt: "2026-08-26T01:00:00.000Z",
+    revision: "revision-1"
   };
 }
 

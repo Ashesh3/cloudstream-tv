@@ -10,7 +10,8 @@ interface MediaCardProps {
 }
 
 export function MediaCard({ name, kind, thumbnailUrl, focused, resumeProgress = 0, onSelect }: MediaCardProps) {
-  const [failed, setFailed] = useState(false);
+  const [failedUrl, setFailedUrl] = useState<string | undefined>();
+  const unavailable = !thumbnailUrl || failedUrl === thumbnailUrl;
   const percent = Math.round(Math.max(0, Math.min(1, resumeProgress)) * 100);
   return (
     <button
@@ -20,9 +21,9 @@ export function MediaCard({ name, kind, thumbnailUrl, focused, resumeProgress = 
       onClick={onSelect}
       tabIndex={focused ? 0 : -1}
     >
-      <span className="card-visual media-preview" data-preview={failed || !thumbnailUrl ? "unavailable" : "ready"}>
-        {thumbnailUrl && <img src={thumbnailUrl} alt="" onError={() => setFailed(true)} />}
-        {!thumbnailUrl || failed ? <span className="media-stock"><i />{kind === "video" ? "Motion" : "Still"}</span> : null}
+      <span className="card-visual media-preview" data-preview={unavailable ? "unavailable" : "ready"}>
+        {thumbnailUrl && failedUrl !== thumbnailUrl && <img src={thumbnailUrl} alt="" referrerPolicy="no-referrer" onError={() => setFailedUrl(thumbnailUrl)} />}
+        {unavailable ? <span className="media-stock"><i />{kind === "video" ? "Motion" : "Still"}</span> : null}
         {kind === "video" && <span className="video-badge">Video</span>}
         {kind === "video" && percent > 0 && (
           <span className="resume-track" role="progressbar" aria-label="Watched" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>

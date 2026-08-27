@@ -1,8 +1,11 @@
-import type { MediaNodeDto } from "@cloudframe/shared";
+export interface TvBreadcrumb {
+  id: string;
+  name: string;
+}
 
 export function TvHeader({ title, breadcrumbs, onHome, onSources }: {
   title: string;
-  breadcrumbs?: MediaNodeDto[];
+  breadcrumbs?: TvBreadcrumb[];
   onHome: () => void;
   onSources: () => void;
 }) {

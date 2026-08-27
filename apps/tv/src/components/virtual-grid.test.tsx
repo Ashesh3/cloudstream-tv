@@ -104,29 +104,13 @@ describe("virtualized TV grid", () => {
   });
 });
 
-describe("folder mosaics and media cards", () => {
-  it.each([
-    [3, "three"],
-    [2, "two"],
-    [1, "one"],
-    [0, "zero"]
-  ] as const)("uses the %s-preview mosaic without repeating images", (count, variant) => {
-    const thumbnails = Array.from({ length: count }, (_, index) => ({
-      nodeId: `cover-${index}`,
-      url: `https://images.invalid/${index}.jpg`
-    }));
-    render(<FolderCard name={`Folder ${count}`} thumbnails={thumbnails} focused={false} />);
-    const card = screen.getByRole("button", { name: new RegExp(`Folder ${count}`) });
-    expect(card).toHaveAttribute("data-mosaic", variant);
-    expect(card.querySelector(".folder-mosaic")).toHaveAttribute("data-mosaic", variant);
-    expect(card.querySelectorAll("img")).toHaveLength(count);
-  });
-
-  it("keeps a broken cover pane and marks it unavailable", () => {
-    render(<FolderCard name="Trips" thumbnails={[{ nodeId: "cover", url: "broken" }]} focused={false} />);
-    const image = document.querySelector("img")!;
-    fireEvent.error(image);
-    expect(image.parentElement).toHaveAttribute("data-preview", "unavailable");
+describe("folder artwork and media cards", () => {
+  it("uses stable static collection artwork without preview mosaics", () => {
+    render(<FolderCard name="Trips" focused={false} />);
+    const card = screen.getByRole("button", { name: /Trips/ });
+    expect(card.querySelector(".folder-art")).toBeInTheDocument();
+    expect(card.querySelector(".folder-mosaic")).not.toBeInTheDocument();
+    expect(card.querySelectorAll("img")).toHaveLength(0);
   });
 
   it("shows video identity and resume progress without hover", () => {
@@ -141,5 +125,16 @@ describe("folder mosaics and media cards", () => {
     );
     expect(screen.getByText("Video")).toBeVisible();
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "35");
+  });
+
+  it("uses no-referrer thumbnails and recovers when a fresh URL replaces a failed one", () => {
+    const view = render(<MediaCard name="Lake" kind="image" thumbnailUrl="https://provider.example/old" focused={false} />);
+    const oldImage = document.querySelector("img")!;
+    expect(oldImage).toHaveAttribute("referrerpolicy", "no-referrer");
+    fireEvent.error(oldImage);
+    expect(document.querySelector("img")).not.toBeInTheDocument();
+
+    view.rerender(<MediaCard name="Lake" kind="image" thumbnailUrl="https://provider.example/fresh" focused={false} />);
+    expect(document.querySelector("img")).toHaveAttribute("src", "https://provider.example/fresh");
   });
 });
