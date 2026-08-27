@@ -1,4 +1,5 @@
 import { getCache, type RuntimeCache } from "@vercel/functions";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 
 import type {
@@ -14,6 +15,24 @@ export interface VercelRuntimeControlCacheOptions {
 }
 
 type MirrorStatus = Awaited<ReturnType<ControlHotCache["getMirrorStatus"]>>;
+
+export class ControlCacheOperationError extends Error {
+  readonly code = "CONTROL_CACHE_OPERATION_FAILED";
+
+  constructor() {
+    super("CONTROL_CACHE_OPERATION_FAILED");
+    this.name = "ControlCacheOperationError";
+  }
+}
+
+export class ControlCacheCorruptError extends Error {
+  readonly code = "CONTROL_CACHE_CORRUPT";
+
+  constructor() {
+    super("CONTROL_CACHE_CORRUPT");
+    this.name = "ControlCacheCorruptError";
+  }
+}
 
 const envelopeSchema = z
   .object({
@@ -51,6 +70,32 @@ function isMirrorStatus(value: unknown): value is MirrorStatus {
   );
 }
 
+function cacheOperationFailed(): ControlCacheOperationError {
+  return new ControlCacheOperationError();
+}
+
+async function verifiedSet(
+  runtime: RuntimeCache,
+  key: string,
+  value: unknown,
+  options: { tags: string[]; ttl: number }
+): Promise<void> {
+  try {
+    await runtime.set(key, value, options);
+  } catch {
+    // Runtime Cache can fail after accepting a write, so verification decides.
+  }
+  let verified: unknown;
+  try {
+    verified = await runtime.get(key);
+  } catch {
+    throw cacheOperationFailed();
+  }
+  if (!isDeepStrictEqual(verified, value)) {
+    throw cacheOperationFailed();
+  }
+}
+
 export function createVercelRuntimeControlCache(
   options: VercelRuntimeControlCacheOptions
 ): ControlHotCache {
@@ -67,21 +112,34 @@ export function createVercelRuntimeControlCache(
         return null;
       }
       if (!isStoredControlEnvelope(value)) {
-        await runtime.delete(controlKey);
-        return null;
+        throw new ControlCacheCorruptError();
       }
       return structuredClone(value);
     },
 
     async set(value, ttlSeconds) {
-      await runtime.set(controlKey, structuredClone(value), {
+      const stored = structuredClone(value);
+      await verifiedSet(runtime, controlKey, stored, {
         tags: [tag],
         ttl: ttlSeconds
       });
     },
 
     async delete() {
-      await runtime.delete(controlKey);
+      try {
+        await runtime.delete(controlKey);
+      } catch {
+        // Runtime Cache delete errors are verified through the subsequent read.
+      }
+      let verified: unknown;
+      try {
+        verified = await runtime.get(controlKey);
+      } catch {
+        throw cacheOperationFailed();
+      }
+      if (verified !== null) {
+        throw cacheOperationFailed();
+      }
     },
 
     async getMirrorStatus() {
@@ -92,7 +150,8 @@ export function createVercelRuntimeControlCache(
     },
 
     async setMirrorStatus(value) {
-      await runtime.set(statusKey, structuredClone(value), cacheOptions);
+      const stored = structuredClone(value);
+      await verifiedSet(runtime, statusKey, stored, cacheOptions);
     }
   };
 }

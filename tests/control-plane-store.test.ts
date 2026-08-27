@@ -84,6 +84,19 @@ describe("control-plane store", () => {
     expect(harness.cache.deleteCount).toBe(1);
   });
 
+  it("does not retry a corrupt fresh Blob body", async () => {
+    const harness = controlStoreHarness(testControlDocument());
+    harness.durable.replaceOutOfBand(testDocumentAtRevision(2));
+    harness.durable.corruptOutOfBand();
+
+    await expect(harness.store.load()).rejects.toMatchObject({
+      code: "CONTROL_PLANE_UNAVAILABLE"
+    });
+
+    expect(harness.durable.ifNoneMatches).toEqual(["etag-1"]);
+    expect(harness.cache.deleteCount).toBe(0);
+  });
+
   it("fails closed when the authoritative Blob snapshot is absent or corrupt", async () => {
     const missing = controlStoreHarness(testControlDocument());
     await missing.cache.delete();
@@ -196,6 +209,61 @@ describe("control-plane store", () => {
     expect(result).toBe("unchanged");
     expect(harness.durable.writeAttempts).toBe(0);
     expect(harness.cache.setCount).toBe(0);
+    expect(harness.mirror.writeCount).toBe(0);
+  });
+
+  it("does not populate or delete cache for an unchanged cold mutation", async () => {
+    const harness = controlStoreHarness(testControlDocument());
+    await harness.cache.delete();
+    const deletesBefore = harness.cache.deleteCount;
+
+    const result = await harness.store.mutate("settings", current => ({
+      changed: false,
+      next: current,
+      result: "unchanged"
+    }));
+
+    expect(result).toBe("unchanged");
+    expect(harness.durable.readCount).toBe(1);
+    expect(harness.cache.setCount).toBe(0);
+    expect(harness.cache.deleteCount).toBe(deletesBefore);
+    expect(harness.mirror.writeCount).toBe(0);
+  });
+
+  it("does not replace stale cache for an unchanged mutation", async () => {
+    const harness = controlStoreHarness(testControlDocument());
+    harness.durable.replaceOutOfBand(testDocumentAtRevision(2));
+
+    const result = await harness.store.mutate("settings", current => ({
+      changed: false,
+      next: current,
+      result: current.revision
+    }));
+
+    expect(result).toBe(2);
+    expect(harness.cache.currentRevision).toBe(1);
+    expect(harness.cache.setCount).toBe(0);
+    expect(harness.cache.deleteCount).toBe(0);
+    expect(harness.mirror.writeCount).toBe(0);
+  });
+
+  it("does not delete corrupt cache for an unchanged mutation after a fresh validation read", async () => {
+    const harness = controlStoreHarness(testControlDocument());
+    harness.cache.replaceOutOfBand({
+      envelope: { broken: "ciphertext" },
+      etag: harness.cache.currentEtag
+    });
+
+    const result = await harness.store.mutate("settings", current => ({
+      changed: false,
+      next: current,
+      result: current.revision
+    }));
+
+    expect(result).toBe(1);
+    expect(harness.durable.ifNoneMatches).toEqual([harness.durable.currentEtag, undefined]);
+    expect(harness.cache.setCount).toBe(0);
+    expect(harness.cache.deleteCount).toBe(0);
     expect(harness.mirror.writeCount).toBe(0);
   });
 
@@ -367,7 +435,55 @@ describe("Vercel control-plane adapters", () => {
     expect(loaded).toEqual({ envelope, etag: "etag-1" });
   });
 
-  it("deletes an invalid Runtime Cache value instead of repeatedly treating it as a miss", async () => {
+  it("detects a swallowed Runtime Cache control write", async () => {
+    const runtime = {
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+      expireTag: vi.fn(async () => undefined)
+    };
+    runtimeCacheSdk.getCache.mockReturnValue(runtime);
+    const cache = createVercelRuntimeControlCache({ environment: "preview", householdId: "h1" });
+    const envelope = encryptControlPlaneDocument(testControlDocument(), testAeadKeyring());
+
+    await expect(cache.set({ envelope, etag: "etag-1" }, 300)).rejects.toMatchObject({
+      code: "CONTROL_CACHE_OPERATION_FAILED"
+    });
+  });
+
+  it("detects a swallowed Runtime Cache mirror-status write", async () => {
+    const runtime = {
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+      expireTag: vi.fn(async () => undefined)
+    };
+    runtimeCacheSdk.getCache.mockReturnValue(runtime);
+    const cache = createVercelRuntimeControlCache({ environment: "preview", householdId: "h1" });
+
+    await expect(cache.setMirrorStatus({ status: "delayed", revision: 2 })).rejects.toMatchObject({
+      code: "CONTROL_CACHE_OPERATION_FAILED"
+    });
+  });
+
+  it("detects a swallowed Runtime Cache delete", async () => {
+    const envelope = encryptControlPlaneDocument(testControlDocument(), testAeadKeyring());
+    const stored = { envelope, etag: "etag-1" };
+    const runtime = {
+      get: vi.fn(async () => stored),
+      set: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+      expireTag: vi.fn(async () => undefined)
+    };
+    runtimeCacheSdk.getCache.mockReturnValue(runtime);
+    const cache = createVercelRuntimeControlCache({ environment: "preview", householdId: "h1" });
+
+    await expect(cache.delete()).rejects.toMatchObject({
+      code: "CONTROL_CACHE_OPERATION_FAILED"
+    });
+  });
+
+  it("reports an invalid Runtime Cache value without deleting it inside get", async () => {
     const envelope = encryptControlPlaneDocument(testControlDocument(), testAeadKeyring());
     const runtime = {
       get: vi.fn(async () => ({ envelope, etag: "etag-1", cleartext: testControlDocument() })),
@@ -378,9 +494,9 @@ describe("Vercel control-plane adapters", () => {
     runtimeCacheSdk.getCache.mockReturnValue(runtime);
     const cache = createVercelRuntimeControlCache({ environment: "preview", householdId: "h1" });
 
-    await expect(cache.get()).resolves.toBeNull();
+    await expect(cache.get()).rejects.toMatchObject({ code: "CONTROL_CACHE_CORRUPT" });
 
-    expect(runtime.delete).toHaveBeenCalledWith("v2:preview:h1");
+    expect(runtime.delete).not.toHaveBeenCalled();
   });
 
   it("does not retain references in the memory cache", async () => {

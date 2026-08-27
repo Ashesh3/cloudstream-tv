@@ -100,6 +100,15 @@ function isConflict(error: unknown): boolean {
   );
 }
 
+function isCorruptCache(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "CONTROL_CACHE_CORRUPT"
+  );
+}
+
 function isNotModified(
   value: StoredControlEnvelope | { notModified: true } | null
 ): value is { notModified: true } {
@@ -144,7 +153,9 @@ export function createControlPlaneStore(
     };
   }
 
-  async function loadFresh(): Promise<LoadedControlPlaneSnapshot> {
+  async function loadFresh(
+    maintainCache: boolean
+  ): Promise<LoadedControlPlaneSnapshot> {
     let stored: StoredControlEnvelope | { notModified: true } | null;
     try {
       stored = await durable.read();
@@ -162,20 +173,27 @@ export function createControlPlaneStore(
     } catch {
       throw unavailable();
     }
-    await replaceCacheBestEffort(cache, stored);
+    if (maintainCache) {
+      await replaceCacheBestEffort(cache, stored);
+    }
     return snapshot;
   }
 
-  async function load(): Promise<LoadedControlPlaneSnapshot> {
+  async function loadSnapshot(
+    maintainCache: boolean
+  ): Promise<LoadedControlPlaneSnapshot> {
     let cached: StoredControlEnvelope | null = null;
     try {
       cached = await cache.get();
-    } catch {
+    } catch (error) {
+      if (maintainCache && isCorruptCache(error)) {
+        await deleteCacheBestEffort(cache);
+      }
       cached = null;
     }
 
     if (cached === null) {
-      return loadFresh();
+      return loadFresh(maintainCache);
     }
 
     let durableResult: StoredControlEnvelope | { notModified: true } | null;
@@ -185,21 +203,35 @@ export function createControlPlaneStore(
       throw unavailable();
     }
 
-    const selected = isNotModified(durableResult) ? cached : durableResult;
-    if (selected === null) {
+    if (durableResult === null) {
       throw unavailable();
     }
 
-    try {
-      const snapshot = open(selected);
-      if (!isNotModified(durableResult)) {
-        await replaceCacheBestEffort(cache, selected);
+    if (isNotModified(durableResult)) {
+      try {
+        return open(cached);
+      } catch {
+        if (maintainCache) {
+          await deleteCacheBestEffort(cache);
+        }
+        return loadFresh(maintainCache);
       }
-      return snapshot;
-    } catch {
-      await deleteCacheBestEffort(cache);
-      return loadFresh();
     }
+
+    let snapshot: LoadedControlPlaneSnapshot;
+    try {
+      snapshot = open(durableResult);
+    } catch {
+      throw unavailable();
+    }
+    if (maintainCache) {
+      await replaceCacheBestEffort(cache, durableResult);
+    }
+    return snapshot;
+  }
+
+  async function load(): Promise<LoadedControlPlaneSnapshot> {
+    return loadSnapshot(true);
   }
 
   async function mirrorCommittedDocument(
@@ -232,7 +264,7 @@ export function createControlPlaneStore(
   ): Promise<T> {
     void name;
     const updatedAt = now().toISOString();
-    let current = await load();
+    let current = await loadSnapshot(false);
 
     for (let attempt = 1; attempt <= MAX_CAS_ATTEMPTS; attempt += 1) {
       const mutation = reducer(cloneControlPlaneDocument(current.document));
@@ -263,7 +295,7 @@ export function createControlPlaneStore(
         if (attempt === MAX_CAS_ATTEMPTS) {
           throw conflict();
         }
-        current = await loadFresh();
+        current = await loadFresh(false);
       }
     }
 
