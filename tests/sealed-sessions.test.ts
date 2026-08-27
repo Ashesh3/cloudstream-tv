@@ -120,6 +120,7 @@ describe("sealed sessions", () => {
       provider: "google",
       redirectUri: "https://app.test/api/admin/sources/google/callback",
       sourceId: "source-1",
+      expectedControlRevision: 7,
       reconnectSourceId: "source-1",
       expectedCredentialVersion: 3,
       pkceVerifier: "pkce-verifier",
@@ -136,6 +137,7 @@ describe("sealed sessions", () => {
     expect(codec.openOAuthState(oauth)).toMatchObject({
       provider: "google",
       sourceId: "source-1",
+      expectedControlRevision: 7,
       reconnectSourceId: "source-1",
       expectedCredentialVersion: 3
     });
@@ -173,6 +175,7 @@ describe("sealed sessions", () => {
       provider: "dropbox" as "google",
       redirectUri: "https://app.test/callback",
       sourceId: "source-1",
+      expectedControlRevision: 1,
       pkceVerifier: "verifier",
       stateHash: "hash",
       issuedAt: now.getTime(),
@@ -190,6 +193,7 @@ describe("sealed sessions", () => {
       provider: "google" as const,
       redirectUri: "https://app.test/callback",
       sourceId: "source-1",
+      expectedControlRevision: 1,
       pkceVerifier: "verifier",
       stateHash: "hash",
       issuedAt: now.getTime(),
@@ -197,10 +201,14 @@ describe("sealed sessions", () => {
     };
 
     expect(codec.openOAuthState(codec.issueOAuthState(valid))).toMatchObject({
-      sourceId: "source-1"
+      sourceId: "source-1",
+      expectedControlRevision: 1
     });
     for (const claims of [
       { ...valid, sourceId: "" },
+      { ...valid, expectedControlRevision: undefined },
+      { ...valid, expectedControlRevision: 0 },
+      { ...valid, expectedControlRevision: 1.5 },
       { ...valid, expectedCredentialVersion: 1 },
       { ...valid, reconnectSourceId: "source-1" },
       {

@@ -330,6 +330,7 @@ export function createControlOAuthService(
       provider: input.provider,
       redirectUri,
       sourceId,
+      expectedControlRevision: input.context.revision,
       ...(reconnect === undefined
         ? {}
         : {
@@ -373,6 +374,8 @@ export function createControlOAuthService(
       claims.adminSessionId !== input.admin.sessionId ||
       claims.provider !== input.provider ||
       claims.redirectUri !== redirectUri ||
+      input.context.revision !== claims.expectedControlRevision ||
+      input.context.document.revision !== claims.expectedControlRevision ||
       claims.issuedAt > currentTime ||
       claims.expiresAt <= currentTime ||
       claims.expiresAt - claims.issuedAt <= 0 ||
@@ -452,6 +455,7 @@ export function createControlOAuthService(
         expectedReconnect ? "reconnect-source" : "connect-source",
         (current) => {
           if (
+            current.revision !== claims.expectedControlRevision ||
             current.householdId !== input.admin.householdId ||
             current.household.adminPassphraseVersion !==
               input.admin.adminPassphraseVersion

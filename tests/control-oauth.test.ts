@@ -306,6 +306,7 @@ describe("sealed control OAuth", () => {
       provider: "google",
       redirectUri: REDIRECT_URI,
       sourceId: "source-new",
+      expectedControlRevision: 1,
       issuedAt: TEST_NOW.getTime(),
       expiresAt: TEST_NOW.getTime() + 10 * 60_000
     });
@@ -465,7 +466,53 @@ describe("sealed control OAuth", () => {
       harness.createOAuth().completeAuthorization(harness.callback(started))
     ).rejects.toMatchObject({ code: "OAUTH_STATE_INVALID" });
     expect(harness.control.durable.writeAttempts).toBe(1);
-    expect(harness.provider.completeInputs).toHaveLength(2);
+    expect(harness.provider.completeInputs).toHaveLength(1);
+  });
+
+  it("cannot recreate a removed source after completion and marker loss", async () => {
+    const harness = setup();
+    const started = await harness.beginGoogle();
+
+    await harness.oauth.completeAuthorization(harness.callback(started));
+    await harness.control.store.mutate("remove-connected-source", (current) => {
+      const next = structuredClone(current);
+      delete next.sources["source-new"];
+      return {
+        changed: true,
+        next: { ...next, revision: current.revision + 1 },
+        result: undefined
+      };
+    });
+    harness.replayCache.values.clear();
+
+    await expect(
+      harness.createOAuth().completeAuthorization(harness.callback(started))
+    ).rejects.toMatchObject({ code: "OAUTH_STATE_INVALID" });
+    expect(harness.control.durable.currentDocument?.sources["source-new"]).toBeUndefined();
+    expect(harness.provider.completeInputs).toHaveLength(1);
+  });
+
+  it("invalidates OAuth before provider exchange after any intervening control mutation", async () => {
+    const harness = setup();
+    const started = await harness.beginGoogle();
+    await harness.control.store.mutate("intervening-settings", (current) => ({
+      changed: true,
+      next: {
+        ...current,
+        revision: current.revision + 1,
+        household: {
+          ...current.household,
+          allowNewDeviceRequests: !current.household.allowNewDeviceRequests
+        }
+      },
+      result: undefined
+    }));
+
+    await expect(
+      harness.oauth.completeAuthorization(harness.callback(started))
+    ).rejects.toMatchObject({ code: "OAUTH_STATE_INVALID" });
+    expect(harness.provider.completeInputs).toEqual([]);
+    expect(harness.replayCache.sets).toEqual([]);
   });
 
   it("rejects cookie, state, and callback binding changes before provider exchange", async () => {
@@ -593,6 +640,7 @@ describe("sealed control OAuth", () => {
       provider: "google",
       redirectUri: REDIRECT_URI,
       sourceId: "source-new",
+      expectedControlRevision: 1,
       pkceVerifier: "overlong-verifier",
       stateHash: createHash("sha256").update(rawState).digest("hex"),
       issuedAt: TEST_NOW.getTime(),
@@ -736,6 +784,7 @@ describe("sealed control OAuth", () => {
     );
     expect(claims).toMatchObject({
       sourceId: "source-1",
+      expectedControlRevision: 1,
       reconnectSourceId: "source-1",
       expectedCredentialVersion: 1
     });
@@ -786,6 +835,7 @@ describe("sealed control OAuth", () => {
         .credentialVersion
     ).toBe(2);
     expect(harness.control.durable.writeAttempts).toBe(1);
+    expect(harness.provider.completeInputs).toHaveLength(1);
   });
 
   it("normalizes a reconnect target removed after begin as invalid state", async () => {

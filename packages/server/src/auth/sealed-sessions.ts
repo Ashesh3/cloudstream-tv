@@ -46,6 +46,7 @@ export interface OAuthStateClaims {
   provider: ProviderKind;
   redirectUri: string;
   sourceId: string;
+  expectedControlRevision: number;
   reconnectSourceId?: string;
   expectedCredentialVersion?: number;
   pkceVerifier: string;
@@ -172,6 +173,7 @@ function parseOAuth(value: unknown, now: Date): OAuthStateClaims {
     provider,
     redirectUri: string(input.redirectUri),
     sourceId,
+    expectedControlRevision: positiveInteger(input.expectedControlRevision),
     ...(reconnectSourceId === undefined ? {} : { reconnectSourceId }),
     ...(expectedCredentialVersion === undefined
       ? {}
