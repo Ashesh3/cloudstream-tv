@@ -11,9 +11,9 @@ import type { SyncMode, SyncWorkflowRunner } from "./workflow";
 export interface IndexOrchestratorRepository
   extends IndexBatchRepository,
     ReconciliationRepository {
-  putSource(source: Source): Promise<void>;
   listRootsForSource(sourceId: string): Promise<Array<{ providerNodeId: string; enabled: boolean }>>;
   releaseSyncLease(sourceId: string, owner: string): Promise<boolean>;
+  transitionToReconcileIfCurrent(input: TransitionToReconcileInput): Promise<boolean>;
   completeSyncRun(input: {
     sourceId: string;
     leaseOwner: string;
@@ -29,6 +29,15 @@ export interface IndexOrchestratorRepository
     errorCode: string;
     nextSyncAt: Date | null;
   }): Promise<boolean>;
+}
+
+export interface TransitionToReconcileInput {
+  sourceId: string;
+  expectedLeaseOwner: string;
+  expectedPreviousCheckpoint: IndexCheckpoint | null;
+  changedAt: Date;
+  newCheckpoint: IndexCheckpoint;
+  leaseExpiresAt: Date;
 }
 
 export interface IndexOrchestratorDependencies {
@@ -235,22 +244,25 @@ async function transitionToReconcile(
   leaseOwner: string,
   changedAt: Date
 ): Promise<void> {
-  if (
-    source.leaseOwner !== leaseOwner ||
-    !source.leaseExpiresAt ||
-    source.leaseExpiresAt <= changedAt
-  ) throw new Error("Sync lease is stale");
-  await repository.putSource({
-    ...source,
-    leaseExpiresAt: new Date(changedAt.getTime() + 10 * 60 * 1000),
-    crawlCheckpoint: {
+  const transitioned = await repository.transitionToReconcileIfCurrent({
+    sourceId: source.id,
+    expectedLeaseOwner: leaseOwner,
+    expectedPreviousCheckpoint: source.crawlCheckpoint,
+    changedAt,
+    newCheckpoint: {
       mode: "reconcile",
       providerPageCursor: null,
       processedNodeCount: checkpoint.processedNodeCount,
       generation: checkpoint.generation,
       reconciliationCursor: null
-    }
+    },
+    leaseExpiresAt: new Date(changedAt.getTime() + 10 * 60 * 1000)
   });
+  if (!transitioned) {
+    throw Object.assign(new Error("Sync checkpoint is stale"), {
+      code: "SYNC_CHECKPOINT_STALE" as const
+    });
+  }
 }
 
 function syntheticRootProviderNode(

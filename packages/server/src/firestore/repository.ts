@@ -6,6 +6,7 @@ import type {
   DeviceRequest,
   DeviceSession,
   Household,
+  IndexCheckpoint,
   MediaNode,
   OAuthState,
   DisableRootInput,
@@ -18,10 +19,12 @@ import type {
 } from "@cloudframe/shared";
 import type { Firestore, Query, Transaction, WriteBatch } from "@google-cloud/firestore";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   applyIndexRemovals,
   recomputeFolderMetadata,
-  type IndexBatchCommitInput
+  type IndexBatchCommitInput,
+  type TransitionToReconcileInput
 } from "@cloudframe/indexer";
 import { decodeSourceDocument } from "./decode";
 
@@ -205,6 +208,7 @@ export interface AppRepository {
   listOAuthStates(householdId: string): Promise<OAuthState[]>;
   acquireSyncLease(input: SyncLeaseInput): Promise<boolean>;
   releaseSyncLease(sourceId: string, owner: string): Promise<boolean>;
+  transitionToReconcileIfCurrent(input: TransitionToReconcileInput): Promise<boolean>;
   putRoot(root: AssignedRoot): Promise<void>;
   createOrEnableRoot(root: AssignedRoot): Promise<AssignedRoot>;
   enableRootAndResetInitial(input: {
@@ -776,6 +780,26 @@ export class FirestoreRepository implements AppRepository {
     });
   }
 
+  async transitionToReconcileIfCurrent(input: TransitionToReconcileInput): Promise<boolean> {
+    const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+    return this.firestore.runTransaction(async transaction => {
+      const snapshot = await transaction.get(ref);
+      const source = snapshot.exists ? decodeSourceDocument(snapshot.id, snapshot.data()) : null;
+      if (
+        !source ||
+        source.leaseOwner !== input.expectedLeaseOwner ||
+        !source.leaseExpiresAt ||
+        source.leaseExpiresAt <= input.changedAt ||
+        !sameIndexCheckpoint(source.crawlCheckpoint, input.expectedPreviousCheckpoint)
+      ) return false;
+      transaction.update(ref, {
+        crawlCheckpoint: input.newCheckpoint,
+        leaseExpiresAt: input.leaseExpiresAt
+      });
+      return true;
+    });
+  }
+
   async markSyncRunStarted(input: { sourceId: string; leaseOwner: string; runId: string; startedAt: Date }): Promise<boolean> {
     const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
     return this.firestore.runTransaction(async transaction => {
@@ -1188,6 +1212,13 @@ export class FirestoreRepository implements AppRepository {
 
 function sameEncryptedSecret(left: Source["encryptedRefreshToken"], right: Source["encryptedRefreshToken"]): boolean {
   return left.keyVersion === right.keyVersion && left.iv === right.iv && left.ciphertext === right.ciphertext && left.authTag === right.authTag;
+}
+
+export function sameIndexCheckpoint(
+  left: IndexCheckpoint | null,
+  right: IndexCheckpoint | null
+): boolean {
+  return isDeepStrictEqual(left, right);
 }
 
 function initialSourceReset(): Pick<

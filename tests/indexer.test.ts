@@ -432,6 +432,61 @@ describe("bounded resumable indexing", () => {
     });
   });
 
+  it("rejects a paused stale reconcile transition after a new root resets initial state", async () => {
+    const repository = await seededRepository();
+    const current = (await repository.getSource("s1"))!;
+    await repository.putSource({
+      ...current,
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: null,
+        processedNodeCount: 12,
+        generation: "generation-old",
+        rootProviderIds: ["root-provider"],
+        currentProviderFolderId: null,
+        pendingProviderFolderIds: [],
+        pageFingerprint: "finished-old-page"
+      },
+      activeWorkflowRunId: "old-run"
+    });
+    await repository.acquireSyncLease({
+      sourceId: "s1",
+      owner: "old-owner",
+      now,
+      expiresAt: later()
+    });
+    const paused = pauseAfterRootSnapshot(repository);
+    const orchestrator = createIndexOrchestrator({
+      repository: paused.repository,
+      providers: { get: () => ({}) as ProviderAdapter },
+      getCredentials: async () => ({
+        accessToken: "a",
+        refreshToken: "r",
+        accessTokenExpiresAt: later()
+      }),
+      now: () => now
+    });
+
+    const oldRun = orchestrator.runNext("s1", "initial", "old-owner");
+    await paused.entered;
+    await repository.enableRootAndResetInitial({
+      root: {
+        ...root(),
+        id: "new-root",
+        providerNodeId: "new-root-provider",
+        displayName: "New root"
+      },
+      sourceId: "s1",
+      resetAt: now
+    });
+    const resetSource = await repository.getSource("s1");
+    paused.resume();
+
+    await expect(oldRun).rejects.toMatchObject({ code: "SYNC_CHECKPOINT_STALE" });
+    expect(await repository.getSource("s1")).toEqual(resetSource);
+    expect(await repository.listRootsForSource("s1")).toHaveLength(2);
+  });
+
   it("restarts an active initial crawl when its enabled root set changes", async () => {
     const repository = await seededRepository();
     await repository.putRoot({
@@ -1086,6 +1141,39 @@ function deltaOrchestrator(
     now: () => now,
     createGeneration: () => "generation-delta"
   });
+}
+
+function pauseAfterRootSnapshot(repository: MemoryRepository): {
+  repository: MemoryRepository;
+  entered: Promise<void>;
+  resume(): void;
+} {
+  let markEntered!: () => void;
+  let resume!: () => void;
+  let paused = false;
+  const entered = new Promise<void>(resolve => { markEntered = resolve; });
+  const gate = new Promise<void>(resolve => { resume = resolve; });
+  return {
+    repository: new Proxy(repository, {
+      get(target, property) {
+        const value = Reflect.get(target, property, target);
+        if (property === "listRootsForSource" && typeof value === "function") {
+          return async (...args: unknown[]) => {
+            const roots = await Reflect.apply(value, target, args);
+            if (!paused) {
+              paused = true;
+              markEntered();
+              await gate;
+            }
+            return roots;
+          };
+        }
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+    }),
+    entered,
+    resume
+  };
 }
 
 async function seededRepository(): Promise<MemoryRepository> {

@@ -19,11 +19,13 @@ import type {
 import {
   applyIndexRemovals,
   recomputeFolderMetadata,
-  type IndexBatchCommitInput
+  type IndexBatchCommitInput,
+  type TransitionToReconcileInput
 } from "@cloudframe/indexer";
 import {
   RepositoryError,
   assignedRootDocumentId,
+  sameIndexCheckpoint,
   validateDeviceApproval,
   type AppRepository
 } from "./repository";
@@ -469,6 +471,23 @@ export class MemoryRepository implements AppRepository {
       leaseExpiresAt: null,
       lastSyncErrorCode: null
     }));
+  }
+
+  async transitionToReconcileIfCurrent(input: TransitionToReconcileInput): Promise<boolean> {
+    const source = this.sources.get(input.sourceId);
+    if (
+      !source ||
+      source.leaseOwner !== input.expectedLeaseOwner ||
+      !source.leaseExpiresAt ||
+      source.leaseExpiresAt <= input.changedAt ||
+      !sameIndexCheckpoint(source.crawlCheckpoint, input.expectedPreviousCheckpoint)
+    ) return false;
+    this.sources.set(source.id, copy({
+      ...source,
+      crawlCheckpoint: input.newCheckpoint,
+      leaseExpiresAt: input.leaseExpiresAt
+    }));
+    return true;
   }
 
   async markSyncRunStarted(input: { sourceId: string; leaseOwner: string; runId: string; startedAt: Date }): Promise<boolean> {

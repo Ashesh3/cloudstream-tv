@@ -8,6 +8,7 @@ import type {
   DeviceSession,
   Household,
   MediaNode,
+  IndexCheckpoint,
   Source,
   WatchHistory
 } from "@cloudframe/shared";
@@ -450,6 +451,49 @@ describe("MemoryRepository domain storage", () => {
       leaseExpiresAt: null
     });
     expect(await repo.listRootsForSource(source.id)).toHaveLength(2);
+  });
+
+  it("rejects a stale reconcile transition after a new root resets initial state", async () => {
+    const repo = new MemoryRepository();
+    const checkpoint: IndexCheckpoint = {
+      mode: "initial",
+      providerPageCursor: null,
+      processedNodeCount: 25,
+      generation: "generation-old",
+      rootProviderIds: ["provider-root"],
+      currentProviderFolderId: null,
+      pendingProviderFolderIds: [],
+      pageFingerprint: "old-page"
+    };
+    const source = makeSource({
+      status: "syncing",
+      crawlCheckpoint: checkpoint,
+      activeWorkflowRunId: "old-run",
+      leaseOwner: "old-owner",
+      leaseExpiresAt: later
+    });
+    await repo.putSource(source);
+    await repo.putRoot(makeRoot());
+    await repo.enableRootAndResetInitial({
+      root: {
+        ...makeRoot(),
+        id: "new-root",
+        providerNodeId: "new-provider-root"
+      },
+      sourceId: source.id,
+      resetAt: now
+    });
+    const resetSource = await repo.getSource(source.id);
+
+    await expect(repo.transitionToReconcileIfCurrent({
+      sourceId: source.id,
+      expectedLeaseOwner: "old-owner",
+      expectedPreviousCheckpoint: checkpoint,
+      changedAt: now,
+      newCheckpoint: reconcileCheckpoint(checkpoint),
+      leaseExpiresAt: later
+    })).resolves.toBe(false);
+    expect(await repo.getSource(source.id)).toEqual(resetSource);
   });
 });
 
@@ -951,6 +995,91 @@ describe("FirestoreRepository admin management transactions", () => {
     );
   });
 
+  it("transitions a current Firestore checkpoint to reconcile with a partial transaction update", async () => {
+    const writes: string[] = [];
+    const extendedLease = new Date("2026-08-28T00:00:00Z");
+    const checkpoint: IndexCheckpoint = {
+      mode: "initial",
+      providerPageCursor: null,
+      processedNodeCount: 25,
+      generation: "generation-current",
+      rootProviderIds: ["provider-root"],
+      currentProviderFolderId: null,
+      pendingProviderFolderIds: [],
+      pageFingerprint: "current-page"
+    };
+    const source = makeSource({
+      status: "syncing",
+      crawlCheckpoint: checkpoint,
+      activeWorkflowRunId: "run-current",
+      leaseOwner: "worker-current",
+      leaseExpiresAt: later
+    });
+    const repo = new FirestoreRepository(createManagementFirestore({ writes, source }));
+    const newCheckpoint = reconcileCheckpoint(checkpoint);
+
+    await expect(repo.transitionToReconcileIfCurrent({
+      sourceId: source.id,
+      expectedLeaseOwner: "worker-current",
+      expectedPreviousCheckpoint: checkpoint,
+      changedAt: now,
+      newCheckpoint,
+      leaseExpiresAt: extendedLease
+    })).resolves.toBe(true);
+    expect(await repo.getSource(source.id)).toEqual({
+      ...source,
+      crawlCheckpoint: newCheckpoint,
+      leaseExpiresAt: extendedLease
+    });
+    expect(writes).toEqual([
+      `update:sources/s1:${JSON.stringify({ crawlCheckpoint: newCheckpoint, leaseExpiresAt: extendedLease })}`
+    ]);
+  });
+
+  it.each([
+    ["generation", { generation: "generation-new" }],
+    ["enabled-root snapshot", { rootProviderIds: ["provider-root", "new-provider-root"] }],
+    ["page fingerprint", { pageFingerprint: "new-page" }]
+  ] satisfies Array<[string, Partial<IndexCheckpoint>]>) (
+    "rejects a stale Firestore reconcile transition after the %s changes",
+    async (_label, checkpointPatch) => {
+      const writes: string[] = [];
+      const expectedCheckpoint: IndexCheckpoint = {
+        mode: "initial",
+        providerPageCursor: null,
+        processedNodeCount: 25,
+        generation: "generation-old",
+        rootProviderIds: ["provider-root"],
+        currentProviderFolderId: null,
+        pendingProviderFolderIds: [],
+        pageFingerprint: "old-page"
+      };
+      const currentCheckpoint: IndexCheckpoint = {
+        ...expectedCheckpoint,
+        ...checkpointPatch
+      };
+      const source = makeSource({
+        status: "syncing",
+        crawlCheckpoint: currentCheckpoint,
+        activeWorkflowRunId: "run-new",
+        leaseOwner: "worker-current",
+        leaseExpiresAt: later
+      });
+      const repo = new FirestoreRepository(createManagementFirestore({ writes, source }));
+
+      await expect(repo.transitionToReconcileIfCurrent({
+        sourceId: source.id,
+        expectedLeaseOwner: "worker-current",
+        expectedPreviousCheckpoint: expectedCheckpoint,
+        changedAt: now,
+        newCheckpoint: reconcileCheckpoint(expectedCheckpoint),
+        leaseExpiresAt: later
+      })).resolves.toBe(false);
+      expect(await repo.getSource(source.id)).toEqual(source);
+      expect(writes).toEqual([]);
+    }
+  );
+
   it.each(["initial", "reconcile"] as const)(
     "preserves a checkpointed active selected-root sync during %s for the same enabled Firestore root",
     async mode => {
@@ -1393,6 +1522,16 @@ function makeSource(overrides: Partial<Source> = {}): Source {
     lastSyncErrorCode: null,
     createdAt: now,
     ...overrides
+  };
+}
+
+function reconcileCheckpoint(checkpoint: IndexCheckpoint): IndexCheckpoint {
+  return {
+    mode: "reconcile",
+    providerPageCursor: null,
+    processedNodeCount: checkpoint.processedNodeCount,
+    generation: checkpoint.generation,
+    reconciliationCursor: null
   };
 }
 
