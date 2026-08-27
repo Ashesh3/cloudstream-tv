@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type {
+  AdminProviderFolderPageResponse,
   AssignedRoot,
   Device,
   DeviceRequest,
@@ -13,6 +14,7 @@ import {
   encodeAdminOverviewResponse,
   encodeBootstrapResponse,
   encodeMediaNodeDto,
+  encodeSourceDto,
   sortFolderListing
 } from "@cloudframe/shared";
 
@@ -20,6 +22,32 @@ const now = new Date("2026-08-26T00:00:00Z");
 const later = new Date("2026-08-27T00:00:00Z");
 
 describe("public API DTOs", () => {
+  it("encodes provider root identity and normalized source index state", () => {
+    const dto = encodeSourceDto({
+      ...makeSource(),
+      providerRootId: "google-root",
+      status: "error",
+      lastSyncErrorCode: "RESOURCE_EXHAUSTED"
+    }, 1);
+
+    expect(dto).toMatchObject({
+      providerRootId: "google-root",
+      indexState: { kind: "quota-exhausted", recoverable: true }
+    });
+  });
+
+  it("defines live provider folders without indexed media counters", () => {
+    const page: AdminProviderFolderPageResponse = {
+      source: encodeSourceDto({ ...makeSource(), providerRootId: "root" }, 0),
+      current: { providerNodeId: "root", name: "My Drive", parentProviderId: null, assignedRootId: null },
+      breadcrumbs: [{ providerNodeId: "root", name: "My Drive", parentProviderId: null, assignedRootId: null }],
+      folders: [{ providerNodeId: "photos", name: "Photos", parentProviderId: "root", assignedRootId: null }],
+      nextCursor: null
+    };
+
+    expect(page.folders[0]).not.toHaveProperty("childMediaCount");
+  });
+
   it("serializes bootstrap and admin responses without persistence secrets", () => {
     const household = makeHousehold();
     const request = makeRequest();
@@ -142,6 +170,7 @@ function makeSource(): Source {
     householdId: "h1",
     provider: "google",
     providerAccountId: "synthetic-account-a",
+    providerRootId: null,
     accountLabel: "Family Drive",
     encryptedRefreshToken: {
       keyVersion: "v1",

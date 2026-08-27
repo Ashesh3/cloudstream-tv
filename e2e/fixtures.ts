@@ -18,14 +18,15 @@ export async function installTvFixture(page: Page, state: "unenrolled" | "ready"
     let status = state;
     let historySaves = 0;
     const folder = {
-      id: "folder-1", name: "Family Trips", kind: "folder", mimeType: null,
+      id: "folder-1", sourceId: "source-1", provider: "google", parentNodeId: null,
+      name: "Family Trips", normalizedName: "family trips", kind: "folder", mimeType: null,
       size: null, width: null, height: null, capturedAt: null, createdAtProvider: now,
       modifiedAtProvider: now, thumbnailRevision: null, hasPreview: false,
       folderCoverNodeIds: ["image-1", "image-2"], childFolderCount: 0,
       childMediaCount: 2, available: true
     };
-    const image = { ...folder, id: "image-1", name: "Sunset.jpg", kind: "image", mimeType: "image/jpeg", width: 1200, height: 800, hasPreview: true, folderCoverNodeIds: [], childMediaCount: 0 };
-    const video = { ...folder, id: "video-1", name: "Lake.mp4", kind: "video", mimeType: "video/mp4", width: 1280, height: 720, hasPreview: true, folderCoverNodeIds: [], childMediaCount: 0 };
+    const image = { ...folder, id: "image-1", parentNodeId: folder.id, name: "Sunset.jpg", normalizedName: "sunset.jpg", kind: "image", mimeType: "image/jpeg", width: 1200, height: 800, hasPreview: true, folderCoverNodeIds: [], childMediaCount: 0 };
+    const video = { ...folder, id: "video-1", parentNodeId: folder.id, name: "Lake.mp4", normalizedName: "lake.mp4", kind: "video", mimeType: "video/mp4", width: 1280, height: 720, hasPreview: true, folderCoverNodeIds: [], childMediaCount: 0 };
     const household = { id: "household-test", allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8 };
     const device = { id: "device-1", name: "Living Room", enabled: true, assignedRootIds: ["root-1"], mediaOrder: null, slideshowSeconds: null, createdAt: now, approvedAt: now, lastSeenAt: now, revokedAt: null };
     const enrollment = () => status === "ready"
@@ -37,9 +38,9 @@ export async function installTvFixture(page: Page, state: "unenrolled" | "ready"
       bootstrap: async () => ({ enrollment: enrollment() }),
       createDeviceRequest: async name => { status = "pending"; document.cookie = "cf_device_request=e2e; path=/"; return { request: { id: "request-1", requestedName: name, status: "pending", createdAt: now, expiresAt: new Date(Date.now() + 3600000).toISOString(), resolvedAt: null, approvedDeviceId: null } }; },
       requestStatus: async () => ({ enrollment: enrollment() }),
-      home: async () => ({ roots: [{ id: "root-1", nodeId: "folder-1", sourceId: "source-1", provider: "google", accountLabel: "Family Drive", displayName: "Family Trips", folderCoverNodeIds: ["image-1", "image-2"], childFolderCount: 0, childMediaCount: 2 }] }),
+      home: async () => ({ roots: [{ id: "root-1", sourceId: "source-1", displayName: "Family Trips", provider: "google", accountLabel: "Family Drive", nodeId: "folder-1", folderCoverNodeIds: ["image-1", "image-2"], childFolderCount: 0, childMediaCount: 2, readiness: "ready", readinessMessage: "Ready to screen" }] }),
       folder: async () => ({ parent: folder, breadcrumbs: [folder], children: [image, video], nextCursor: null }),
-      thumbnailUrls: async ids => ({ items: ids.map(nodeId => ({ nodeId, url: media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" })) }),
+      thumbnailUrls: async ids => ({ items: ids.map(nodeId => ({ nodeId, status: "ready", url: media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" })) }),
       mediaUrl: async nodeId => ({ nodeId, kind: nodeId === "video-1" ? "video" : "image", url: nodeId === "video-1" ? media.video : media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" }),
       history: async () => ({ history: await window.__cloudframeHistoryList() }),
       saveHistory: async (nodeId, value) => { historySaves += 1; document.documentElement.dataset.historySaves = String(historySaves); return { history: await window.__cloudframeHistorySave(nodeId, value) }; }
@@ -54,22 +55,78 @@ declare global {
   }
 }
 
-export async function installAdminFixture(page: Page) {
-  await page.addInitScript(() => {
+export type AdminFixtureScenario = "enrollment" | "source-workbench";
+export type AdminFixtureIndexState = "unselected" | "queued" | "indexing" | "quota-exhausted" | "healthy";
+
+export async function installAdminFixture(page: Page, scenario: AdminFixtureScenario = "enrollment") {
+  await page.addInitScript(({ scenario }) => {
     const now = new Date().toISOString();
-    const roots = [{ id: "root-1", sourceId: "source-1", providerNodeId: "folder-1", displayName: "Family Trips", ancestryProviderIds: [], enabled: true, createdAt: now }];
-    let devices = [];
-    let requests = [{ id: "request-1", requestedName: "Living Room", status: "pending", createdAt: now, expiresAt: new Date(Date.now()+3600000).toISOString(), resolvedAt: null, approvedDeviceId: null }];
+    const sourceId = "source-1";
+    const providerRoot = { providerNodeId: "drive-root", parentProviderId: null, name: "My Drive", assignedRootId: null };
+    const photos = { providerNodeId: "photos", parentProviderId: providerRoot.providerNodeId, name: "Photos", assignedRootId: null };
+    const movies = { providerNodeId: "movies", parentProviderId: providerRoot.providerNodeId, name: "Movies", assignedRootId: null };
+    const trips = { providerNodeId: "trips", parentProviderId: photos.providerNodeId, name: "Trips", assignedRootId: null };
+    let roots = scenario === "source-workbench" ? [] : [{ id: "root-1", sourceId, providerNodeId: "folder-1", displayName: "Family Trips", ancestryProviderIds: [], enabled: true, createdAt: now }];
+    let devices = scenario === "source-workbench"
+      ? [{ id: "device-1", name: "Living Room", enabled: true, assignedRootIds: [], mediaOrder: null, slideshowSeconds: null, createdAt: now, approvedAt: now, lastSeenAt: now, revokedAt: null }]
+      : [];
+    let requests = scenario === "source-workbench" ? [] : [{ id: "request-1", requestedName: "Living Room", status: "pending", createdAt: now, expiresAt: new Date(Date.now()+3600000).toISOString(), resolvedAt: null, approvedDeviceId: null }];
     const household = { id: "household-test", allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8 };
-    const source = { id: "source-1", provider: "google", accountLabel: "family@example.test", status: "healthy", lastSyncStartedAt: now, lastSyncCompletedAt: now, lastSyncErrorCode: null, nextSyncAt: now, crawlCheckpoint: null };
+    const indexState = kind => ({
+      kind,
+      processedNodeCount: kind === "indexing" || kind === "quota-exhausted" || kind === "healthy" ? 42 : 0,
+      pendingFolderCount: kind === "queued" ? 1 : kind === "indexing" || kind === "quota-exhausted" ? 2 : 0,
+      recoverable: kind === "queued" || kind === "quota-exhausted",
+      errorCode: kind === "quota-exhausted" ? "RESOURCE_EXHAUSTED" : null
+    });
+    const source = {
+      id: sourceId, provider: "google", accountLabel: "family@example.test", status: "healthy",
+      accessTokenExpiresAt: null, nextSyncAt: now, lastSyncStartedAt: now, lastSyncCompletedAt: now,
+      lastSyncErrorCode: null, indexProgress: null, createdAt: now, providerRootId: providerRoot.providerNodeId,
+      indexState: indexState(scenario === "source-workbench" ? "unselected" : "healthy")
+    };
+    const setIndexState = kind => {
+      source.status = kind === "quota-exhausted" ? "error" : kind === "indexing" ? "syncing" : "healthy";
+      source.lastSyncErrorCode = kind === "quota-exhausted" ? "RESOURCE_EXHAUSTED" : null;
+      source.indexProgress = kind === "indexing" || kind === "quota-exhausted"
+        ? { mode: "initial", processedNodeCount: 42, pendingFolderCount: 2, reconciliationActive: false }
+        : null;
+      source.indexState = indexState(kind);
+      document.documentElement.dataset.adminIndexState = kind;
+    };
     const overview = () => ({ household, pendingRequests: requests, devices, sources: [source], roots });
+    window.__cloudframeAdminSetIndexState = async kind => { setIndexState(kind); };
     document.cookie = "cf_device_request=e2e-request; path=/";
     window.__CLOUDFRAME_TEST_ADMIN_API__ = {
       login: async () => ({ authenticated: true }), logout: async () => ({ authenticated: false }), overview: async () => overview(), settings: async () => ({ allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8 }),
       updateSettings: async body => body, rotatePassphrase: async () => ({ authenticated: false }),
       sources: async () => ({ sources: [{ ...source, roots }] }), authorizeSource: async () => ({ authorizationUrl: "https://example.test/oauth" }), syncSource: async () => ({}), sourceImpact: async () => ({ roots, devices }), removeSource: async () => ({ removed: true, roots, devices }),
       sourceTree: async () => ({ parent: null, breadcrumbs: [], folders: [{ id: "folder-2", name: "Archive", kind: "folder", mimeType: null, size: null, width: null, height: null, capturedAt: null, createdAtProvider: now, modifiedAtProvider: now, thumbnailRevision: null, hasPreview: false, folderCoverNodeIds: [], childFolderCount: 0, childMediaCount: 0, available: true }] }),
-      createRoot: async (_id, body) => ({ root: roots[0] ?? { id: "root-2", sourceId: "source-1", providerNodeId: body.providerNodeId, displayName: body.displayName, ancestryProviderIds: [], enabled: true, createdAt: now } }), rootImpact: async () => ({ roots, devices }), removeRoot: async () => ({ removed: true, roots, devices }), thumbnailUrls: async () => ({ items: [] }),
+      providerFolders: async (_id, input) => {
+        const assigned = folder => ({ ...folder, assignedRootId: roots.find(root => root.providerNodeId === folder.providerNodeId)?.id ?? null });
+        if (input.providerFolderId === photos.providerNodeId) return { source, current: assigned(photos), breadcrumbs: [assigned(providerRoot), assigned(photos)], folders: [assigned(trips)], nextCursor: null };
+        if (input.providerFolderId === trips.providerNodeId) return { source, current: assigned(trips), breadcrumbs: [assigned(providerRoot), assigned(photos), assigned(trips)], folders: [], nextCursor: null };
+        if (input.providerFolderId === movies.providerNodeId) return { source, current: assigned(movies), breadcrumbs: [assigned(providerRoot), assigned(movies)], folders: [], nextCursor: null };
+        return { source, current: assigned(providerRoot), breadcrumbs: [assigned(providerRoot)], folders: [assigned(photos), assigned(movies)], nextCursor: null };
+      },
+      createRoot: async (_id, body) => {
+        const folder = [providerRoot, photos, movies, trips].find(value => value.providerNodeId === body.providerNodeId);
+        const root = roots.find(value => value.providerNodeId === body.providerNodeId) ?? { id: `root-${body.providerNodeId}`, sourceId, providerNodeId: body.providerNodeId, displayName: body.displayName ?? folder?.name ?? "Selected folder", ancestryProviderIds: body.providerNodeId === trips.providerNodeId ? [providerRoot.providerNodeId, photos.providerNodeId] : [providerRoot.providerNodeId], enabled: true, createdAt: now };
+        roots = [...roots.filter(value => value.id !== root.id), root];
+        if (scenario === "source-workbench") devices = devices.map(device => ({ ...device, assignedRootIds: [...new Set([...device.assignedRootIds, root.id])] }));
+        setIndexState("queued");
+        return { root };
+      },
+      rootImpact: async id => ({ roots: roots.filter(root => root.id === id), devices: devices.filter(device => device.assignedRootIds.includes(id)) }),
+      removeRoot: async id => {
+        const removedRoots = roots.filter(root => root.id === id);
+        const affectedDevices = devices.filter(device => device.assignedRootIds.includes(id));
+        roots = roots.filter(root => root.id !== id);
+        devices = devices.map(device => ({ ...device, assignedRootIds: device.assignedRootIds.filter(rootId => rootId !== id) }));
+        if (!roots.some(root => root.enabled)) setIndexState("unselected");
+        return { removed: true, roots: removedRoots, devices: affectedDevices };
+      },
+      thumbnailUrls: async () => ({ items: [] }),
       approveRequest: async (_id, body) => { const device = { id: "device-1", name: body.name, enabled: true, assignedRootIds: body.rootIds, mediaOrder: body.mediaOrder ?? null, slideshowSeconds: body.slideshowSeconds ?? null, createdAt: now, approvedAt: now, lastSeenAt: now, revokedAt: null }; devices = [device]; requests = []; document.cookie = "cf_device=e2e-device; path=/; SameSite=Strict"; document.cookie = "cf_device_request=; Max-Age=0; path=/"; return { device }; },
       denyRequest: async id => ({ request: { ...requests.find(value => value.id === id), status: "denied" } }),
       updateDevice: async (id, body) => {
@@ -85,5 +142,15 @@ export async function installAdminFixture(page: Page) {
       },
       revokeDevice: async id => { devices = devices.filter(device => device.id !== id); return { revoked: true }; }
     };
-  });
+  }, { scenario });
+}
+
+export async function setAdminIndexState(page: Page, state: AdminFixtureIndexState) {
+  await page.evaluate(indexState => window.__cloudframeAdminSetIndexState(indexState), state);
+}
+
+declare global {
+  interface Window {
+    __cloudframeAdminSetIndexState(state: AdminFixtureIndexState): Promise<void>;
+  }
 }

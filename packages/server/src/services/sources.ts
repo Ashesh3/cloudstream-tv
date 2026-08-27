@@ -16,6 +16,7 @@ export interface CreateEncryptedSourceInput {
   householdId: string;
   provider: Source["provider"];
   providerAccountId: string | null;
+  providerRootId: string | null;
   accountLabel: string;
   credentials: ProviderCredentials;
   createdAt: Date;
@@ -57,6 +58,7 @@ export function createSourceService(
       householdId: input.householdId,
       provider: input.provider,
       providerAccountId: input.providerAccountId,
+      providerRootId: input.providerRootId,
       accountLabel: input.accountLabel,
       encryptedRefreshToken: encryptProviderToken(
         input.credentials.refreshToken,
@@ -67,7 +69,7 @@ export function createSourceService(
         keyring
       ),
       accessTokenExpiresAt: input.credentials.accessTokenExpiresAt,
-      status: "syncing",
+      status: "healthy",
       deltaCursor: null,
       crawlCheckpoint: null,
       activeWorkflowRunId: null,

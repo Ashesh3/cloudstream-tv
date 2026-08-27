@@ -6,7 +6,7 @@ import {
   MemoryRepository,
   createBrowseService
 } from "@cloudframe/server";
-import { deterministicNodeId } from "@cloudframe/indexer";
+import { deterministicNodeId, runIndexBatch } from "@cloudframe/indexer";
 
 const now = new Date("2026-08-26T00:00:00.000Z");
 
@@ -19,7 +19,58 @@ describe("current device-root browse authorization", () => {
 
     const home = await browse.home({ ...device, assignedRootIds: ["root-1", "root-2"] });
     expect(home.roots.map(value => value.id)).toEqual(["root-1"]);
-    expect(home.roots[0]).toMatchObject({ nodeId: deterministicNodeId("s1", "provider-root") });
+    expect(home.roots[0]).toMatchObject({
+      nodeId: deterministicNodeId("s1", "provider-root"),
+      readiness: "ready"
+    });
+  });
+
+  it("keeps an assigned root visible while its first selected-root sync is preparing", async () => {
+    const { repository, device, household } = await fixture();
+    await repository.putRoot({ ...root("root-photos", "s1", "photos"), displayName: "Photos" });
+    await repository.putDevice({ ...device, assignedRootIds: ["root-photos"] });
+    await repository.putSource({
+      ...source("s1", "h1"),
+      status: "syncing",
+      activeWorkflowRunId: "run-photos",
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: null,
+        processedNodeCount: 12,
+        generation: "initial-photos",
+        rootProviderIds: ["photos"],
+        pendingProviderFolderIds: ["photos"]
+      }
+    });
+    const browse = createBrowseService({ repository, cursorSecret: "cursor-secret" });
+
+    await expect(browse.home(device, household)).resolves.toEqual({
+      roots: [expect.objectContaining({
+        displayName: "Photos",
+        nodeId: null,
+        readiness: "preparing",
+        readinessMessage: "Preparing this collection"
+      })]
+    });
+  });
+
+  it.each([
+    ["quota", { status: "error" as const, lastSyncErrorCode: "RESOURCE_EXHAUSTED" }, "Indexing is paused by storage quota"],
+    ["reauth", { status: "reauth-required" as const, lastSyncErrorCode: "PROVIDER_REAUTH_REQUIRED" }, "Reconnect this account in Cloudframe Admin"],
+    ["provider", { status: "error" as const, lastSyncErrorCode: "PROVIDER_UNAVAILABLE" }, "This provider needs attention in Cloudframe Admin"]
+  ])("keeps an assigned root visible when %s blocks indexing", async (_label, sourcePatch, message) => {
+    const { repository, device, household, rootNode } = await fixture();
+    await repository.putNode({ ...rootNode, available: false });
+    await repository.putSource({ ...source("s1", "h1"), ...sourcePatch });
+    const browse = createBrowseService({ repository, cursorSecret: "cursor-secret" });
+
+    await expect(browse.home(device, household)).resolves.toEqual({
+      roots: [expect.objectContaining({
+        nodeId: null,
+        readiness: "blocked",
+        readinessMessage: message
+      })]
+    });
   });
 
   it("sorts folders first then media and paginates with a device-bound cursor", async () => {
@@ -96,6 +147,22 @@ describe("current device-root browse authorization", () => {
     await expect(browse.authorizeNode(device, household, child.id)).rejects.toMatchObject({ code: "NODE_NOT_FOUND" });
   });
 
+  it("rejects descendants after their indexed folder is removed", async () => {
+    const { repository, device, household, rootNode } = await fixture();
+    const folder = media("removed-folder", "Removed", "folder", rootNode.id, null, "s1", "h1", [rootNode.id]);
+    const child = media("removed-child", "Removed.jpg", "image", folder.id, "2026-01-01", "s1", "h1", [rootNode.id, folder.id]);
+    await repository.putNode(folder);
+    await repository.putNode(child);
+    await runIndexBatch({ repository, sourceId: "s1", mode: "delta", generation: "delta", now }, {
+      changes: [{ providerNodeId: folder.providerNodeId, removed: true, node: null }],
+      nextCursor: null,
+      deltaCursor: "next"
+    });
+    const browse = createBrowseService({ repository, cursorSecret: "cursor-secret" });
+
+    await expect(browse.authorizeNode(device, household, child.id)).rejects.toMatchObject({ code: "NODE_NOT_FOUND" });
+  });
+
   it("stores bounded device-scoped last-write-wins history only for authorized media", async () => {
     const { repository, device, household, child } = await fixture();
     const browse = createBrowseService({ repository, cursorSecret: "cursor-secret", now: () => now });
@@ -137,7 +204,7 @@ function root(id: string, sourceId: string, providerNodeId: string): AssignedRoo
 }
 
 function source(id: string, householdId: string): Source {
-  return { id, householdId, provider: "google", providerAccountId: "account", accountLabel: id, encryptedRefreshToken: { keyVersion: "1", iv: "iv", ciphertext: "x", authTag: "tag" }, encryptedAccessToken: null, accessTokenExpiresAt: null, status: "healthy", deltaCursor: null, crawlCheckpoint: null, activeWorkflowRunId: null, syncGeneration: null, nextSyncAt: null, leaseOwner: null, leaseExpiresAt: null, lastSyncStartedAt: null, lastSyncCompletedAt: null, lastSyncErrorCode: null, createdAt: now };
+  return { id, householdId, provider: "google", providerAccountId: "account", providerRootId: null, accountLabel: id, encryptedRefreshToken: { keyVersion: "1", iv: "iv", ciphertext: "x", authTag: "tag" }, encryptedAccessToken: null, accessTokenExpiresAt: null, status: "healthy", deltaCursor: "delta-ready", crawlCheckpoint: null, activeWorkflowRunId: null, syncGeneration: null, nextSyncAt: null, leaseOwner: null, leaseExpiresAt: null, lastSyncStartedAt: null, lastSyncCompletedAt: now, lastSyncErrorCode: null, createdAt: now };
 }
 
 function media(providerId: string, name: string, kind: MediaNode["kind"], parentNodeId: string | null, captured: string | null = "2026-01-01", sourceId = "s1", householdId = "h1", ancestorNodeIds?: string[]): MediaNode {

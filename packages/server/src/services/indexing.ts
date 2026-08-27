@@ -17,11 +17,16 @@ export function createIndexingService(dependencies: IndexingServiceDependencies)
   const now = dependencies.now ?? (() => new Date());
   const createOwner = dependencies.createOwner ?? (() => `sync-${crypto.randomUUID()}`);
 
-  async function startSource(sourceId: string, mode: SyncMode) {
+  async function startSource(sourceId: string, requestedMode?: SyncMode) {
     const source = await dependencies.repository.getSource(sourceId);
     if (!source || source.householdId !== dependencies.householdId) {
       throw new IndexingServiceError("SOURCE_NOT_FOUND", "Source not found.");
     }
+    const enabledRootCount = (await dependencies.repository.listRootsForSource(sourceId))
+      .filter(root => root.enabled).length;
+    const mode = requestedMode === "initial"
+      ? "initial"
+      : chooseSyncMode(source, enabledRootCount);
     const owner = createOwner();
     const startedAt = now();
     const leased = await dependencies.repository.acquireSyncLease({
@@ -60,9 +65,11 @@ export function createIndexingService(dependencies: IndexingServiceDependencies)
     for (const source of sources) {
       const owner = source.leaseOwner!;
       try {
+        const enabledRootCount = (await dependencies.repository.listRootsForSource(source.id))
+          .filter(root => root.enabled).length;
         const run = await dependencies.workflowLauncher.start(
           source.id,
-          "delta",
+          chooseSyncMode(source, enabledRootCount),
           owner
         );
         const marked = await dependencies.repository.markSyncRunStarted({ sourceId: source.id, leaseOwner: owner, runId: run.runId, startedAt: current });
@@ -80,6 +87,16 @@ export function createIndexingService(dependencies: IndexingServiceDependencies)
   }
 
   return { startSource, startDueSources };
+}
+
+export function chooseSyncMode(
+  source: Source,
+  enabledRootCount: number
+): SyncMode {
+  if (enabledRootCount === 0) return "initial";
+  if (source.crawlCheckpoint?.mode === "reconcile") return "reconcile";
+  if (!source.deltaCursor || source.crawlCheckpoint?.mode === "initial") return "initial";
+  return "delta";
 }
 
 function verifyCronSecret(value: string | null, secret: string): void {

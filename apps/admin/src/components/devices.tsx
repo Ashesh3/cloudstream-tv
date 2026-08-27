@@ -19,9 +19,9 @@ export function Devices({ devices, roots, onUpdate, onRevoke }: {
   onRevoke(device: DeviceDto): void;
 }) {
   const [editing, setEditing] = useState<DeviceDto | null>(null);
-  return <section className="flex flex-col gap-5"><PageHeader eyebrow="Televisions" title="Devices" description="Control folder access and playback defaults for every approved television." />
-    {!devices.length ? <Empty title="No approved devices" body="Approve a request to add your first television." icon={<MonitorIcon />} /> : <div className="grid gap-4 lg:grid-cols-2">{devices.map(device => <Card className={device.enabled ? "shadow-xs" : "opacity-70"} key={device.id}>
-      <CardHeader><div className="flex items-center gap-3"><span className="flex size-10 items-center justify-center rounded-xl bg-muted text-muted-foreground"><MonitorIcon /></span><div><CardTitle><h2 className="text-base font-medium">{device.name}</h2></CardTitle><CardDescription className="mt-1 inline-flex items-center gap-1"><Clock3Icon className="size-3.5" />Last seen {relativeTime(device.lastSeenAt)}</CardDescription></div></div><CardAction><Badge variant={device.enabled ? "secondary" : "outline"}>{device.enabled ? "Enabled" : "Paused"}</Badge></CardAction></CardHeader>
+  return <section className="flex flex-col gap-5"><PageHeader context="Televisions" title="Devices" description="Control folder access and playback defaults for every approved television." />
+    {!devices.length ? <Empty title="No approved devices" body="Approve a request to add your first television." icon={<MonitorIcon />} /> : <div className="device-ledger">{devices.map(device => <Card className={`device-entry ${device.enabled ? "" : "is-paused"}`} key={device.id}>
+      <CardHeader><div className="flex items-center gap-3"><span className="device-cue flex size-10 items-center justify-center text-muted-foreground"><MonitorIcon /></span><div><CardTitle><h2 className="text-base font-medium">{device.name}</h2></CardTitle><CardDescription className="mt-1 inline-flex items-center gap-1"><Clock3Icon className="size-3.5" />Last seen {relativeTime(device.lastSeenAt)}</CardDescription></div></div><CardAction><Badge variant={device.enabled ? "secondary" : "outline"}>{device.enabled ? "On program" : "Paused"}</Badge></CardAction></CardHeader>
       <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-4"><Stat label="Folders" value={device.assignedRootIds.length.toString()} /><Stat label="Order" value={orderLabel(device.mediaOrder)} /><Stat label="Slideshow" value={device.slideshowSeconds ? `${device.slideshowSeconds}s` : "Default"} /><Stat label="Access" value={device.enabled ? "Active" : "Paused"} /></CardContent>
       <CardContent className="flex flex-wrap gap-2">{device.assignedRootIds.map(id => <Badge variant="outline" key={id}><FolderOpenIcon data-icon="inline-start" />{roots.find(root => root.id === id)?.displayName ?? "Unavailable root"}</Badge>)}</CardContent>
       <CardFooter className="justify-between"><Button variant="outline" aria-label={`Edit ${device.name}`} onClick={() => setEditing(device)}><PencilIcon data-icon="inline-start" />Edit access</Button><Button variant="destructive" aria-label={`Revoke ${device.name}`} onClick={() => onRevoke(device)}><ShieldOffIcon data-icon="inline-start" />Revoke</Button></CardFooter>
@@ -30,7 +30,7 @@ export function Devices({ devices, roots, onUpdate, onRevoke }: {
   </section>;
 }
 
-function Stat({ label, value }: { label: string; value: string }) { return <div className="rounded-lg bg-muted/50 p-3"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 truncate text-sm font-medium">{value}</p></div>; }
+function Stat({ label, value }: { label: string; value: string }) { return <div className="ledger-stat"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 truncate text-sm font-medium">{value}</p></div>; }
 
 function DeviceEditor({ device, roots, onClose, onSave }: { device: DeviceDto; roots: AssignedRootDto[]; onClose(): void; onSave(body: UpdateDeviceBody): Promise<void> }) {
   const [name, setName] = useState(device.name);

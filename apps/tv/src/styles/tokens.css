@@ -1,26 +1,47 @@
+@font-face {
+  font-family: "Cloudframe Sans";
+  src: url("../../../../node_modules/@fontsource-variable/instrument-sans/files/instrument-sans-latin-wght-normal.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Cloudframe Condensed";
+  src: url("../../../../node_modules/@fontsource-variable/archivo-narrow/files/archivo-narrow-latin-wght-normal.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --canvas: #060a12;
-  --surface: #0c1320;
-  --surface-raised: #121d2c;
-  --surface-soft: #162335;
-  --ink: #f5f8ff;
-  --muted: #96a7bd;
-  --blue: #3b82f6;
-  --blue-bright: #77aaff;
-  --blue-deep: #173e77;
-  --danger: #ff7b86;
-  --focus: #f8fbff;
+  font-family: "Cloudframe Sans", "Segoe UI", sans-serif;
+  --projection: #070705;
+  --projection-deep: #030302;
+  --stock: #d9ccb2;
+  --stock-bright: #f0e3c8;
+  --stock-dim: #988d79;
+  --ink: #f2eadc;
+  --ink-dark: #211c15;
+  --ash: #aaa396;
+  --metal: #45423b;
+  --metal-soft: #292823;
+  --hairline: rgba(224, 211, 185, .22);
+  --cue: #ed6b2c;
+  --cue-bright: #ff8a45;
+  --cue-soft: rgba(237, 107, 44, .22);
+  --danger: #f08b72;
   --safe-x: 54px;
   --safe-y: 36px;
-  --radius-card: 18px;
-  --focus-ring: 4px solid var(--focus);
-  background: var(--canvas);
+  --radius-card: 13px;
+  --focus-ring: 4px solid var(--cue-bright);
+  background: var(--projection);
   color: var(--ink);
 }
 
 * { box-sizing: border-box; }
 html, body, #app { min-width: 100%; min-height: 100%; margin: 0; }
-body { overflow: hidden; background: radial-gradient(circle at 22% -12%, #132d52 0, transparent 38%), var(--canvas); }
+body { overflow: hidden; background: var(--projection); color: var(--ink); }
+body::selection { background: var(--cue); color: var(--projection); }
 button, input { font: inherit; }
 button { color: inherit; }

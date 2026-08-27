@@ -1,5 +1,4 @@
 import type {
-  AssignedRoot,
   ApproveDeviceRequestBody,
   Device,
   Household,
@@ -35,6 +34,11 @@ import { BrowseServiceError } from "../services/browse";
 import { IndexingServiceError } from "../services/indexing";
 import { MediaUrlServiceError } from "../services/media-urls";
 import { OAuthServiceError } from "../services/oauth";
+import {
+  ProviderFolderError,
+  ProviderFolderLaunchError,
+  type ProviderFolderService
+} from "../services/provider-folders";
 import { ProviderError } from "@cloudframe/providers";
 import {
   approveRequest,
@@ -113,8 +117,9 @@ export interface ApiAppDependencies {
   };
   indexing?: {
     startDueSources(authorization: string | null, limit?: number): Promise<unknown>;
-    startSource(sourceId: string, mode: "initial" | "delta" | "reconcile"): Promise<unknown>;
+    startSource(sourceId: string, requestedMode?: "initial" | "delta" | "reconcile"): Promise<unknown>;
   };
+  providerFolders?: ProviderFolderService;
 }
 
 const DEFAULT_RATE_LIMITS: Record<string, RateLimitPolicy> = {
@@ -265,6 +270,16 @@ async function routeRequest(
     requireMethod(request, "GET");
     return sourceTree(request, dependencies, now, decodeURIComponent(sourceTreeMatch[1]!));
   }
+  const providerFoldersMatch = /^\/api\/admin\/sources\/([^/]+)\/provider-folders$/.exec(path);
+  if (providerFoldersMatch) {
+    requireMethod(request, "GET");
+    return browseProviderFolders(
+      request,
+      dependencies,
+      now,
+      decodeURIComponent(providerFoldersMatch[1]!)
+    );
+  }
   const sourceRootsMatch = /^\/api\/admin\/sources\/([^/]+)\/roots$/.exec(path);
   if (sourceRootsMatch) {
     requireMethod(request, "POST");
@@ -378,7 +393,7 @@ async function manualSourceSync(request: Request, dependencies: ApiAppDependenci
   if (!source || source.householdId !== dependencies.config.householdId) {
     throw new HttpError(404, "SOURCE_NOT_FOUND", "Source not found.");
   }
-  return ok(await dependencies.indexing.startSource(sourceId, "delta"), {
+  return ok(await dependencies.indexing.startSource(sourceId), {
     headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken)
   });
 }
@@ -454,12 +469,14 @@ async function rotatePassphrase(request: Request, dependencies: ApiAppDependenci
 async function adminSources(request: Request, dependencies: ApiAppDependencies, now: Date) {
   const authenticated = await authenticateAdmin(request, dependencies, now);
   const sources = await dependencies.repository.listSources(dependencies.config.householdId);
-  const values = await Promise.all(sources.map(async source => ({
-    ...encodeSourceDto(source),
-    roots: (await dependencies.repository.listRootsForSource(source.id))
-      .filter(root => root.householdId === dependencies.config.householdId)
-      .map(encodeAssignedRootDto)
-  })));
+  const values = await Promise.all(sources.map(async source => {
+    const roots = (await dependencies.repository.listRootsForSource(source.id))
+      .filter(root => root.householdId === dependencies.config.householdId);
+    return {
+      ...encodeSourceDto(source, roots.filter(root => root.enabled).length),
+      roots: roots.map(encodeAssignedRootDto)
+    };
+  }));
   return ok({ sources: values }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
 }
 
@@ -548,22 +565,58 @@ async function sourceTree(request: Request, dependencies: ApiAppDependencies, no
   const roots = (await dependencies.repository.listRootsForSource(sourceId))
     .filter(root => root.householdId === dependencies.config.householdId && root.enabled);
   const rootByProviderNodeId = new Map(roots.map(root => [root.providerNodeId, root.id]));
-  return ok({ source: encodeSourceDto(source), parent: parent ? encodeMediaNodeDto(parent) : null, folders: children.filter(node => node.available && node.kind === "folder" && node.householdId === dependencies.config.householdId).map(node => ({ ...encodeMediaNodeDto(node), assignedRootId: rootByProviderNodeId.get(node.providerNodeId) ?? null })) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+  return ok({ source: encodeSourceDto(source, roots.length), parent: parent ? encodeMediaNodeDto(parent) : null, folders: children.filter(node => node.available && node.kind === "folder" && node.householdId === dependencies.config.householdId).map(node => ({ ...encodeMediaNodeDto(node), assignedRootId: rootByProviderNodeId.get(node.providerNodeId) ?? null })) }, { headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+}
+
+async function browseProviderFolders(
+  request: Request,
+  dependencies: ApiAppDependencies,
+  now: Date,
+  sourceId: string
+) {
+  if (!dependencies.providerFolders) throw unavailableService();
+  const authenticated = await authenticateAdmin(request, dependencies, now);
+  const url = new URL(request.url);
+  const limitValue = url.searchParams.get("limit") ?? "100";
+  const limit = Number(limitValue);
+  if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+    throw new HttpError(400, "INVALID_PAGE_SIZE", "Page size is invalid.");
+  }
+  const providerFolderId = url.searchParams.get("providerFolderId") || undefined;
+  const cursor = url.searchParams.get("cursor") || null;
+  const result = await dependencies.providerFolders.browse({
+    householdId: dependencies.config.householdId,
+    sourceId,
+    ...(providerFolderId ? { providerFolderId } : {}),
+    cursor,
+    pageSize: limit
+  });
+  return ok(result, {
+    headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken)
+  });
 }
 
 async function createRoot(request: Request, dependencies: ApiAppDependencies, now: Date, sourceId: string) {
+  if (!dependencies.providerFolders) throw unavailableService();
   const authenticated = await authenticateAdmin(request, dependencies, now);
   verifyAdminMutation(request, authenticated, dependencies.config.allowedOrigin);
   await enforceRateLimit(dependencies, "admin-mutation", authenticated.session.id, now);
   const body = await readJsonObject(request);
-  if (typeof body.nodeId !== "string" || (body.displayName !== undefined && typeof body.displayName !== "string")) throw new HttpError(400, "INVALID_ROOT", "Root request is invalid.");
-  const [source, node] = await Promise.all([dependencies.repository.getSource(sourceId), dependencies.repository.getNode(body.nodeId)]);
-  if (!source || source.householdId !== dependencies.config.householdId || !node || !node.available || node.kind !== "folder" || node.householdId !== dependencies.config.householdId || node.sourceId !== sourceId) throw new HttpError(404, "FOLDER_NOT_FOUND", "Folder not found.");
-  const ancestryProviderIds = await providerAncestry(dependencies.repository, node);
-  const displayName = typeof body.displayName === "string" && body.displayName.trim() ? body.displayName.trim().slice(0, 120) : node.name;
-  const root: AssignedRoot = { id: dependencies.createId!("root"), householdId: dependencies.config.householdId, sourceId, providerNodeId: node.providerNodeId, displayName, ancestryProviderIds, enabled: true, createdAt: now };
-  const saved = await dependencies.repository.createOrEnableRoot(root);
-  return ok({ root: encodeAssignedRootDto(saved) }, { status: 201, headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
+  if (
+    typeof body.providerNodeId !== "string" ||
+    !body.providerNodeId.trim() ||
+    (body.displayName !== undefined && typeof body.displayName !== "string")
+  ) throw new HttpError(400, "INVALID_ROOT", "Root request is invalid.");
+  const result = await dependencies.providerFolders.createRootFromProvider({
+    householdId: dependencies.config.householdId,
+    sourceId,
+    providerNodeId: body.providerNodeId,
+    ...(typeof body.displayName === "string" ? { displayName: body.displayName } : {})
+  });
+  return ok({
+    root: encodeAssignedRootDto(result.root),
+    indexing: { started: result.started, runId: result.runId ?? null }
+  }, { status: 201, headers: withCsrf(authenticated.responseHeaders, authenticated.csrfToken) });
 }
 
 async function removeRoot(request: Request, dependencies: ApiAppDependencies, now: Date, rootId: string) {
@@ -606,20 +659,6 @@ async function settingsDto(household: Household, repository: AppRepository) {
     defaultSlideshowSeconds: household.defaultSlideshowSeconds,
     indexHealth: { totalNodeCount: nodeCounts.total, availableNodeCount: nodeCounts.available, indexingSourceCount: sources.filter(source => source.status === "syncing" || source.crawlCheckpoint !== null).length, estimatedFirestoreDocumentCount: 1 + sources.length + roots.length + devices.length + requests.length + nodeCounts.total }
   };
-}
-
-async function providerAncestry(repository: AppRepository, node: MediaNode): Promise<string[]> {
-  const reversed: string[] = [];
-  let parentId = node.parentNodeId;
-  const seen = new Set<string>();
-  while (parentId && !seen.has(parentId) && seen.size < 256) {
-    seen.add(parentId);
-    const parent = await repository.getNode(parentId);
-    if (!parent || !parent.available || parent.sourceId !== node.sourceId || parent.householdId !== node.householdId) throw new HttpError(409, "ROOT_ANCESTRY_INVALID", "Folder ancestry is invalid.");
-    reversed.push(parent.providerNodeId);
-    parentId = parent.parentNodeId;
-  }
-  return reversed.reverse();
 }
 
 async function tvHome(request: Request, dependencies: ApiAppDependencies, now: Date) {
@@ -1178,12 +1217,37 @@ function normalizeHttpError(error: unknown): HttpError {
           : 502;
     return new HttpError(status, error.code, error.message);
   }
-  if (error instanceof ProviderError) {
+  if (error instanceof ProviderFolderError) {
+    const status = error.code === "PROVIDER_FOLDER_REQUIRED" || error.code === "INVALID_PAGE_SIZE"
+      ? 400
+      : 409;
+    const message = error.code === "PROVIDER_ROOT_MISSING"
+      ? "Reconnect this source."
+      : error.code === "PROVIDER_FOLDER_REQUIRED"
+        ? "Choose a folder."
+        : error.code === "INVALID_PAGE_SIZE"
+          ? "Page size is invalid."
+        : "This provider folder is unavailable for this source.";
+    return new HttpError(status, error.code, message);
+  }
+  if (error instanceof ProviderFolderLaunchError) {
     return new HttpError(
-      error.code === "PROVIDER_REAUTH_REQUIRED" ? 409 : 502,
+      503,
+      "INDEXING_LAUNCH_FAILED",
+      "The folder was selected, but indexing could not start. Retry indexing."
+    );
+  }
+  if (error instanceof ProviderError) {
+    const providerStatus = error.code === "PROVIDER_REAUTH_REQUIRED" ? 409
+      : error.code === "PROVIDER_NOT_FOUND" ? 404
+      : error.code === "PROVIDER_THROTTLED" ? 429
+      : error.code === "PROVIDER_TIMEOUT" || error.code === "PROVIDER_UNAVAILABLE" ? 503
+      : 502;
+    return new HttpError(
+      providerStatus,
       error.code,
       "The cloud provider request failed.",
-      error.retryAfterSeconds ?? undefined
+      boundedRetryAfterSeconds(error.retryAfterSeconds)
     );
   }
   if (error instanceof RepositoryError) {
@@ -1192,4 +1256,9 @@ function normalizeHttpError(error: unknown): HttpError {
     if (error.code === "ROOT_CONFLICT") return new HttpError(409, error.code, "Root already exists.");
   }
   return new HttpError(500, "INTERNAL_ERROR", "An unexpected error occurred.");
+}
+
+function boundedRetryAfterSeconds(value: number | null): number | undefined {
+  if (value === null || !Number.isFinite(value)) return undefined;
+  return Math.min(24 * 60 * 60, Math.max(0, Math.ceil(value)));
 }

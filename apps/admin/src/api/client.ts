@@ -1,6 +1,7 @@
 import type {
   AdminFolderTreeResponse,
   AdminOverviewResponse,
+  AdminProviderFolderPageResponse,
   AdminSettingsResponse,
   ApiError,
   ApiResult,
@@ -47,6 +48,7 @@ export interface AdminApi {
   sourceImpact(sourceId: string): Promise<SourceImpactResponse>;
   removeSource(sourceId: string): Promise<{ removed: true; roots: AssignedRootDto[]; devices: DeviceDto[] }>;
   sourceTree(sourceId: string, parentNodeId?: string): Promise<AdminFolderTreeResponse>;
+  providerFolders(sourceId: string, input: { providerFolderId?: string; cursor?: string | null; limit?: number; signal?: AbortSignal }): Promise<AdminProviderFolderPageResponse>;
   createRoot(sourceId: string, body: CreateAssignedRootBody): Promise<{ root: AssignedRootDto }>;
   rootImpact(rootId: string): Promise<SourceImpactResponse>;
   removeRoot(rootId: string): Promise<{ removed: true; roots: AssignedRootDto[]; devices: DeviceDto[] }>;
@@ -103,6 +105,14 @@ export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
     sourceImpact: id => request(`/api/admin/sources/${encodeURIComponent(id)}/impact`),
     removeSource: id => request(`/api/admin/sources/${encodeURIComponent(id)}`, { method: "DELETE", body: json({ confirm: true }) }),
     sourceTree: (id, parentNodeId) => request(`/api/admin/sources/${encodeURIComponent(id)}/tree${parentNodeId ? `?parentNodeId=${encodeURIComponent(parentNodeId)}` : ""}`),
+    providerFolders: (id, input) => {
+      const query = new URLSearchParams();
+      if (input.providerFolderId) query.set("providerFolderId", input.providerFolderId);
+      if (input.cursor) query.set("cursor", input.cursor);
+      if (input.limit !== undefined) query.set("limit", String(input.limit));
+      const suffix = query.size > 0 ? `?${query.toString()}` : "";
+      return request(`/api/admin/sources/${encodeURIComponent(id)}/provider-folders${suffix}`, { signal: input.signal });
+    },
     createRoot: (id, body) => request(`/api/admin/sources/${encodeURIComponent(id)}/roots`, { method: "POST", body: json(body) }),
     rootImpact: id => request(`/api/admin/roots/${encodeURIComponent(id)}/impact`),
     removeRoot: id => request(`/api/admin/roots/${encodeURIComponent(id)}`, { method: "DELETE", body: json({ confirm: true }) }),

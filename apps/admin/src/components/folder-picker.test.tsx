@@ -2,70 +2,52 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AdminFolderTreeResponse, AssignedRootDto, MediaNodeDto, SourceDto } from "@cloudframe/shared";
+import type { AssignedRootDto, DeviceDto, ProviderFolderDto, SourceDto } from "@cloudframe/shared";
 import type { AdminApi } from "../api/client";
 import { FolderPicker } from "./folder-picker";
 
 afterEach(cleanup);
-const source: SourceDto = { id: "source-1", provider: "google", accountLabel: "Home Drive", status: "healthy", accessTokenExpiresAt: null, nextSyncAt: null, lastSyncStartedAt: null, lastSyncCompletedAt: null, lastSyncErrorCode: null, indexProgress: null, createdAt: "2026-08-20T00:00:00.000Z" };
-const root: AssignedRootDto = { id: "root-1", sourceId: source.id, providerNodeId: "provider-albums", displayName: "Albums", ancestryProviderIds: [], enabled: true, createdAt: "2026-08-20T00:00:00.000Z" };
-const folder = (id: string, name: string, assignedRootId: string | null = null): AdminFolderTreeResponse["folders"][number] => ({ id, sourceId: source.id, provider: "google", parentNodeId: null, name, normalizedName: name.toLowerCase(), kind: "folder", mimeType: null, size: null, width: null, height: null, capturedAt: null, createdAtProvider: null, modifiedAtProvider: null, thumbnailRevision: null, hasPreview: true, folderCoverNodeIds: [`cover-${id}`], childFolderCount: 2, childMediaCount: 8, available: true, assignedRootId });
+const source: SourceDto = { id: "source-1", provider: "google", accountLabel: "Home Drive", status: "healthy", accessTokenExpiresAt: null, nextSyncAt: null, lastSyncStartedAt: null, lastSyncCompletedAt: null, lastSyncErrorCode: null, indexProgress: null, createdAt: "2026-08-20T00:00:00.000Z", providerRootId: "provider-root", indexState: { kind: "healthy", processedNodeCount: 0, pendingFolderCount: 0, recoverable: false, errorCode: null } };
+const root: AssignedRootDto = { id: "root-1", sourceId: source.id, providerNodeId: "provider-albums", displayName: "Albums", ancestryProviderIds: [], enabled: true, createdAt: source.createdAt };
+const providerRoot: ProviderFolderDto = { providerNodeId: "provider-root", parentProviderId: null, name: "My Drive", assignedRootId: null };
+const albums: ProviderFolderDto = { providerNodeId: "provider-albums", parentProviderId: "provider-root", name: "Albums", assignedRootId: root.id };
+const trips: ProviderFolderDto = { providerNodeId: "provider-trips", parentProviderId: "provider-root", name: "Trips", assignedRootId: null };
+const device: DeviceDto = { id: "device-1", name: "Living Room", enabled: true, assignedRootIds: [root.id], mediaOrder: null, slideshowSeconds: null, createdAt: source.createdAt, approvedAt: source.createdAt, lastSeenAt: source.createdAt, revokedAt: null };
 
 function pickerApi(): AdminApi {
-  const album = folder("node-albums", "Albums", root.id);
-  const trips = folder("node-trips", "Trips");
   return {
-    login: vi.fn(), logout: vi.fn(), overview: vi.fn(), approveRequest: vi.fn(), denyRequest: vi.fn(), updateDevice: vi.fn(), revokeDevice: vi.fn(), settings: vi.fn(), updateSettings: vi.fn(), rotatePassphrase: vi.fn(), sources: vi.fn(), authorizeSource: vi.fn(), syncSource: vi.fn(), sourceImpact: vi.fn(), removeSource: vi.fn(),
-    sourceTree: vi.fn().mockImplementation(async (_sourceId: string, parentId?: string) => parentId ? { source, parent: trips as MediaNodeDto, folders: [] } : { source, parent: null, folders: [album, trips] }),
-    createRoot: vi.fn().mockResolvedValue({ root }),
-    rootImpact: vi.fn().mockResolvedValue({ roots: [root], devices: [{ id: "device-1", name: "Living Room" }] }),
-    removeRoot: vi.fn().mockResolvedValue({ removed: true, roots: [root], devices: [] }),
-    thumbnailUrls: vi.fn().mockResolvedValue({ items: [{ nodeId: "cover-node-albums", status: "ready", url: "https://images.example/albums.jpg", expiresAt: "2026-08-26T01:00:00.000Z" }] })
+    login: vi.fn(), logout: vi.fn(), overview: vi.fn(), approveRequest: vi.fn(), denyRequest: vi.fn(), updateDevice: vi.fn(), revokeDevice: vi.fn(), settings: vi.fn(), updateSettings: vi.fn(), rotatePassphrase: vi.fn(), sources: vi.fn(), authorizeSource: vi.fn(), syncSource: vi.fn(), sourceImpact: vi.fn(), removeSource: vi.fn(), sourceTree: vi.fn(), thumbnailUrls: vi.fn(),
+    providerFolders: vi.fn().mockResolvedValue({ source, current: providerRoot, breadcrumbs: [providerRoot], folders: [albums, trips], nextCursor: null }),
+    createRoot: vi.fn().mockResolvedValue({ root: { ...root, id: "root-trips", providerNodeId: trips.providerNodeId, displayName: trips.name } }),
+    rootImpact: vi.fn().mockResolvedValue({ roots: [root], devices: [device] }),
+    removeRoot: vi.fn().mockResolvedValue({ removed: true, roots: [root], devices: [] })
   };
 }
 
-describe("indexed folder picker", () => {
-  it("batches thumbnails, marks server-assigned roots, navigates folders, and adds a root", async () => {
+describe("folder picker compatibility wrapper", () => {
+  it("browses live provider folders, marks selected roots, and adds a provider folder", async () => {
     const api = pickerApi(); const changed = vi.fn().mockResolvedValue(undefined);
     render(<FolderPicker source={source} roots={[root]} api={api} onChanged={changed} onClose={vi.fn()} />);
+
     expect(await screen.findByRole("button", { name: "Open Albums" })).toBeVisible();
-    expect(api.thumbnailUrls).toHaveBeenCalledWith(["cover-node-albums", "cover-node-trips"]);
-    expect(within(screen.getByRole("button", { name: "Open Albums" }).closest("article")!).getByRole("button", { name: "Added" })).toBeDisabled();
-    fireEvent.click(screen.getByRole("button", { name: "Open Trips" }));
-    await waitFor(() => expect(api.sourceTree).toHaveBeenCalledWith(source.id, "node-trips"));
-    fireEvent.click(screen.getByRole("button", { name: "Up one level" }));
-    await screen.findByRole("button", { name: "Open Trips" });
-    fireEvent.click(within(screen.getByRole("button", { name: "Open Trips" }).closest("article")!).getByRole("button", { name: "Add root" }));
-    await waitFor(() => expect(api.createRoot).toHaveBeenCalledWith(source.id, { nodeId: "node-trips" }));
+    expect(screen.getByRole("button", { name: "Albums is in the household program" })).toBeDisabled();
+    expect(api.sourceTree).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Add Trips to household program" }));
+    await waitFor(() => expect(api.createRoot).toHaveBeenCalledWith(source.id, { providerNodeId: trips.providerNodeId }));
     expect(changed).toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Trips is in the household program" })).toBeDisabled();
   });
 
-  it("loads impact, confirms root removal, and restores focus inside the parent sheet", async () => {
+  it("loads impact and confirms root removal without nesting dialogs", async () => {
     const api = pickerApi(); const changed = vi.fn().mockResolvedValue(undefined);
     render(<FolderPicker source={source} roots={[root]} api={api} onChanged={changed} onClose={vi.fn()} />);
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    const remove = await screen.findByRole("button", { name: "Remove root Albums" });
-    remove.focus(); fireEvent.click(remove);
-    const confirm = await screen.findByRole("dialog", { name: "Remove root" });
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(screen.queryByRole("dialog", { name: "Choose source folders" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Choose source folders" })).not.toBeInTheDocument();
-    expect(remove).not.toBeInTheDocument();
-    expect(within(confirm).getByText("Living Room")).toBeVisible();
-    fireEvent.click(within(confirm).getByRole("button", { name: "Cancel" }));
-    const restored = await screen.findByRole("button", { name: "Remove root Albums" });
-    await waitFor(() => expect(restored).toHaveFocus());
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    expect(screen.getByRole("dialog", { name: "Choose source folders" })).toBeVisible();
 
-    fireEvent.click(restored);
-    const secondConfirm = await screen.findByRole("dialog", { name: "Remove root" });
+    fireEvent.click(await screen.findByRole("button", { name: "Review removal impact for Albums" }));
+    const confirm = await screen.findByRole("dialog", { name: "Remove folder from household program" });
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    fireEvent.click(within(secondConfirm).getByRole("button", { name: "Remove root" }));
+    expect(within(confirm).getByText("Living Room")).toBeVisible();
+    fireEvent.click(within(confirm).getByRole("button", { name: "Remove Albums" }));
     await waitFor(() => expect(api.removeRoot).toHaveBeenCalledWith(root.id));
-    await waitFor(() => expect(changed).toHaveBeenCalled());
-    expect(screen.getAllByRole("dialog")).toHaveLength(1);
-    const parent = screen.getByRole("dialog", { name: "Choose source folders" });
-    await waitFor(() => expect(within(parent).getByRole("button", { name: "Close" })).toHaveFocus());
+    expect(changed).toHaveBeenCalled();
   });
 });

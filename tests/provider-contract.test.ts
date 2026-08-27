@@ -57,6 +57,12 @@ function createHarness(provider: ProviderKind): ContractHarness {
         name: "My Drive",
         mimeType: "application/vnd.google-apps.folder"
       });
+      if (url.pathname.endsWith("/files/g-folder-a")) return jsonResponse({
+        id: "g-folder-a",
+        name: "Albums",
+        mimeType: "application/vnd.google-apps.folder",
+        parents: ["g-root-actual"]
+      });
       if (url.pathname.endsWith("/files")) return jsonResponse(fixture(provider, "folder-page"));
       if (url.pathname.endsWith("/changes")) return jsonResponse(fixture(provider, "changes-page"));
       if (url.pathname.endsWith("/g-image-a")) {
@@ -71,6 +77,12 @@ function createHarness(provider: ProviderKind): ContractHarness {
         id: "o-root-actual",
         name: "OneDrive",
         folder: { childCount: 4 }
+      });
+      if (url.pathname.endsWith("/items/o-folder-a")) return jsonResponse({
+        id: "o-folder-a",
+        name: "Albums",
+        parentReference: { id: "o-root-actual" },
+        folder: { childCount: 0 }
       });
       if (url.pathname.endsWith("/children")) return jsonResponse(fixture(provider, "folder-page"));
       if (url.pathname.endsWith("/delta")) return jsonResponse(fixture(provider, "changes-page"));
@@ -191,6 +203,24 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     );
   });
 
+  it("resolves one exact provider folder for trusted ancestry checks", async () => {
+    const { adapter, requests } = createHarness(provider);
+    const node = await adapter.getNode({
+      credentials,
+      providerNodeId: provider === "google" ? "g-folder-a" : "o-folder-a"
+    });
+
+    expect(node).toMatchObject({
+      providerNodeId: provider === "google" ? "g-folder-a" : "o-folder-a",
+      parentProviderId: provider === "google" ? "g-root-actual" : "o-root-actual",
+      name: "Albums",
+      kind: "folder"
+    });
+    expect(requests.at(-1)?.pathname).toContain(
+      provider === "google" ? "/drive/v3/files/g-folder-a" : "/v1.0/me/drive/items/o-folder-a"
+    );
+  });
+
   it("normalizes deletes and moves from change pages", async () => {
     const { adapter } = createHarness(provider);
     const page = await adapter.getChanges({
@@ -285,6 +315,24 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
 });
 
 describe("provider failure normalization", () => {
+  it("normalizes HTTP 404 as a secret-safe provider-not-found error", async () => {
+    const fetch: typeof globalThis.fetch = async () =>
+      jsonResponse({ error: { message: "synthetic private upstream payload" } }, 404);
+    const adapter = createGoogleDriveAdapter({
+      clientId: "synthetic-client",
+      clientSecret: "synthetic-secret",
+      fetch,
+      now: () => now
+    });
+
+    const error = await adapter
+      .getNode({ credentials, providerNodeId: "missing-folder" })
+      .catch(value => value);
+
+    expect(error).toMatchObject({ code: "PROVIDER_NOT_FOUND", retryable: false });
+    expect(String(error)).not.toContain("private upstream payload");
+  });
+
   it.each([429, 503])("normalizes HTTP %s with retry metadata and no payload leak", async status => {
     const fetch: typeof globalThis.fetch = async () =>
       jsonResponse({ error: { message: "synthetic private upstream payload" } }, status, {
@@ -377,6 +425,54 @@ describe("provider failure normalization", () => {
       })
     ).rejects.toMatchObject({ code: "PROVIDER_BAD_RESPONSE" });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "another folder",
+      "https://graph.microsoft.com/v1.0/me/drive/items/o-other/children?$skiptoken=private"
+    ],
+    [
+      "another Graph resource",
+      "https://graph.microsoft.com/v1.0/me/drive/root/delta?$skiptoken=private"
+    ]
+  ])("rejects a OneDrive continuation URL for %s before fetching", async (_label, cursor) => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const adapter = createOneDriveAdapter({
+      clientId: "synthetic-client",
+      clientSecret: "synthetic-secret",
+      tenant: "common",
+      fetch,
+      now: () => now
+    });
+
+    await expect(adapter.listFolder({
+      credentials,
+      folderId: "o-root",
+      cursor,
+      pageSize: 10
+    })).rejects.toMatchObject({ code: "PROVIDER_BAD_RESPONSE" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("accepts only the encoded OneDrive folder path for a continuation URL", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => jsonResponse({ value: [] }));
+    const adapter = createOneDriveAdapter({
+      clientId: "synthetic-client",
+      clientSecret: "synthetic-secret",
+      tenant: "common",
+      fetch,
+      now: () => now
+    });
+
+    await adapter.listFolder({
+      credentials,
+      folderId: "folder/with space",
+      cursor: "https://graph.microsoft.com/v1.0/me/drive/items/folder%2Fwith%20space/children?$skiptoken=private",
+      pageSize: 10
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("returns null when OneDrive reports that no thumbnail exists", async () => {

@@ -1,6 +1,6 @@
 import { createHash, randomBytes as nodeRandomBytes } from "node:crypto";
 
-import type { AssignedRoot, OAuthState, ProviderKind, Source } from "@cloudframe/shared";
+import type { OAuthState, ProviderKind, Source } from "@cloudframe/shared";
 import type { ProviderRegistry } from "@cloudframe/providers";
 import {
   decryptProviderToken,
@@ -8,8 +8,7 @@ import {
   type ProviderTokenKeyring
 } from "../crypto/provider-tokens";
 import { hashOpaqueToken } from "../auth/tokens";
-import type { AppRepository } from "../firestore/repository";
-import { assignedRootDocumentId } from "../firestore/repository";
+import { RepositoryError, type AppRepository } from "../firestore/repository";
 import { createSourceService } from "./sources";
 
 const STATE_BYTES = 32;
@@ -41,7 +40,6 @@ export interface OAuthServiceDependencies {
   now: () => Date;
   createId: () => string;
   randomBytes?: (size: number) => Uint8Array;
-  startInitialSync: (sourceId: string) => Promise<void>;
   logger?: (event: { code: string; provider: ProviderKind }) => void;
 }
 
@@ -51,8 +49,7 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
     providers,
     keyring,
     now,
-    createId,
-    startInitialSync
+    createId
   } = dependencies;
   const randomBytes = dependencies.randomBytes ?? (size => nodeRandomBytes(size));
   const sourceService = createSourceService({ repository, providers, keyring, now });
@@ -146,9 +143,12 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
       redirectUri: input.redirectUri,
       codeVerifier
     });
+    const providerRoot = await providers.get(consumed.provider).getRoot(account.credentials);
+    if (providerRoot.kind !== "folder" || providerRoot.parentProviderId !== null) {
+      throw new OAuthServiceError("OAUTH_PROVIDER_ERROR", "Cloud authorization failed.");
+    }
 
     let source: Source;
-    let initialRoot: AssignedRoot | null = null;
     if (consumed.reconnectSourceId) {
       const existing = await repository.getSource(consumed.reconnectSourceId);
       if (
@@ -168,6 +168,15 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
           "Reconnect must use the same cloud account."
         );
       }
+      if (
+        existing.providerRootId !== null &&
+        existing.providerRootId !== providerRoot.providerNodeId
+      ) {
+        throw new OAuthServiceError(
+          "OAUTH_ACCOUNT_MISMATCH",
+          "Reconnect must use the same cloud account root."
+        );
+      }
       const current = sourceService.decryptSource(existing).credentials;
       const refreshToken = account.credentials.refreshToken ?? current.refreshToken;
       if (!refreshToken) {
@@ -176,55 +185,51 @@ export function createOAuthService(dependencies: OAuthServiceDependencies) {
           "Cloud authorization did not include renewable access."
         );
       }
-      source = {
-        ...existing,
-        providerAccountId: migrationReconnect
-          ? account.accountId
-          : existing.providerAccountId,
-        accountLabel: account.accountLabel,
-        encryptedRefreshToken: encryptProviderToken(refreshToken, keyring),
-        encryptedAccessToken: encryptProviderToken(
-          account.credentials.accessToken,
-          keyring
-        ),
-        accessTokenExpiresAt: account.credentials.accessTokenExpiresAt,
-        status: "syncing",
-        lastSyncErrorCode: null
-      };
+      try {
+        source = await repository.reconnectSource({
+          sourceId: existing.id,
+          householdId: consumed.householdId,
+          provider: consumed.provider,
+          providerAccountId: account.accountId,
+          providerRootId: providerRoot.providerNodeId,
+          accountLabel: account.accountLabel,
+          credentials: {
+            encryptedRefreshToken: encryptProviderToken(refreshToken, keyring),
+            encryptedAccessToken: encryptProviderToken(
+              account.credentials.accessToken,
+              keyring
+            ),
+            accessTokenExpiresAt: account.credentials.accessTokenExpiresAt
+          }
+        });
+      } catch (error) {
+        if (
+          error instanceof RepositoryError &&
+          error.code === "SOURCE_RECONNECT_MISMATCH"
+        ) {
+          throw new OAuthServiceError(
+            "OAUTH_ACCOUNT_MISMATCH",
+            "Reconnect must use the same cloud account."
+          );
+        }
+        if (error instanceof RepositoryError && error.code === "SOURCE_NOT_FOUND") {
+          throw new OAuthServiceError("SOURCE_NOT_FOUND", "Source not found.");
+        }
+        throw error;
+      }
     } else {
       source = sourceService.encryptSource({
         id: createId(),
         householdId: consumed.householdId,
         provider: consumed.provider,
         providerAccountId: account.accountId,
+        providerRootId: providerRoot.providerNodeId,
         accountLabel: account.accountLabel,
         credentials: account.credentials,
         createdAt: now()
       });
-      const providerRoot = await providers
-        .get(consumed.provider)
-        .getRoot(account.credentials);
-      if (providerRoot.kind !== "folder" || providerRoot.parentProviderId !== null) {
-        throw new OAuthServiceError("OAUTH_PROVIDER_ERROR", "Cloud authorization failed.");
-      }
-      initialRoot = {
-        id: assignedRootDocumentId(consumed.householdId, source.id, providerRoot.providerNodeId),
-        householdId: consumed.householdId,
-        sourceId: source.id,
-        providerNodeId: providerRoot.providerNodeId,
-        displayName: providerRoot.name || account.accountLabel,
-        ancestryProviderIds: [],
-        enabled: true,
-        createdAt: now()
-      };
+      await repository.connectSource(source);
     }
-
-    if (initialRoot) {
-      await repository.connectSourceWithRoot({ source, root: initialRoot });
-    } else {
-      await repository.putSource(source);
-    }
-    await startInitialSync(source.id);
     return { sourceId: source.id, status: "connected" as const };
   }
 

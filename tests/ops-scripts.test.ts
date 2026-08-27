@@ -119,6 +119,7 @@ describe("operations scripts", () => {
     expect(source).toContain("Chrome/68.");
     expect(source).toContain("AbortController");
     expect(source).toContain("remote-debugging-port");
+    expect(source).toContain('toLocaleLowerCase().includes("cloudframe")');
     expect(source).not.toContain("latest");
   });
 });

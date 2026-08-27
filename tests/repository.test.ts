@@ -8,6 +8,7 @@ import type {
   DeviceSession,
   Household,
   MediaNode,
+  IndexCheckpoint,
   Source,
   WatchHistory
 } from "@cloudframe/shared";
@@ -15,10 +16,12 @@ import {
   assignedRootDocumentId,
   createFirestoreClient,
   decodeFirestoreDocument,
+  decodeSourceDocument,
   FirestoreRepository,
   MemoryRepository,
   type FirestoreClientSettings
 } from "@cloudframe/server";
+import { deterministicNodeId } from "@cloudframe/indexer";
 import type { Firestore } from "@google-cloud/firestore";
 
 const now = new Date("2026-08-26T00:00:00Z");
@@ -330,6 +333,168 @@ describe("MemoryRepository domain storage", () => {
     expect(await repo.listChildNodes(null, ["s1"])).toEqual([folder]);
     expect(await repo.getWatchHistory("d1", "n1")).toEqual(history);
   });
+
+  it("atomically re-enables one deterministic root and resets initial source state", async () => {
+    const repo = new MemoryRepository();
+    const source = makeSource({
+      status: "error",
+      deltaCursor: "stale-delta",
+      crawlCheckpoint: {
+        mode: "delta",
+        providerPageCursor: "page-2",
+        processedNodeCount: 12,
+        generation: "old-generation"
+      },
+      activeWorkflowRunId: "old-run",
+      syncGeneration: "old-generation",
+      nextSyncAt: later,
+      leaseOwner: "old-owner",
+      leaseExpiresAt: later,
+      lastSyncErrorCode: "PROVIDER_TIMEOUT"
+    });
+    const disabled = { ...makeRoot(), enabled: false, displayName: "Old name" };
+    await repo.putSource(source);
+    await repo.putRoot(disabled);
+    const root = { ...disabled, id: "random-request-id", displayName: "Family photos", ancestryProviderIds: ["root"] };
+
+    const [first, second] = await Promise.all([
+      repo.enableRootAndResetInitial({ root, sourceId: source.id, resetAt: now }),
+      repo.enableRootAndResetInitial({ root, sourceId: source.id, resetAt: now })
+    ]);
+
+    const expectedId = assignedRootDocumentId("h1", "s1", "provider-root");
+    expect(first).toMatchObject({ id: expectedId, enabled: true, displayName: "Family photos", ancestryProviderIds: ["root"] });
+    expect(second.id).toBe(expectedId);
+    expect(await repo.listRootsForSource(source.id)).toHaveLength(1);
+    expect(await repo.getSource(source.id)).toEqual({
+      ...source,
+      status: "syncing",
+      deltaCursor: null,
+      crawlCheckpoint: null,
+      activeWorkflowRunId: null,
+      syncGeneration: null,
+      nextSyncAt: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
+      lastSyncErrorCode: null
+    });
+  });
+
+  it.each(["initial", "reconcile"] as const)(
+    "does not clear an active selected-root lease during %s when a duplicate selection arrives",
+    async mode => {
+    const repo = new MemoryRepository();
+    const source = makeSource({
+      status: "syncing",
+      deltaCursor: null,
+      crawlCheckpoint: {
+        mode,
+        providerPageCursor: "page-2",
+        processedNodeCount: 25,
+        generation: "generation-1",
+        ...(mode === "initial"
+          ? { pendingProviderFolderIds: ["photos-child"] }
+          : { reconciliationCursor: "node-25" })
+      },
+      activeWorkflowRunId: "run-1",
+      nextSyncAt: null,
+      leaseOwner: "active-owner",
+      leaseExpiresAt: later,
+      lastSyncErrorCode: null
+    });
+    const root = makeRoot();
+    await repo.putSource(source);
+    await repo.putRoot(root);
+
+    await repo.enableRootAndResetInitial({ root, sourceId: source.id, resetAt: now });
+
+    expect(await repo.getSource(source.id)).toEqual(source);
+    }
+  );
+
+  it("resets an active crawl when a different root is added", async () => {
+    const repo = new MemoryRepository();
+    const source = makeSource({
+      status: "syncing",
+      deltaCursor: null,
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: "page-2",
+        processedNodeCount: 25,
+        generation: "generation-1",
+        pendingProviderFolderIds: ["photos-child"]
+      },
+      activeWorkflowRunId: "run-1",
+      nextSyncAt: null,
+      leaseOwner: "active-owner",
+      leaseExpiresAt: later,
+      lastSyncErrorCode: null
+    });
+    const existing = makeRoot();
+    const added = {
+      ...makeRoot(),
+      id: "new-root",
+      providerNodeId: "another-folder",
+      displayName: "Another folder",
+      ancestryProviderIds: ["root-provider"]
+    };
+    await repo.putSource(source);
+    await repo.putRoot(existing);
+
+    await repo.enableRootAndResetInitial({ root: added, sourceId: source.id, resetAt: now });
+
+    expect(await repo.getSource(source.id)).toMatchObject({
+      status: "syncing",
+      crawlCheckpoint: null,
+      activeWorkflowRunId: null,
+      leaseOwner: null,
+      leaseExpiresAt: null
+    });
+    expect(await repo.listRootsForSource(source.id)).toHaveLength(2);
+  });
+
+  it("rejects a stale reconcile transition after a new root resets initial state", async () => {
+    const repo = new MemoryRepository();
+    const checkpoint: IndexCheckpoint = {
+      mode: "initial",
+      providerPageCursor: null,
+      processedNodeCount: 25,
+      generation: "generation-old",
+      rootProviderIds: ["provider-root"],
+      currentProviderFolderId: null,
+      pendingProviderFolderIds: [],
+      pageFingerprint: "old-page"
+    };
+    const source = makeSource({
+      status: "syncing",
+      crawlCheckpoint: checkpoint,
+      activeWorkflowRunId: "old-run",
+      leaseOwner: "old-owner",
+      leaseExpiresAt: later
+    });
+    await repo.putSource(source);
+    await repo.putRoot(makeRoot());
+    await repo.enableRootAndResetInitial({
+      root: {
+        ...makeRoot(),
+        id: "new-root",
+        providerNodeId: "new-provider-root"
+      },
+      sourceId: source.id,
+      resetAt: now
+    });
+    const resetSource = await repo.getSource(source.id);
+
+    await expect(repo.transitionToReconcileIfCurrent({
+      sourceId: source.id,
+      expectedLeaseOwner: "old-owner",
+      expectedPreviousCheckpoint: checkpoint,
+      changedAt: now,
+      newCheckpoint: reconcileCheckpoint(checkpoint),
+      leaseExpiresAt: later
+    })).resolves.toBe(false);
+    expect(await repo.getSource(source.id)).toEqual(resetSource);
+  });
 });
 
 describe("Firestore client authentication boundary", () => {
@@ -445,6 +610,24 @@ describe("Firestore client authentication boundary", () => {
 });
 
 describe("Firestore document decoding", () => {
+  it("decodes a pre-redesign source with a null provider root identity", () => {
+    const legacy = { ...makeSource() } as Record<string, unknown>;
+    delete legacy.providerRootId;
+
+    expect(decodeSourceDocument("source-1", legacy).providerRootId).toBeNull();
+  });
+
+  it("normalizes pre-redesign sources seeded into the memory repository", async () => {
+    const repository = new MemoryRepository();
+    const legacy = { ...makeSource() } as Record<string, unknown>;
+    delete legacy.providerRootId;
+
+    await repository.putSource(legacy as unknown as Source);
+
+    expect((await repository.getSource("s1"))?.providerRootId).toBeNull();
+    expect((await repository.listSources("h1"))[0]?.providerRootId).toBeNull();
+  });
+
   it("converts nested Firestore timestamps into shared Date contracts", () => {
     const decoded = decodeFirestoreDocument("s1", {
       createdAt: { toDate: () => now },
@@ -609,19 +792,115 @@ describe("FirestoreRepository device approval", () => {
 });
 
 describe("FirestoreRepository admin management transactions", () => {
-  it("creates source and initial root in one transaction", async () => {
+  it("atomically cascades removed folders to available descendants", async () => {
+    const writes: string[] = [];
+    const source = makeSource({
+      status: "syncing",
+      leaseOwner: "owner",
+      leaseExpiresAt: later
+    });
+    const root = repositoryNode("root", "folder", null, []);
+    const folder = repositoryNode("folder", "folder", root.id, [root.id]);
+    const child = repositoryNode("child", "image", folder.id, [root.id, folder.id]);
+    const firestore = createManagementFirestore({ writes, source, nodes: [root, folder, child] });
+    const repo = new FirestoreRepository(firestore);
+
+    await repo.commitIndexBatch({
+      sourceId: source.id,
+      mode: "delta",
+      generation: "generation-delta",
+      checkpoint: {
+        mode: "delta",
+        providerPageCursor: null,
+        processedNodeCount: 1,
+        generation: "generation-delta"
+      },
+      deltaCursor: "delta-next",
+      nodes: [],
+      removedNodeIds: [folder.id],
+      affectedAncestorNodeIds: [root.id],
+      completedAt: now,
+      expectedLeaseOwner: "owner",
+      expectedPreviousCheckpoint: null,
+      committedAt: now
+    });
+
+    expect(await repo.getNode(folder.id)).toMatchObject({ available: false });
+    expect(await repo.getNode(child.id)).toMatchObject({ available: false });
+    expect(writes.filter(value => value.startsWith("set:nodes/"))).toHaveLength(3);
+  });
+
+  it("connects a source atomically without creating a root", async () => {
     const writes: string[] = [];
     const firestore = createManagementFirestore({ writes });
     const repo = new FirestoreRepository(firestore);
     const source = makeSource();
-    const root = makeRoot();
 
-    await repo.connectSourceWithRoot({ source, root });
+    await repo.connectSource(source);
 
-    expect(writes).toEqual([
-      "create:sources/s1",
-      `create:roots/${assignedRootDocumentId("h1", "s1", "provider-root")}`
-    ]);
+    expect(await repo.getSource(source.id)).toEqual(source);
+    expect(await repo.listRootsForSource(source.id)).toEqual([]);
+    expect(writes).toEqual(["create:sources/s1"]);
+  });
+
+  it("reconnects with a partial transaction update that preserves current indexing state", async () => {
+    const writes: string[] = [];
+    const current: Source = {
+      ...makeSource(),
+      status: "reauth-required",
+      crawlCheckpoint: {
+        mode: "initial",
+        providerPageCursor: "commit-time-page",
+        processedNodeCount: 42,
+        generation: "commit-time-generation"
+      },
+      activeWorkflowRunId: "run-current",
+      syncGeneration: "commit-time-generation",
+      nextSyncAt: later,
+      leaseOwner: "worker-current",
+      leaseExpiresAt: later,
+      lastSyncStartedAt: now,
+      lastSyncCompletedAt: new Date("2026-08-25T00:00:00Z"),
+      lastSyncErrorCode: "PROVIDER_REAUTH_REQUIRED"
+    };
+    const firestore = createManagementFirestore({
+      writes,
+      source: current,
+      roots: [makeRoot()]
+    });
+    const repo = new FirestoreRepository(firestore);
+    const updated = await repo.reconnectSource({
+      sourceId: current.id,
+      householdId: current.householdId,
+      provider: current.provider,
+      providerAccountId: current.providerAccountId!,
+      providerRootId: "provider-root",
+      accountLabel: "New label",
+      credentials: {
+        encryptedRefreshToken: { ...current.encryptedRefreshToken, ciphertext: "new-refresh" },
+        encryptedAccessToken: { ...current.encryptedRefreshToken, ciphertext: "new-access" },
+        accessTokenExpiresAt: later
+      }
+    });
+
+    expect(updated).toMatchObject({
+      accountLabel: "New label",
+      status: "syncing",
+      crawlCheckpoint: current.crawlCheckpoint,
+      activeWorkflowRunId: "run-current",
+      syncGeneration: "commit-time-generation",
+      nextSyncAt: later,
+      leaseOwner: "worker-current",
+      leaseExpiresAt: later,
+      lastSyncStartedAt: now,
+      lastSyncCompletedAt: current.lastSyncCompletedAt,
+      lastSyncErrorCode: null
+    });
+    expect(writes).toHaveLength(1);
+    expect(writes[0]).toContain("update:sources/s1:");
+    expect(writes[0]).not.toContain("crawlCheckpoint");
+    expect(writes[0]).not.toContain("leaseOwner");
+    expect(writes[0]).not.toContain("nextSyncAt");
   });
 
   it("removes source, disables roots, and detaches devices in one transaction", async () => {
@@ -690,6 +969,157 @@ describe("FirestoreRepository admin management transactions", () => {
     expect(writes).toContain("delete:roots/root-1");
     expect(writes).toContain(`update:devices/d1:{"assignedRootIds":["${expectedId}"]}`);
   });
+
+  it("enables the deterministic root and resets its source in one Firestore transaction", async () => {
+    const writes: string[] = [];
+    const source = makeSource({
+      status: "error",
+      deltaCursor: "stale-delta",
+      nextSyncAt: later,
+      lastSyncErrorCode: "RESOURCE_EXHAUSTED"
+    });
+    const firestore = createManagementFirestore({ writes, source });
+    const repo = new FirestoreRepository(firestore);
+
+    const root = await repo.enableRootAndResetInitial({
+      root: { ...makeRoot(), id: "random-root", displayName: "Photos" },
+      sourceId: source.id,
+      resetAt: now
+    });
+
+    const expectedId = assignedRootDocumentId("h1", "s1", "provider-root");
+    expect(root).toMatchObject({ id: expectedId, displayName: "Photos", enabled: true });
+    expect(writes).toContain(`create:roots/${expectedId}`);
+    expect(writes).toContain(
+      "update:sources/s1:{\"status\":\"syncing\",\"deltaCursor\":null,\"crawlCheckpoint\":null,\"activeWorkflowRunId\":null,\"syncGeneration\":null,\"nextSyncAt\":null,\"leaseOwner\":null,\"leaseExpiresAt\":null,\"lastSyncErrorCode\":null}"
+    );
+  });
+
+  it("transitions a current Firestore checkpoint to reconcile with a partial transaction update", async () => {
+    const writes: string[] = [];
+    const extendedLease = new Date("2026-08-28T00:00:00Z");
+    const checkpoint: IndexCheckpoint = {
+      mode: "initial",
+      providerPageCursor: null,
+      processedNodeCount: 25,
+      generation: "generation-current",
+      rootProviderIds: ["provider-root"],
+      currentProviderFolderId: null,
+      pendingProviderFolderIds: [],
+      pageFingerprint: "current-page"
+    };
+    const source = makeSource({
+      status: "syncing",
+      crawlCheckpoint: checkpoint,
+      activeWorkflowRunId: "run-current",
+      leaseOwner: "worker-current",
+      leaseExpiresAt: later
+    });
+    const repo = new FirestoreRepository(createManagementFirestore({ writes, source }));
+    const newCheckpoint = reconcileCheckpoint(checkpoint);
+
+    await expect(repo.transitionToReconcileIfCurrent({
+      sourceId: source.id,
+      expectedLeaseOwner: "worker-current",
+      expectedPreviousCheckpoint: checkpoint,
+      changedAt: now,
+      newCheckpoint,
+      leaseExpiresAt: extendedLease
+    })).resolves.toBe(true);
+    expect(await repo.getSource(source.id)).toEqual({
+      ...source,
+      crawlCheckpoint: newCheckpoint,
+      leaseExpiresAt: extendedLease
+    });
+    expect(writes).toEqual([
+      `update:sources/s1:${JSON.stringify({ crawlCheckpoint: newCheckpoint, leaseExpiresAt: extendedLease })}`
+    ]);
+  });
+
+  it.each([
+    ["generation", { generation: "generation-new" }],
+    ["enabled-root snapshot", { rootProviderIds: ["provider-root", "new-provider-root"] }],
+    ["page fingerprint", { pageFingerprint: "new-page" }]
+  ] satisfies Array<[string, Partial<IndexCheckpoint>]>) (
+    "rejects a stale Firestore reconcile transition after the %s changes",
+    async (_label, checkpointPatch) => {
+      const writes: string[] = [];
+      const expectedCheckpoint: IndexCheckpoint = {
+        mode: "initial",
+        providerPageCursor: null,
+        processedNodeCount: 25,
+        generation: "generation-old",
+        rootProviderIds: ["provider-root"],
+        currentProviderFolderId: null,
+        pendingProviderFolderIds: [],
+        pageFingerprint: "old-page"
+      };
+      const currentCheckpoint: IndexCheckpoint = {
+        ...expectedCheckpoint,
+        ...checkpointPatch
+      };
+      const source = makeSource({
+        status: "syncing",
+        crawlCheckpoint: currentCheckpoint,
+        activeWorkflowRunId: "run-new",
+        leaseOwner: "worker-current",
+        leaseExpiresAt: later
+      });
+      const repo = new FirestoreRepository(createManagementFirestore({ writes, source }));
+
+      await expect(repo.transitionToReconcileIfCurrent({
+        sourceId: source.id,
+        expectedLeaseOwner: "worker-current",
+        expectedPreviousCheckpoint: expectedCheckpoint,
+        changedAt: now,
+        newCheckpoint: reconcileCheckpoint(expectedCheckpoint),
+        leaseExpiresAt: later
+      })).resolves.toBe(false);
+      expect(await repo.getSource(source.id)).toEqual(source);
+      expect(writes).toEqual([]);
+    }
+  );
+
+  it.each(["initial", "reconcile"] as const)(
+    "preserves a checkpointed active selected-root sync during %s for the same enabled Firestore root",
+    async mode => {
+    const writes: string[] = [];
+    const source = makeSource({
+      status: "syncing",
+      deltaCursor: null,
+      crawlCheckpoint: {
+        mode,
+        providerPageCursor: "page-2",
+        processedNodeCount: 25,
+        generation: "generation-1",
+        ...(mode === "initial"
+          ? { pendingProviderFolderIds: ["photos-child"] }
+          : { reconciliationCursor: "node-25" })
+      },
+      activeWorkflowRunId: "run-1",
+      nextSyncAt: null,
+      leaseOwner: "active-owner",
+      leaseExpiresAt: later,
+      lastSyncErrorCode: null
+    });
+    const existing = {
+      ...makeRoot(),
+      id: assignedRootDocumentId("h1", "s1", "provider-root"),
+      displayName: "Old label"
+    };
+    const firestore = createManagementFirestore({ writes, source, roots: [existing] });
+    const repo = new FirestoreRepository(firestore);
+
+    await repo.enableRootAndResetInitial({
+      root: { ...existing, displayName: "Updated label" },
+      sourceId: source.id,
+      resetAt: now
+    });
+
+    expect(writes.some(write => write.startsWith("update:sources/s1:"))).toBe(false);
+    expect(writes.some(write => write.startsWith(`set:roots/${existing.id}:`))).toBe(true);
+    }
+  );
 
   it("serializes concurrent absent-root creates onto one deterministic document", async () => {
     const fake = createConcurrentRootFirestore();
@@ -790,15 +1220,24 @@ function createManagementFirestore(options: {
   source?: Source;
   roots?: AssignedRoot[];
   devices?: Device[];
+  nodes?: MediaNode[];
 }): Firestore {
-  type Ref = { key: string; id: string };
+  type Ref = {
+    key: string;
+    id: string;
+    get(): Promise<ReturnType<typeof snapshot>>;
+  };
   type QueryLike = { collection: string; filters: Array<[string, unknown]>; limit?: number };
   const refs = new Map<string, Ref>();
   const ref = (collection: string, id: string): Ref => {
     const key = `${collection}/${id}`;
     const current = refs.get(key);
     if (current) return current;
-    const value = { key, id };
+    const value = {
+      key,
+      id,
+      async get() { return snapshot(value); }
+    };
     refs.set(key, value);
     return value;
   };
@@ -806,6 +1245,7 @@ function createManagementFirestore(options: {
   if (options.source) documents.set(`sources/${options.source.id}`, options.source);
   for (const root of options.roots ?? []) documents.set(`roots/${root.id}`, root);
   for (const value of options.devices ?? []) documents.set(`devices/${value.id}`, value);
+  for (const value of options.nodes ?? []) documents.set(`nodes/${value.id}`, value);
   const snapshot = (reference: Ref) => ({
     id: reference.id,
     ref: reference,
@@ -834,6 +1274,7 @@ function createManagementFirestore(options: {
       const queryBuilder = (current: QueryLike): unknown => ({
         where(field: string, _operator: string, value: unknown) { return queryBuilder({ ...current, filters: [...current.filters, [field, value]] }); },
         limit(value: number) { return queryBuilder({ ...current, limit: value }); },
+        async get() { return querySnapshots(current); },
         __query: current
       });
       return builder;
@@ -856,6 +1297,11 @@ function createManagementFirestore(options: {
         },
         update(reference: Ref, patch: unknown) {
           options.writes.push(`update:${reference.key}:${JSON.stringify(patch)}`);
+          const current = documents.get(reference.key);
+          documents.set(reference.key, {
+            ...(typeof current === "object" && current !== null ? current : {}),
+            ...(typeof patch === "object" && patch !== null ? patch : {})
+          });
         },
         delete(reference: Ref) {
           options.writes.push(`delete:${reference.key}`);
@@ -1047,12 +1493,13 @@ function createConcurrentRootFirestore(): {
   };
 }
 
-function makeSource(): Source {
+function makeSource(overrides: Partial<Source> = {}): Source {
   return {
     id: "s1",
     householdId: "h1",
     provider: "google",
     providerAccountId: "synthetic-account-a",
+    providerRootId: null,
     accountLabel: "Family Google Drive",
     encryptedRefreshToken: {
       keyVersion: "v1",
@@ -1073,6 +1520,52 @@ function makeSource(): Source {
     lastSyncStartedAt: null,
     lastSyncCompletedAt: null,
     lastSyncErrorCode: null,
-    createdAt: now
+    createdAt: now,
+    ...overrides
+  };
+}
+
+function reconcileCheckpoint(checkpoint: IndexCheckpoint): IndexCheckpoint {
+  return {
+    mode: "reconcile",
+    providerPageCursor: null,
+    processedNodeCount: checkpoint.processedNodeCount,
+    generation: checkpoint.generation,
+    reconciliationCursor: null
+  };
+}
+
+function repositoryNode(
+  providerNodeId: string,
+  kind: MediaNode["kind"],
+  parentNodeId: string | null,
+  ancestorNodeIds: string[]
+): MediaNode {
+  return {
+    id: deterministicNodeId("s1", providerNodeId),
+    householdId: "h1",
+    sourceId: "s1",
+    provider: "google",
+    providerNodeId,
+    parentNodeId,
+    ancestorNodeIds,
+    name: providerNodeId,
+    normalizedName: providerNodeId,
+    kind,
+    mimeType: kind === "folder" ? null : "image/jpeg",
+    size: kind === "folder" ? null : 1,
+    width: kind === "folder" ? null : 1,
+    height: kind === "folder" ? null : 1,
+    capturedAt: null,
+    createdAtProvider: now,
+    modifiedAtProvider: now,
+    thumbnailRevision: kind === "folder" ? null : "r",
+    hasPreview: kind !== "folder",
+    folderCoverNodeIds: [],
+    childFolderCount: 0,
+    childMediaCount: 0,
+    available: true,
+    indexedAt: now,
+    syncGeneration: "generation-old"
   };
 }

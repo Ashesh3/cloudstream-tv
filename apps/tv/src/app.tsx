@@ -6,6 +6,7 @@ import { tvApi, type TvApi, type TvFolderResponse } from "./api/client";
 import { DeviceRequest, StatePanel } from "./components/device-request";
 import { FolderCard } from "./components/folder-card";
 import { MediaCard } from "./components/media-card";
+import { ProgramStatus } from "./components/program-status";
 import { SourceDrawer } from "./components/source-drawer";
 import { TvHeader } from "./components/tv-header";
 import { VirtualGrid } from "./components/virtual-grid";
@@ -245,23 +246,32 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
   if (viewer) return <Viewer api={api} items={viewer.items} selectedItemId={viewer.selectedItemId} slideshowSeconds={slideshowSeconds} previews={thumbnails} onClose={closeViewer} onUnauthorized={onUnauthorized} />;
 
   const title = browse.folder?.parent.name ?? "Home";
+  const currentProgram = !browse.folder && browse.items[focusedIndex]?.itemType === "root"
+    ? browse.items[focusedIndex] as ({ itemType: "root" } & TvRootCardDto)
+    : null;
   return (
     <main className="browser-shell">
       <TvHeader title={title} breadcrumbs={browse.folder?.breadcrumbs} onHome={loadHome} onSources={() => setDrawerOpen(true)} />
-      <section className="browse-heading">
-        <div><p className="eyebrow">{browse.folder ? "Folder" : "Your cloud drive"}</p><h1>{title}</h1></div>
-        <p>{browse.items.length} {browse.items.length === 1 ? "item" : "items"}</p>
-      </section>
-      {browse.items.length === 0 ? (
-        <section className="empty-folder"><span className="empty-folder-icon" /><h2>This folder is empty</h2><p>There are no photos, videos, or folders here yet.</p></section>
+      {currentProgram ? (
+        <ProgramProjection program={currentProgram} thumbnails={thumbnails} />
       ) : (
-        <VirtualGrid
+        <section className="browse-heading">
+          <div><h1>{title}</h1><p>Household collection</p></div>
+          <p>{browse.items.length} {browse.items.length === 1 ? "entry" : "entries"}</p>
+        </section>
+      )}
+      {browse.items.length === 0 ? (
+        <section className="empty-folder"><span className="empty-folder-icon"><i /></span><h2>This folder is empty</h2><p>The indexed collection contains no folders or media.</p></section>
+      ) : (
+        <section className={browse.folder ? "collection-grid" : "program-row"}>
+          {!browse.folder && <header><h2>Household program</h2><p>Use the remote to choose a collection</p></header>}
+          <VirtualGrid
           ariaLabel={title}
           items={browse.items}
           focusedIndex={focusedIndex}
-          columns={columns}
-          rowHeight={cardRowHeight()}
-          viewportHeight={viewportHeight}
+          columns={browse.folder ? columns : programColumnsForWidth(window.innerWidth)}
+          rowHeight={browse.folder ? cardRowHeight() : programRowHeight()}
+          viewportHeight={browse.folder ? viewportHeight : programViewportHeight()}
           scrollTop={scrollTop}
           hasNextPage={Boolean(browse.nextCursor)}
           focusRevision={restoredFocusTick}
@@ -269,7 +279,10 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
           onMountedItemsChange={setMountedIds}
           onFocusedIndexChange={(index, extend, pendingIndex) => {
             setFocusedIndex(index);
-            ensureIndexVisible(index, columns, cardRowHeight(), viewportHeight, scrollTop, setScrollTop);
+            const activeColumns = browse.folder ? columns : programColumnsForWidth(window.innerWidth);
+            const activeRowHeight = browse.folder ? cardRowHeight() : programRowHeight();
+            const activeViewport = browse.folder ? viewportHeight : programViewportHeight();
+            ensureIndexVisible(index, activeColumns, activeRowHeight, activeViewport, scrollTop, setScrollTop);
             if (extend) appendNextPage(pendingIndex);
           }}
           onSelect={openItem}
@@ -280,6 +293,9 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
               subtitle={item.itemType === "root" ? `${providerLabel(item.provider)} · ${item.accountLabel}` : folderCount(item)}
               thumbnails={(item.folderCoverNodeIds ?? []).map(id => ({ nodeId: id, url: thumbnails[id]?.url }))}
               focused={state.focused}
+              program={item.itemType === "root"}
+              readiness={item.itemType === "root" ? item.readiness : "ready"}
+              readinessMessage={item.itemType === "root" ? item.readinessMessage : "Ready to screen"}
               onSelect={() => openItem(item, state.index)}
             />
           ) : (
@@ -292,10 +308,37 @@ function BrowserShell({ api, onUnauthorized, slideshowSeconds }: { api: TvApi; o
               onSelect={() => openItem(item, state.index)}
             />
           )}
-        />
+          />
+        </section>
       )}
-      <SourceDrawer open={drawerOpen} roots={browse.roots} onClose={closeDrawerAndRestore} onHome={() => { setDrawerOpen(false); void loadHome(); }} onSelect={root => { setDrawerOpen(false); void loadFolder(root.nodeId); }} />
+      <SourceDrawer open={drawerOpen} roots={browse.roots} onClose={closeDrawerAndRestore} onHome={() => { setDrawerOpen(false); void loadHome(); }} onSelect={root => { if (!root.nodeId) return; setDrawerOpen(false); void loadFolder(root.nodeId); }} />
     </main>
+  );
+}
+
+function ProgramProjection({ program, thumbnails }: {
+  program: TvRootCardDto;
+  thumbnails: Record<string, ThumbnailUrlItem>;
+}) {
+  const covers = program.folderCoverNodeIds.slice(0, 3).map(id => thumbnails[id]?.url).filter((url): url is string => Boolean(url));
+  return (
+    <section className="program-projection" data-readiness={program.readiness}>
+      <div className="projection-image" data-cover-count={covers.length}>
+        {covers.map((url, index) => <img key={url} src={url} alt="" className={`projection-cover cover-${index + 1}`} />)}
+        {covers.length === 0 && <div className="projection-stock" aria-hidden="true"><span>{program.displayName.charAt(0)}</span><i /><b>Cloudframe household program</b></div>}
+        <span className="projection-vignette" />
+      </div>
+      <div className="projection-copy">
+        <h1>{program.displayName}</h1>
+        <span className={`provider-slate ${program.provider}`}>{providerLabel(program.provider)} · {program.accountLabel}</span>
+        <ProgramStatus readiness={program.readiness} message={program.readinessMessage} />
+        {program.readiness === "ready" && (
+          <p className="program-counts"><strong>{program.childFolderCount}</strong> folders <i /> <strong>{program.childMediaCount}</strong> media</p>
+        )}
+        {program.readiness !== "ready" && <p className="program-recovery">Content will appear here when the program is ready. Use Cloudframe Admin for recovery.</p>}
+      </div>
+      <span className="projection-cue" aria-hidden="true"><i /><i /></span>
+    </section>
   );
 }
 
@@ -308,7 +351,7 @@ function Unsupported() {
 }
 
 function BrowseSkeleton() {
-  return <main className="browser-shell"><TvHeader title="Home" onHome={() => undefined} onSources={() => undefined} /><section className="browse-heading"><div><p className="eyebrow">Your cloud drive</p><h1>Loading folders</h1></div></section><div className="skeleton-grid">{Array.from({ length: 8 }, (_, index) => <span key={index} />)}</div></main>;
+  return <main className="browser-shell"><TvHeader title="Home" onHome={() => undefined} onSources={() => undefined} /><section className="projection-skeleton"><div /><span /><span /><span /></section><div className="skeleton-grid">{Array.from({ length: 5 }, (_, index) => <span key={index} />)}</div></main>;
 }
 
 function useResponsiveColumns() {
@@ -332,7 +375,10 @@ function useViewportHeight() {
 }
 
 function columnsForWidth(width: number) { return width >= 1700 ? 5 : width >= 1100 ? 4 : width >= 760 ? 3 : 2; }
+function programColumnsForWidth(width: number) { return width >= 1700 ? 5 : width >= 1100 ? 4 : width >= 760 ? 3 : 2; }
 function cardRowHeight() { return window.innerHeight <= 760 ? 250 : 310; }
+function programRowHeight() { return window.innerHeight <= 760 ? 180 : 210; }
+function programViewportHeight() { return window.innerHeight <= 760 ? 194 : 224; }
 function detectBrowserSupport() { return typeof Promise !== "undefined" && typeof fetch !== "undefined" && typeof URL !== "undefined"; }
 function providerLabel(value: string) { return value === "google" ? "Google Drive" : "OneDrive"; }
 function folderCount(value: { childFolderCount: number; childMediaCount: number }) { return `${value.childFolderCount} folders · ${value.childMediaCount} media`; }

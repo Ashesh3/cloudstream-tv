@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-27T00:37:58.968Z",
+  "title": "Design System: Cloudframe Screening Room Ledger",
+  "extensions": {
+    "colorMeta": {
+      "admin-projection": { "role": "neutral", "displayName": "Admin Projection", "canonical": "#101112", "tonalRamp": ["oklch(15% 0.004 250)", "oklch(26% 0.004 250)", "oklch(37% 0.004 250)", "oklch(48% 0.004 250)", "oklch(59% 0.004 250)", "oklch(70% 0.004 250)", "oklch(81% 0.004 250)", "oklch(92% 0.004 250)"] },
+      "tv-projection": { "role": "neutral", "displayName": "TV Projection", "canonical": "#070705", "tonalRamp": ["oklch(15% 0.008 95)", "oklch(26% 0.008 95)", "oklch(37% 0.008 95)", "oklch(48% 0.008 95)", "oklch(59% 0.008 95)", "oklch(70% 0.008 95)", "oklch(81% 0.008 95)", "oklch(92% 0.008 95)"] },
+      "projection-deep": { "role": "neutral", "displayName": "Projection Deep", "canonical": "#030302", "tonalRamp": ["oklch(15% 0.006 95)", "oklch(26% 0.006 95)", "oklch(37% 0.006 95)", "oklch(48% 0.006 95)", "oklch(59% 0.006 95)", "oklch(70% 0.006 95)", "oklch(81% 0.006 95)", "oklch(92% 0.006 95)"] },
+      "program-stock": { "role": "secondary", "displayName": "Program Stock", "canonical": "#d9ccb2", "tonalRamp": ["oklch(15% 0.025 80)", "oklch(26% 0.025 80)", "oklch(37% 0.025 80)", "oklch(48% 0.025 80)", "oklch(59% 0.025 80)", "oklch(70% 0.025 80)", "oklch(81% 0.025 80)", "oklch(92% 0.025 80)"] },
+      "program-stock-bright": { "role": "secondary", "displayName": "Bright Stock", "canonical": "#f0e3c8", "tonalRamp": ["oklch(15% 0.025 80)", "oklch(26% 0.025 80)", "oklch(37% 0.025 80)", "oklch(48% 0.025 80)", "oklch(59% 0.025 80)", "oklch(70% 0.025 80)", "oklch(81% 0.025 80)", "oklch(95% 0.025 80)"] },
+      "program-stock-dim": { "role": "neutral", "displayName": "Dim Stock", "canonical": "#988d79", "tonalRamp": ["oklch(15% 0.02 80)", "oklch(26% 0.02 80)", "oklch(37% 0.02 80)", "oklch(48% 0.02 80)", "oklch(59% 0.02 80)", "oklch(70% 0.02 80)", "oklch(81% 0.02 80)", "oklch(92% 0.02 80)"] },
+      "cue": { "role": "primary", "displayName": "Cue Orange", "canonical": "#ed6b2c", "tonalRamp": ["oklch(15% 0.16 45)", "oklch(26% 0.16 45)", "oklch(37% 0.16 45)", "oklch(48% 0.16 45)", "oklch(59% 0.16 45)", "oklch(70% 0.16 45)", "oklch(81% 0.16 45)", "oklch(92% 0.16 45)"] },
+      "cue-bright": { "role": "primary", "displayName": "Bright Cue", "canonical": "#ff8a45", "tonalRamp": ["oklch(15% 0.14 50)", "oklch(26% 0.14 50)", "oklch(37% 0.14 50)", "oklch(48% 0.14 50)", "oklch(59% 0.14 50)", "oklch(70% 0.14 50)", "oklch(81% 0.14 50)", "oklch(92% 0.14 50)"] },
+      "metal": { "role": "tertiary", "displayName": "Booth Metal", "canonical": "#45423b", "tonalRamp": ["oklch(15% 0.01 80)", "oklch(26% 0.01 80)", "oklch(37% 0.01 80)", "oklch(48% 0.01 80)", "oklch(59% 0.01 80)", "oklch(70% 0.01 80)", "oklch(81% 0.01 80)", "oklch(92% 0.01 80)"] },
+      "metal-soft": { "role": "tertiary", "displayName": "Soft Metal", "canonical": "#292823", "tonalRamp": ["oklch(15% 0.008 80)", "oklch(26% 0.008 80)", "oklch(37% 0.008 80)", "oklch(48% 0.008 80)", "oklch(59% 0.008 80)", "oklch(70% 0.008 80)", "oklch(81% 0.008 80)", "oklch(92% 0.008 80)"] },
+      "hairline": { "role": "neutral", "displayName": "Registration Hairline", "canonical": "rgba(224, 211, 185, .22)", "tonalRamp": ["oklch(15% 0.012 80)", "oklch(26% 0.012 80)", "oklch(37% 0.012 80)", "oklch(48% 0.012 80)", "oklch(59% 0.012 80)", "oklch(70% 0.012 80)", "oklch(81% 0.012 80)", "oklch(92% 0.012 80)"] },
+      "danger": { "role": "tertiary", "displayName": "Blocked Coral", "canonical": "#f08b72", "tonalRamp": ["oklch(15% 0.09 30)", "oklch(26% 0.09 30)", "oklch(37% 0.09 30)", "oklch(48% 0.09 30)", "oklch(59% 0.09 30)", "oklch(70% 0.09 30)", "oklch(81% 0.09 30)", "oklch(92% 0.09 30)"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Program Display", "purpose": "Projection, ledger, state, and collection titles." },
+      "body": { "displayName": "Household Sans", "purpose": "Provider facts, guidance, recovery language, and forms." },
+      "label": { "displayName": "Ledger Label", "purpose": "Structural labels, compact annotations, and supporting measures." }
+    },
+    "shadows": [
+      { "name": "cue-action-lift", "value": "0 12px 30px rgba(91, 37, 13, .22)", "purpose": "Primary TV enrollment and recovery actions." },
+      { "name": "tv-card-rest", "value": "0 10px 26px rgba(0, 0, 0, .28)", "purpose": "Resting media and program cards." },
+      { "name": "tv-card-focus", "value": "0 22px 54px rgba(0, 0, 0, .6), 0 0 0 4px rgba(237, 107, 44, .22)", "purpose": "Remote-focused card target." },
+      { "name": "overlay-lift", "value": "0 30px 90px rgba(0, 0, 0, .55)", "purpose": "Dialogs, state panels, and recovery overlays." }
+    ],
+    "motion": [
+      { "name": "cue-in", "value": "0.28s cubic-bezier(.16, 1, .3, 1)", "purpose": "Selected program entries move into the ledger." },
+      { "name": "remote-focus", "value": "120ms ease-out", "purpose": "TV card focus, opacity, border, and lift transition." },
+      { "name": "overlay-reveal", "value": "150ms ease-out", "purpose": "Video controls rise into view." },
+      { "name": "reduced-motion", "value": "0.01ms", "purpose": "Accessibility fallback for animation and transition." }
+    ],
+    "breakpoints": [
+      { "name": "admin-stacked", "value": "900px" },
+      { "name": "admin-single-column", "value": "700px" },
+      { "name": "tv-short", "value": "760px height" },
+      { "name": "tv-wide", "value": "1700px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Cue Action",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "A committed enrollment, recovery, or household-program action.",
+      "html": "<button class=\"ds-primary-action\">ADD TO PROGRAM</button>",
+      "css": ".ds-primary-action { min-height: 58px; padding: 0 30px; border: 1px solid transparent; border-radius: 0; background: #ed6b2c; color: #030302; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; font-size: 18px; font-weight: 750; box-shadow: 0 12px 30px rgba(91, 37, 13, .22); cursor: pointer; } .ds-primary-action:hover { background: #ff8a45; } .ds-primary-action:focus-visible { outline: 4px solid #ff8a45; outline-offset: 4px; } .ds-primary-action:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Secondary Sources Action",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A compact, quiet navigation action that keeps the cue reserved.",
+      "html": "<button class=\"ds-sources-action\">SOURCES <kbd>MENU</kbd></button>",
+      "css": ".ds-sources-action { min-height: 42px; padding: 0 14px; border: 1px solid rgba(224, 211, 185, .22); border-radius: 0; background: transparent; color: #d9ccb2; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; } .ds-sources-action kbd { margin-left: 7px; color: #ff8a45; font: inherit; font-size: 10px; } .ds-sources-action:hover { border-color: #ff8a45; } .ds-sources-action:focus-visible { outline: 4px solid #ff8a45; outline-offset: 4px; } .ds-sources-action:active { background: rgba(237, 107, 44, .22); }"
+    },
+    {
+      "name": "Program Name Field",
+      "kind": "input",
+      "refersTo": "input-program",
+      "description": "A warm-stock TV enrollment field with exterior cue focus.",
+      "html": "<label class=\"ds-field\">NAME THIS TV<input value=\"Living room\" aria-label=\"Name this TV\"></label>",
+      "css": ".ds-field { display: grid; gap: 8px; color: #211c15; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; font-size: 15px; font-weight: 750; } .ds-field input { min-height: 58px; padding: 0 18px; border: 1px solid rgba(33, 28, 21, .36); border-radius: 0; background: #f0e3c8; color: #211c15; font: inherit; font-size: 20px; caret-color: #ed6b2c; } .ds-field input:hover { border-color: #ed6b2c; } .ds-field input:focus-visible { outline: 4px solid #ff8a45; outline-offset: 4px; }"
+    },
+    {
+      "name": "Focused Program Card",
+      "kind": "card",
+      "refersTo": "card-tv",
+      "description": "A remote-scale collection target that makes focus unmistakable without shifting the grid.",
+      "html": "<button class=\"ds-program-card\"><span class=\"ds-card-art\">HOME FILMS</span><span class=\"ds-card-copy\"><strong>Family archive</strong><small>28 items · ready</small></span></button>",
+      "css": ".ds-program-card { width: 100%; height: 178px; display: grid; grid-template-columns: 44% 56%; padding: 0; border: 1px solid rgba(224, 211, 185, .22); border-radius: 13px; background: #292823; color: #d9ccb2; overflow: hidden; opacity: .64; box-shadow: 0 10px 26px rgba(0, 0, 0, .28); text-align: left; cursor: pointer; transition: transform 120ms ease-out, opacity 120ms ease-out, box-shadow 120ms ease-out, border-color 120ms ease-out; } .ds-card-art { display: flex; align-items: end; padding: 19px; background: #b9aa8e; color: #211c15; font-family: Cloudframe Condensed, Archivo Narrow Variable, Arial Narrow, sans-serif; font-size: 25px; font-weight: 650; line-height: .85; text-transform: uppercase; } .ds-card-copy { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: 15px 17px; } .ds-card-copy strong { overflow: hidden; color: #f0e3c8; font-family: Cloudframe Condensed, Archivo Narrow Variable, Arial Narrow, sans-serif; font-size: 21px; font-weight: 620; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; } .ds-card-copy small { margin-top: 4px; color: #988d79; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; font-size: 11px; } .ds-program-card:hover, .ds-program-card:focus-visible { border-color: #ff8a45; opacity: 1; transform: scale(1.035); box-shadow: 0 22px 54px rgba(0, 0, 0, .6), 0 0 0 4px rgba(237, 107, 44, .22); outline: 0; } .ds-program-card:active { transform: scale(1.015); }"
+    },
+    {
+      "name": "Source Truth Reel",
+      "kind": "custom",
+      "refersTo": "source-truth-reel",
+      "description": "A compact provider-and-index ledger row that keeps state attached to its source.",
+      "html": "<div class=\"ds-truth-reel\"><span class=\"ds-provider\">G</span><span class=\"ds-source\"><strong>family@example.com</strong><small>Google Drive</small></span><span class=\"ds-status\">Program ready</span></div>",
+      "css": ".ds-truth-reel { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .7rem; align-items: center; padding: .75rem 1rem; border-left: 1px solid rgba(224, 211, 185, .22); background: #0d0e0f; color: #f2efe7; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; } .ds-provider { display: grid; place-items: center; width: 1.85rem; height: 1.85rem; border: 1px solid rgba(224, 211, 185, .22); color: #ed6b2c; font-family: Cloudframe Condensed, Archivo Narrow Variable, Arial Narrow, sans-serif; font-weight: 700; } .ds-source { min-width: 0; } .ds-source strong, .ds-source small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-source strong { font-size: .85rem; } .ds-source small { margin-top: .12rem; color: #8b928f; font-size: .72rem; } .ds-status { color: #f2efe7; font-size: .78rem; text-transform: capitalize; } .ds-truth-reel:hover { background: #17191a; }"
+    },
+    {
+      "name": "Household Program Root",
+      "kind": "custom",
+      "refersTo": "household-program-root",
+      "description": "A selected folder entry that stays tied to its indexing condition and removal path.",
+      "html": "<article class=\"ds-program-root\"><span class=\"ds-root-cue\"></span><span><strong>Summer trips</strong><small>Indexed selected root · 124 items</small></span><button aria-label=\"Remove Summer trips\">REMOVE</button></article>",
+      "css": ".ds-program-root { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .75rem; align-items: center; padding: 1rem; border: 1px solid rgba(49, 41, 31, .4); border-radius: 0; background: rgba(239, 226, 198, .72); color: #241e17; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; } .ds-root-cue { width: 12px; height: 12px; border: 1px solid #a74419; transform: rotate(45deg); } .ds-program-root strong, .ds-program-root small { display: block; } .ds-program-root strong { font-family: Cloudframe Condensed, Archivo Narrow Variable, Arial Narrow, sans-serif; font-size: 1.1rem; text-transform: uppercase; } .ds-program-root small { margin-top: .2rem; color: #554a3a; font-size: .75rem; } .ds-program-root button { min-height: 36px; border: 0; background: transparent; color: #8f2e19; font: inherit; font-size: .7rem; font-weight: 700; letter-spacing: .06em; } .ds-program-root button:hover { color: #ed6b2c; } .ds-program-root button:focus-visible { outline: 2px solid #ff8a45; outline-offset: 3px; }"
+    },
+    {
+      "name": "Program Readiness",
+      "kind": "chip",
+      "refersTo": "program-readiness",
+      "description": "A collection readiness marker that distinguishes preparing and blocked program states from empty content.",
+      "html": "<p class=\"ds-readiness\"><i></i>Indexing selected folders</p>",
+      "css": ".ds-readiness { display: flex; align-items: center; max-width: 480px; margin: 0; color: #f0e3c8; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; font-size: 16px; line-height: 1.35; } .ds-readiness i { width: 11px; height: 11px; flex: 0 0 auto; margin-right: 11px; border: 1px solid currentColor; background: #ed6b2c; transform: rotate(45deg); animation: ds-cue-pulse 1.5s ease-in-out infinite; } .ds-readiness:hover { color: #ff8a45; } .ds-readiness:focus-visible { outline: 2px solid #ff8a45; outline-offset: 4px; } @keyframes ds-cue-pulse { 0%, 100% { opacity: .55; transform: rotate(45deg) scale(.82); } 50% { opacity: 1; transform: rotate(45deg) scale(1); } } @media (prefers-reduced-motion: reduce) { .ds-readiness i { animation-duration: .01ms; animation-iteration-count: 1; } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Screening Room Ledger.",
+    "overview": "Cloudframe programs household media like a private screening, not a generic SaaS dashboard. Projection black carries the room; warm program stock carries the household's approved selection; a single cue orange marks action, motion, and attention. The result should feel like a precise projection-booth cue sheet that still makes source, indexing, and access truth easy to read.\n\nThe admin surface keeps the visible source truth above quiet navigation, then places the live provider stage beside the household program so a folder's move into the program remains legible. The TV surface enlarges the same hierarchy for a remote and viewing distance: collection first, program status attached, chrome only when it serves the moment. The locally generated program-stock raster supplies paper fiber, registration marks, perforation dots, and sparse cue geometry without becoming a decorative background.",
+    "keyCharacteristics": [
+      "Projection black and warm stock create the two dominant planes.",
+      "Cue orange is reserved for a decision, active state, progress, or focus.",
+      "Hairline seams and ledger type describe state before another container does.",
+      "Truth stays attached to its source, program entry, collection, or recovery path.",
+      "Admin and television use one world at their own scale rather than mimicking each other."
+    ],
+    "rules": [
+      { "name": "The Single Cue Rule", "body": "Cue orange carries a reason to act or orient; it is not a general decoration or a competing surface color.", "section": "colors" },
+      { "name": "The Stock Means Selected Rule", "body": "Warm stock signals the household program, a recovery panel, or a deliberate reading surface—not an arbitrary card fill.", "section": "colors" },
+      { "name": "The Ledger Read Rule", "body": "Use the condensed face for what the room is screening; use the sans for what the household needs to understand and act on.", "section": "typography" },
+      { "name": "The Plane Before Panel Rule", "body": "Establish hierarchy with brightness, material, and depth before introducing another boxed container.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do keep provider, index, quota, and recovery truth adjacent to the source or household program entry it describes.",
+      "Do use the real program-stock material only as a purposeful selected or reading plane, with its cue geometry quiet enough for the information to lead.",
+      "Do preserve the admin relationship of visible source truth, live provider stage, and household program.",
+      "Do preserve television-scale type, safe insets, and an unmistakable focused card for remote operation.",
+      "Do use reduced-motion fallbacks for all cue, focus, drawer, and status movement."
+    ],
+    "donts": [
+      "Don't collapse incomplete indexing, provider-empty, quota-exhausted, blocked, and healthy states into one generic empty presentation.",
+      "Don't spend cue orange on inactive decoration, broad backgrounds, or multiple competing actions.",
+      "Don't replace the program relationship with generic SaaS metrics, floating dashboard cards, or an unrelated streaming clone.",
+      "Don't allow manual-only TV controls to take initial or automatic remote focus."
+    ]
+  }
+}

@@ -1,11 +1,13 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 import {
+  sourceIndexStateKind,
   type AssignedRoot,
   type Device,
   type Household,
   type MediaNode,
   type MediaOrder,
+  type Source,
   type WatchHistory
 } from "@cloudframe/shared";
 import type { AppRepository } from "../firestore/repository";
@@ -104,17 +106,25 @@ export function createBrowseService(dependencies: BrowseServiceDependencies) {
         dependencies.repository.getSource(root.sourceId),
         dependencies.repository.getNodeByProviderId(root.sourceId, root.providerNodeId)
       ]);
-      if (!source || !node || !node.available) continue;
+      if (!source) continue;
+      const availableNode = node?.available ? node : null;
+      const readiness = rootReadiness(
+        source,
+        1,
+        Boolean(availableNode)
+      );
       cards.push({
         id: root.id,
         sourceId: root.sourceId,
         displayName: root.displayName,
         provider: source.provider,
         accountLabel: source.accountLabel,
-        nodeId: node.id,
-        folderCoverNodeIds: [...node.folderCoverNodeIds],
-        childFolderCount: node.childFolderCount,
-        childMediaCount: node.childMediaCount
+        nodeId: readiness.kind === "ready" ? availableNode!.id : null,
+        folderCoverNodeIds: readiness.kind === "ready" ? [...availableNode!.folderCoverNodeIds] : [],
+        childFolderCount: readiness.kind === "ready" ? availableNode!.childFolderCount : 0,
+        childMediaCount: readiness.kind === "ready" ? availableNode!.childMediaCount : 0,
+        readiness: readiness.kind,
+        readinessMessage: readiness.message
       });
     }
     return { roots: cards };
@@ -205,6 +215,27 @@ export function createBrowseService(dependencies: BrowseServiceDependencies) {
   }
 
   return { home, folder, authorizeNode, saveHistory, history };
+}
+
+function rootReadiness(
+  source: Source,
+  enabledRootCount: number,
+  hasAvailableNode: boolean
+): { kind: "preparing" | "ready" | "blocked"; message: string } {
+  const state = sourceIndexStateKind(source, enabledRootCount);
+  if (state === "quota-exhausted") {
+    return { kind: "blocked", message: "Indexing is paused by storage quota" };
+  }
+  if (state === "reauth-required") {
+    return { kind: "blocked", message: "Reconnect this account in Cloudframe Admin" };
+  }
+  if (state === "provider-error") {
+    return { kind: "blocked", message: "This provider needs attention in Cloudframe Admin" };
+  }
+  if (hasAvailableNode && state !== "queued" && state !== "indexing" && state !== "reconciling") {
+    return { kind: "ready", message: "Ready to screen" };
+  }
+  return { kind: "preparing", message: "Preparing this collection" };
 }
 
 async function currentBreadcrumbs(

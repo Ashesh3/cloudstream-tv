@@ -87,10 +87,10 @@ try {
   let rendered;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     rendered = await command("Runtime.evaluate", { expression: "document.body && document.body.innerText", returnByValue: true });
-    if (String(rendered.result.value ?? "").includes("Cloudframe")) break;
+    if (String(rendered.result.value ?? "").toLocaleLowerCase().includes("cloudframe")) break;
     await delay(100);
   }
-  if (!String(rendered?.result.value ?? "").includes("Cloudframe")) {
+  if (!String(rendered?.result.value ?? "").toLocaleLowerCase().includes("cloudframe")) {
     throw new Error(`Chromium 68 did not render the TV build: ${JSON.stringify(rendered)}`);
   }
   const unexpectedErrors = runtimeErrors.filter(error => !isExpectedLegacyProbeError(error));

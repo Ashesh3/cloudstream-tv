@@ -29,8 +29,12 @@ describe("TV enrollment and browse states", () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "unenrolled" } });
     render(<TvApp api={client} browserSupported />);
-    expect(await screen.findByRole("heading", { name: "Name this TV" })).toBeVisible();
-    expect(screen.getByText("Connect this television")).toBeVisible();
+    const heading = await screen.findByRole("heading", { name: "Name this TV" });
+    expect(heading).toBeVisible();
+    expect(heading.closest(".state-panel")).toHaveAttribute("data-material", "program-stock");
+    expect(screen.queryByText("Connect this television")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cloudframe", { exact: true })).not.toBeInTheDocument();
+    expect(document.querySelector(".eyebrow")).not.toBeInTheDocument();
     expect(screen.getByText("1", { selector: "span" })).toBeVisible();
     expect(screen.getByText("2", { selector: "span" })).toBeVisible();
     expect(screen.getByText("3", { selector: "span" })).toBeVisible();
@@ -62,6 +66,8 @@ describe("TV enrollment and browse states", () => {
     fireEvent.input(screen.getByLabelText("TV name"), { target: { value: "Den TV" } });
     fireEvent.click(screen.getByRole("button", { name: "Request access" }));
     expect(await screen.findByRole("heading", { name: "Waiting for approval" })).toBeVisible();
+    expect(screen.getByText(/Den TV is queued/i)).toBeVisible();
+    expect(document.querySelector(".eyebrow")).not.toBeInTheDocument();
     expect(screen.getByText("Request sent securely")).toBeVisible();
     expect(screen.getByText(/keep this screen open/i)).toBeVisible();
     await act(async () => { await Promise.resolve(); });
@@ -92,13 +98,57 @@ describe("TV enrollment and browse states", () => {
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
     vi.mocked(client.home).mockResolvedValue({ roots: [{
       id: "root-1", sourceId: "source-1", displayName: "Family Photos", provider: "google",
-      accountLabel: "Home Drive", nodeId: "folder-1", folderCoverNodeIds: [], childFolderCount: 2, childMediaCount: 8
+      accountLabel: "Home Drive", nodeId: "folder-1", folderCoverNodeIds: [], childFolderCount: 2, childMediaCount: 8,
+      readiness: "ready", readinessMessage: "Ready to screen"
     }] });
     render(<TvApp api={client} browserSupported />);
-    expect(await screen.findByText("Family Photos")).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Family Photos" })).toBeVisible();
     fireEvent.keyDown(window, { keyCode: 457 });
     expect(screen.getByRole("dialog", { name: "Sources" })).toBeVisible();
     expect(screen.getByText("Home Drive")).toBeVisible();
+  });
+
+  it("keeps provider metadata after the program title instead of using a kicker", async () => {
+    const client = readyApiWithRoots();
+    render(<TvApp api={client} browserSupported />);
+    const title = await screen.findByRole("heading", { name: "Family" });
+    const metadata = title.parentElement!.querySelector(".provider-slate")!;
+    expect(metadata).toHaveTextContent("Google Drive · Home");
+    expect(title.compareDocumentPosition(metadata) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps the first approved program as initial focus", async () => {
+    const client = readyApiWithRoots();
+    render(<TvApp api={client} browserSupported />);
+
+    const programs = await screen.findAllByTestId("program-card");
+    await waitFor(() => expect(programs[0]).toHaveFocus());
+    expect(programs[0]).toHaveAttribute("tabindex", "0");
+    expect(programs[1]).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("button", { name: "Manage sources" })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("button", { name: "Manage sources" })).not.toHaveFocus();
+  });
+
+  it("shows unavailable or indexing programs without pretending they are empty", async () => {
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{
+      ...rootCards[0]!,
+      nodeId: null,
+      folderCoverNodeIds: [],
+      childFolderCount: 0,
+      childMediaCount: 0,
+      readiness: "preparing",
+      readinessMessage: "Preparing this collection"
+    }] });
+    render(<TvApp api={client} browserSupported />);
+
+    const program = await screen.findByTestId("program-card");
+    expect(screen.getAllByText("Preparing this collection").length).toBeGreaterThan(0);
+    expect(screen.queryByText("This folder is empty")).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 folders/i)).not.toBeInTheDocument();
+    fireEvent.click(program);
+    expect(client.folder).not.toHaveBeenCalled();
   });
 
   it("restores exact grid focus after the source drawer closes", async () => {
@@ -301,8 +351,8 @@ const household = {
 };
 
 const rootCards = [
-  { id: "root-1", sourceId: "source-1", displayName: "Family", provider: "google" as const, accountLabel: "Home", nodeId: "folder-1", folderCoverNodeIds: [], childFolderCount: 2, childMediaCount: 8 },
-  { id: "root-2", sourceId: "source-2", displayName: "Trips", provider: "onedrive" as const, accountLabel: "Cloud", nodeId: "folder-2", folderCoverNodeIds: [], childFolderCount: 1, childMediaCount: 5 }
+  { id: "root-1", sourceId: "source-1", displayName: "Family", provider: "google" as const, accountLabel: "Home", nodeId: "folder-1", folderCoverNodeIds: [], childFolderCount: 2, childMediaCount: 8, readiness: "ready" as const, readinessMessage: "Ready to screen" },
+  { id: "root-2", sourceId: "source-2", displayName: "Trips", provider: "onedrive" as const, accountLabel: "Cloud", nodeId: "folder-2", folderCoverNodeIds: [], childFolderCount: 1, childMediaCount: 5, readiness: "ready" as const, readinessMessage: "Ready to screen" }
 ];
 
 function readyApiWithRoots() {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { MemoryRepository, createApiApp } from "@cloudframe/server";
+import { MemoryRepository, ProviderError, createApiApp } from "@cloudframe/server";
+import { cookieValue, createTestApi, jsonRequest } from "./helpers/api";
 
 describe("API structured logging", () => {
   it("emits request IDs and safe route identifiers without secrets or query values", async () => {
@@ -43,5 +44,47 @@ describe("API structured logging", () => {
     const serialized = JSON.stringify(events);
     expect(serialized).toContain('"errorName":"GoogleAuthError"');
     expect(serialized).not.toContain("synthetic secret provider response");
+  });
+
+  it("logs live provider errors without provider messages, tokens, or cursor query values", async () => {
+    const events: unknown[] = [];
+    const harness = await createTestApi();
+    const login = await harness.app(jsonRequest(
+      "/api/admin/login",
+      "POST",
+      { passphrase: "correct horse battery staple" }
+    ));
+    const session = cookieValue(login, "admin_session")!;
+    const app = createApiApp({
+      repository: harness.repository,
+      providerFolders: {
+        browse: async () => {
+          throw new ProviderError("PROVIDER_THROTTLED", "token=provider-secret cursor=opaque-secret", {
+            retryable: true,
+            retryAfterSeconds: 19
+          });
+        },
+        resolveAncestry: async () => { throw new Error("unused"); },
+        createRootFromProvider: async () => { throw new Error("unused"); }
+      },
+      config: {
+        householdId: harness.householdId,
+        passphrasePepper: harness.pepper,
+        csrfSecret: harness.csrfSecret,
+        allowedOrigin: harness.origin
+      },
+      logger: { info: event => events.push(event), error: event => events.push(event) }
+    });
+
+    await app(new Request(`${harness.origin}/api/admin/sources/source-safe/provider-folders?cursor=opaque-secret`, {
+      headers: { cookie: `admin_session=${session}`, "x-request-id": "provider-request" }
+    }));
+
+    const serialized = JSON.stringify(events);
+    expect(serialized).toContain('"errorCode":"PROVIDER_THROTTLED"');
+    expect(serialized).toContain('"errorName":"ProviderError"');
+    expect(serialized).not.toContain("opaque-secret");
+    expect(serialized).not.toContain("provider-secret");
+    expect(serialized).not.toContain("admin_session");
   });
 });

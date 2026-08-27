@@ -10,6 +10,7 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegen
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Spinner } from "@/components/ui/spinner";
+import { INDEX_COPY, providerName } from "../design/ledger";
 
 export function ApprovalSheet({ request, roots, sources, onApprove, onClose }: {
   request: DeviceRequestDto;
@@ -67,10 +68,11 @@ export function ApprovalSheet({ request, roots, sources, onApprove, onClose }: {
               <div className="grid gap-2">{enabledRoots.length ? enabledRoots.map(root => {
                 const source = sourceFor(root);
                 const checked = selected.includes(root.id);
-                return <Label key={root.id} htmlFor={`approval-root-${root.id}`} className="flex min-h-16 cursor-pointer items-center gap-3 rounded-xl border p-3 transition-colors hover:bg-muted/50 has-[[data-state=checked]]:border-primary/40 has-[[data-state=checked]]:bg-primary/5">
+                const indexCopy = source ? INDEX_COPY[source.indexState.kind] : null;
+                return <Label key={root.id} htmlFor={`approval-root-${root.id}`} className="approval-root-row flex min-h-20 cursor-pointer items-start gap-3 border p-3 transition-colors hover:bg-muted/50 has-[[data-state=checked]]:border-primary/50 has-[[data-state=checked]]:bg-primary/8">
                   <Checkbox id={`approval-root-${root.id}`} aria-label={root.displayName} checked={checked} onCheckedChange={() => setSelected(value => value.includes(root.id) ? value.filter(id => id !== root.id) : [...value, root.id])} />
-                  <span className="flex size-10 items-center justify-center rounded-lg bg-muted text-muted-foreground"><FolderOpenIcon /></span>
-                  <span className="min-w-0 flex-1"><strong className="block truncate text-sm font-medium">{root.displayName}</strong><small className="mt-0.5 block truncate text-xs text-muted-foreground">{source?.provider === "google" ? "Google Drive" : "OneDrive"} · {source?.accountLabel}</small></span>
+                  <span className="root-cue flex size-10 items-center justify-center text-muted-foreground"><FolderOpenIcon /></span>
+                  <span className="min-w-0 flex-1"><strong className="block truncate text-sm font-medium">{root.displayName}</strong><small className="mt-0.5 block truncate text-xs text-muted-foreground">{source ? `${providerName(source.provider)} · ${source.accountLabel}` : "Source unavailable"}</small>{indexCopy && <span className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs"><span className="font-medium text-foreground">{indexCopy.title}</span><span className="text-muted-foreground">{source?.indexState.kind === "quota-exhausted" ? "Content appears after indexing resumes." : "Available after approval"}</span></span>}</span>
                 </Label>;
               }) : <p className="rounded-xl border border-dashed p-4 text-sm text-muted-foreground">Connect a source and add an enabled folder before approving a device.</p>}</div>
               {errors.includes("Select at least one root.") && <FieldError>Select at least one root.</FieldError>}

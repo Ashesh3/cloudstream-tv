@@ -2,7 +2,6 @@ import type {
   AdminSession,
   ApproveDeviceRequestInput,
   AssignedRoot,
-  ConnectSourceInput,
   Device,
   DeviceRequest,
   DeviceSession,
@@ -17,10 +16,16 @@ import type {
   UpdateHouseholdSettingsInput,
   WatchHistory
 } from "@cloudframe/shared";
-import { recomputeFolderMetadata, type IndexBatchCommitInput } from "@cloudframe/indexer";
+import {
+  applyIndexRemovals,
+  recomputeFolderMetadata,
+  type IndexBatchCommitInput,
+  type TransitionToReconcileInput
+} from "@cloudframe/indexer";
 import {
   RepositoryError,
   assignedRootDocumentId,
+  sameIndexCheckpoint,
   validateDeviceApproval,
   type AppRepository
 } from "./repository";
@@ -36,6 +41,7 @@ import type {
   UpdateDeviceInput
 } from "./repository";
 import type { DueSourceLeaseInput, ListWatchHistoryInput } from "./repository";
+import { decodeSourceDocument } from "./decode";
 
 const copy = <T>(value: T): T => structuredClone(value);
 
@@ -99,7 +105,7 @@ export class MemoryRepository implements AppRepository {
     this.devices.set(device.id, updatedDevice);
     return { session: copy(updatedSession), device: copy(updatedDevice), household: copy(household), renewed };
   }
-  async putSource(value: Source) { this.set(this.sources, value); }
+  async putSource(value: Source) { this.sources.set(value.id, decodeMemorySource(value)); }
   async updateSourceCredentialsIfCurrent(input: import("./repository").SourceCredentialMutationInput) {
     const current = this.sources.get(input.sourceId);
     if (!current) return null;
@@ -116,16 +122,63 @@ export class MemoryRepository implements AppRepository {
     this.sources.set(input.sourceId, copy(updated));
     return copy(updated);
   }
-  async connectSourceWithRoot(input: ConnectSourceInput) {
-    const rootId = assignedRootDocumentId(input.root.householdId, input.root.sourceId, input.root.providerNodeId);
-    if (this.sources.has(input.source.id) || this.roots.has(rootId)) {
-      throw new RepositoryError("ROOT_CONFLICT", "Source connection conflicts with existing data");
+  async reconnectSource(input: import("./repository").ReconnectSourceInput): Promise<Source> {
+    const current = this.sources.get(input.sourceId);
+    if (!current || current.householdId !== input.householdId || current.provider !== input.provider) {
+      throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
     }
-    this.sources.set(input.source.id, copy(input.source));
-    this.roots.set(rootId, copy({ ...input.root, id: rootId }));
+    const migrationReconnect =
+      current.providerAccountId === null &&
+      current.status === "reauth-required" &&
+      current.lastSyncErrorCode?.startsWith("MIGRATION_") === true;
+    if (!migrationReconnect && current.providerAccountId !== input.providerAccountId) {
+      throw new RepositoryError(
+        "SOURCE_RECONNECT_MISMATCH",
+        "Reconnect account does not match the current source"
+      );
+    }
+    if (current.providerRootId !== null && current.providerRootId !== input.providerRootId) {
+      throw new RepositoryError(
+        "SOURCE_RECONNECT_MISMATCH",
+        "Reconnect root does not match the current source"
+      );
+    }
+    const hasEnabledRoots = [...this.roots.values()].some(root =>
+      root.sourceId === current.id &&
+      root.householdId === input.householdId &&
+      root.enabled
+    );
+    const hasResumableSync =
+      current.status === "syncing" ||
+      current.crawlCheckpoint !== null ||
+      current.activeWorkflowRunId !== null;
+    const updated: Source = {
+      ...current,
+      providerAccountId: current.providerAccountId ?? input.providerAccountId,
+      providerRootId: current.providerRootId ?? input.providerRootId,
+      accountLabel: input.accountLabel,
+      ...input.credentials,
+      status: hasEnabledRoots && hasResumableSync ? "syncing" : "healthy",
+      lastSyncErrorCode: null
+    };
+    this.sources.set(current.id, copy(updated));
+    return copy(updated);
   }
-  async getSource(id: string) { return this.get(this.sources, id); }
-  async listSources(householdId: string) { return this.filter(this.sources, value => value.householdId === householdId); }
+  async connectSource(source: Source) {
+    if (this.sources.has(source.id)) {
+      throw new RepositoryError("ROOT_CONFLICT", "Source already exists");
+    }
+    this.sources.set(source.id, copy(source));
+  }
+  async getSource(id: string) {
+    const value = this.sources.get(id);
+    return value ? decodeMemorySource(value) : null;
+  }
+  async listSources(householdId: string) {
+    return [...this.sources.values()]
+      .filter(value => value.householdId === householdId)
+      .map(decodeMemorySource);
+  }
   async getSourceImpact(householdId: string, sourceId: string) {
     const source = this.sources.get(sourceId);
     if (!source || source.householdId !== householdId) {
@@ -195,6 +248,77 @@ export class MemoryRepository implements AppRepository {
     this.roots.set(deterministicId, created);
     return copy(created);
   }
+  async enableRootAndResetInitial(input: { root: AssignedRoot; sourceId: string; resetAt: Date }) {
+    const source = this.sources.get(input.sourceId);
+    if (
+      !source ||
+      source.householdId !== input.root.householdId ||
+      source.status === "disabled" ||
+      input.root.sourceId !== input.sourceId
+    ) {
+      throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
+    }
+    const deterministicId = assignedRootDocumentId(input.root.householdId, input.sourceId, input.root.providerNodeId);
+    const deterministic = this.roots.get(deterministicId);
+    const duplicate = deterministic ?? [...this.roots.values()].find(root =>
+      root.householdId === input.root.householdId &&
+      root.sourceId === input.sourceId &&
+      root.providerNodeId === input.root.providerNodeId
+    );
+    const alreadyEnabledIdenticalRoot = Boolean(
+      duplicate?.enabled &&
+      duplicate.ancestryProviderIds.length === input.root.ancestryProviderIds.length &&
+      duplicate.ancestryProviderIds.every((providerId, index) => providerId === input.root.ancestryProviderIds[index])
+    );
+    const enabled = copy({
+      ...(duplicate ?? input.root),
+      id: deterministicId,
+      displayName: input.root.displayName,
+      ancestryProviderIds: [...input.root.ancestryProviderIds],
+      enabled: true,
+      createdAt: duplicate?.createdAt ?? input.resetAt
+    });
+    if (duplicate && duplicate.id !== deterministicId) {
+      this.roots.delete(duplicate.id);
+      for (const [id, device] of this.devices) {
+        if (device.assignedRootIds.includes(duplicate.id)) {
+          this.devices.set(id, copy({
+            ...device,
+            assignedRootIds: device.assignedRootIds.map(rootId => rootId === duplicate.id ? deterministicId : rootId)
+          }));
+        }
+      }
+    }
+    this.roots.set(deterministicId, enabled);
+    const activeSelectedRootSync =
+      source.status === "syncing" &&
+      source.deltaCursor === null &&
+      (
+        source.crawlCheckpoint === null ||
+        source.crawlCheckpoint.mode === "initial" ||
+        source.crawlCheckpoint.mode === "reconcile"
+      ) &&
+      source.nextSyncAt === null &&
+      source.lastSyncErrorCode === null &&
+      source.leaseOwner !== null &&
+      source.leaseExpiresAt !== null &&
+      source.leaseExpiresAt > input.resetAt;
+    if (!(alreadyEnabledIdenticalRoot && activeSelectedRootSync)) {
+      this.sources.set(source.id, copy({
+        ...source,
+        status: "syncing",
+        deltaCursor: null,
+        crawlCheckpoint: null,
+        activeWorkflowRunId: null,
+        syncGeneration: null,
+        nextSyncAt: null,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+        lastSyncErrorCode: null
+      }));
+    }
+    return copy(enabled);
+  }
   async disableRoot(input: DisableRootInput) {
     const root = this.roots.get(input.rootId);
     if (!root || root.householdId !== input.householdId) {
@@ -243,12 +367,20 @@ export class MemoryRepository implements AppRepository {
     }
     const nextNodes = new Map(this.nodes);
     for (const node of input.nodes) nextNodes.set(node.id, copy(node));
-    for (const id of input.removedNodeIds) {
-      const node = nextNodes.get(id);
-      if (node) nextNodes.set(id, copy({ ...node, available: false }));
-    }
+    const removedIds = applyIndexRemovals(
+      nextNodes,
+      input.removedNodeIds,
+      input.committedAt
+    );
     const all = [...nextNodes.values()];
-    for (const id of new Set(input.affectedAncestorNodeIds)) {
+    const affectedIds = new Set([
+      ...input.affectedAncestorNodeIds,
+      ...removedIds.flatMap(id => {
+        const node = nextNodes.get(id);
+        return node ? [...node.ancestorNodeIds, ...(node.parentNodeId ? [node.parentNodeId] : [])] : [];
+      })
+    ]);
+    for (const id of affectedIds) {
       const folder = nextNodes.get(id);
       if (!folder || folder.kind !== "folder") continue;
       const descendants = all.filter(node => node.id !== folder.id && (node.parentNodeId === folder.id || node.ancestorNodeIds.includes(folder.id)));
@@ -339,6 +471,23 @@ export class MemoryRepository implements AppRepository {
       leaseExpiresAt: null,
       lastSyncErrorCode: null
     }));
+  }
+
+  async transitionToReconcileIfCurrent(input: TransitionToReconcileInput): Promise<boolean> {
+    const source = this.sources.get(input.sourceId);
+    if (
+      !source ||
+      source.leaseOwner !== input.expectedLeaseOwner ||
+      !source.leaseExpiresAt ||
+      source.leaseExpiresAt <= input.changedAt ||
+      !sameIndexCheckpoint(source.crawlCheckpoint, input.expectedPreviousCheckpoint)
+    ) return false;
+    this.sources.set(source.id, copy({
+      ...source,
+      crawlCheckpoint: input.newCheckpoint,
+      leaseExpiresAt: input.leaseExpiresAt
+    }));
+    return true;
   }
 
   async markSyncRunStarted(input: { sourceId: string; leaseOwner: string; runId: string; startedAt: Date }): Promise<boolean> {
@@ -547,4 +696,8 @@ export class MemoryRepository implements AppRepository {
 
 function sameSecret(left: Source["encryptedRefreshToken"], right: Source["encryptedRefreshToken"]) {
   return left.keyVersion === right.keyVersion && left.iv === right.iv && left.ciphertext === right.ciphertext && left.authTag === right.authTag;
+}
+
+function decodeMemorySource(source: Source): Source {
+  return decodeSourceDocument(source.id, copy(source) as unknown as Record<string, unknown>);
 }

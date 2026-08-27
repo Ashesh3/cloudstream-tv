@@ -12,6 +12,7 @@ import type {
 } from "@cloudframe/shared";
 import { AdminApp } from "./app";
 import type { AdminApi } from "./api/client";
+import { CHECKED_CONTROL_SELECTORS, CONTROL_HIT_TARGET, DIRECTION_SEED } from "./design/ledger";
 
 const request = (id: string, name: string, createdAt: string): DeviceRequestDto => ({
   id,
@@ -57,7 +58,9 @@ const source: SourceDto = {
   lastSyncCompletedAt: "2026-08-26T00:04:00.000Z",
   lastSyncErrorCode: null,
   indexProgress: { mode: "initial", processedNodeCount: 42, pendingFolderCount: 3, reconciliationActive: false },
-  createdAt: "2026-08-20T00:00:00.000Z"
+  createdAt: "2026-08-20T00:00:00.000Z",
+  providerRootId: "provider-root",
+  indexState: { kind: "indexing", processedNodeCount: 42, pendingFolderCount: 3, recoverable: false, errorCode: null }
 };
 
 const overview: AdminOverviewResponse = {
@@ -104,6 +107,7 @@ function api(): AdminApi {
     sourceImpact: vi.fn().mockResolvedValue({ roots: [root], devices: [device] }),
     removeSource: vi.fn().mockResolvedValue({ removed: true, roots: [root], devices: [device] }),
     sourceTree: vi.fn().mockResolvedValue({ source, parent: null, folders: [] }),
+    providerFolders: vi.fn().mockResolvedValue({ source, current: { providerNodeId: "provider-root", parentProviderId: null, name: "My Drive", assignedRootId: null }, breadcrumbs: [{ providerNodeId: "provider-root", parentProviderId: null, name: "My Drive", assignedRootId: null }], folders: [], nextCursor: null }),
     createRoot: vi.fn().mockResolvedValue({ root }),
     rootImpact: vi.fn().mockResolvedValue({ roots: [root], devices: [device] }),
     removeRoot: vi.fn().mockResolvedValue({ removed: true, roots: [root], devices: [device] }),
@@ -125,16 +129,101 @@ afterEach(() => {
 });
 
 describe("mobile admin workflows", () => {
-  it("presents the approved operational dashboard with household metrics", async () => {
+  it("leads with source truth and attention before program figures", async () => {
     const client = api();
     await login(client);
 
-    expect(screen.getByRole("heading", { name: "Household overview" })).toBeVisible();
-    expect(screen.getByText("Pending requests").parentElement).toHaveTextContent("2");
-    expect(screen.getByText("Approved devices").parentElement).toHaveTextContent("1");
-    expect(screen.getByText("Cloud sources").parentElement).toHaveTextContent("1");
-    expect(screen.getByText("Available folders").parentElement).toHaveTextContent("1");
+    expect(screen.queryByText("Operations")).not.toBeInTheDocument();
+    const sourceHealth = screen.getByRole("region", { name: "Source health" });
+    const attention = screen.getByRole("region", { name: "Attention" });
+    const figures = screen.getByRole("region", { name: "Program figures" });
+    expect(sourceHealth.compareDocumentPosition(attention) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(attention.compareDocumentPosition(figures) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(sourceHealth).getByText("Indexing selected folders")).toBeVisible();
+    expect(within(attention).getByText("2 televisions waiting")).toBeVisible();
+    expect(within(figures).getByText("1 approved")).toBeVisible();
     expect(screen.getByRole("button", { name: "Open admin menu" })).toBeVisible();
+    expect(screen.queryByText("Attention", { exact: true })).not.toBeInTheDocument();
+    expect(document.querySelector(".eyebrow, .ledger-caption")).not.toBeInTheDocument();
+  });
+
+  it("keeps source truth and navigation visible around the in-layout source workbench", async () => {
+    const client = api();
+    await login(client);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Sources" }));
+    const trigger = screen.getByRole("button", { name: "Browse & choose folders" });
+    fireEvent.click(trigger);
+
+    const workbench = await screen.findByRole("region", { name: "Choose source folders" });
+    expect(screen.getByRole("region", { name: "Source health" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Attention" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Program figures" })).not.toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Admin sections" })).toBeVisible();
+    expect(screen.queryByRole("dialog", { name: "Choose source folders" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(workbench, { key: "Escape" });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Browse & choose folders" })).toHaveFocus());
+  });
+
+  it("returns focus to the source task that opened the workbench", async () => {
+    const client = api();
+    vi.mocked(client.sources).mockResolvedValue({ sources: [
+      { ...source, roots: [root] },
+      { ...source, id: "source-2", accountLabel: "Second Drive", roots: [] }
+    ] });
+    await login(client);
+    fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Sources" }));
+    const firstSource = screen.getByRole("heading", { name: "Home Drive" }).closest('[data-slot="card"]')!;
+    const firstTrigger = within(firstSource as HTMLElement).getByRole("button", { name: "Browse & choose folders" });
+    fireEvent.click(firstTrigger);
+    fireEvent.click(await screen.findByRole("button", { name: "Back to sources" }));
+    const restoredSource = screen.getByRole("heading", { name: "Home Drive" }).closest('[data-slot="card"]')!;
+    const restoredTrigger = within(restoredSource as HTMLElement).getByRole("button", { name: "Browse & choose folders" });
+    await waitFor(() => expect(restoredTrigger).toHaveFocus());
+  });
+
+  it("keeps one section title, four safe-area mobile actions, and labels every icon button", async () => {
+    const client = api();
+    await login(client);
+
+    const mobileNavigation = screen.getByRole("navigation", { name: "Mobile admin sections" });
+    expect(within(mobileNavigation).getAllByRole("button")).toHaveLength(4);
+    expect(mobileNavigation).toHaveAttribute("data-safe-area", "bottom");
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+
+    for (const section of ["Devices", "Sources", "Settings", "Requests"]) {
+      fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: section }));
+      expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    }
+    for (const button of screen.getAllByRole("button")) expect(button).toHaveAccessibleName();
+  });
+
+  it("announces refresh progress and failures through live regions", async () => {
+    const client = api();
+    await login(client);
+    let rejectRefresh!: (reason?: unknown) => void;
+    vi.mocked(client.overview).mockReturnValueOnce(new Promise((_resolve, reject) => { rejectRefresh = reject; }));
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(screen.getByRole("status")).toHaveTextContent("Refreshing household ledger…");
+    rejectRefresh(new Error("Refresh failed."));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Refresh failed.");
+  });
+
+  it("keeps compact Radix controls while preserving 44px hit targets and checked-state selectors", () => {
+    expect(CONTROL_HIT_TARGET).toBe(44);
+    expect(CHECKED_CONTROL_SELECTORS).toEqual([
+      '[data-slot="checkbox"][data-state="checked"]',
+      '[data-slot="switch"][data-state="checked"]'
+    ]);
+  });
+
+  it("emits the approved direction seed in the first admin root child", async () => {
+    const client = api();
+    await login(client);
+    const root = document.querySelector(".admin-root")!;
+    expect(root.firstChild?.nodeType).toBe(Node.COMMENT_NODE);
+    expect(root.firstChild?.textContent).toContain(DIRECTION_SEED);
   });
 
   it("logs in with a visible pending state and returns to login on an expired session", async () => {
@@ -217,7 +306,8 @@ describe("mobile admin workflows", () => {
     const client = api();
     await login(client);
     fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Sources" }));
-    expect(screen.getByText("Initial · 42 nodes · 3 folders pending")).toBeVisible();
+    expect(screen.getAllByText("Indexing selected folders").some(element => element.offsetParent !== null || element.isConnected)).toBe(true);
+    expect(screen.getByText("42 items prepared")).toBeVisible();
     fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name: "Settings" }));
     expect(screen.getByText("120")).toBeVisible();
     expect(screen.getByText(/Estimated Firestore documents/)).toBeVisible();
@@ -253,6 +343,8 @@ describe("mobile admin workflows", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Remove Home Drive" }));
     const confirm = await screen.findByRole("dialog", { name: "Remove source" });
+    expect(within(confirm).queryByText("Permanent removal")).not.toBeInTheDocument();
+    expect(confirm.querySelector(".eyebrow")).not.toBeInTheDocument();
     expect(within(confirm).getByText("Family Photos")).toBeVisible();
     expect(within(confirm).getByText("Living Room")).toBeVisible();
     fireEvent.click(within(confirm).getByRole("button", { name: "Remove source permanently" }));

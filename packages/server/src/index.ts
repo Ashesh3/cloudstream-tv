@@ -3,6 +3,7 @@ export * from "./auth/passphrase";
 export * from "./auth/tokens";
 export * from "./crypto/provider-tokens";
 export * from "./firestore/memory-repository";
+export * from "./firestore/decode";
 export * from "./firestore/repository";
 export * from "./firestore/client";
 export * from "./http/app";
@@ -16,6 +17,7 @@ export * from "./services/oauth";
 export * from "./services/browse";
 export * from "./services/media-urls";
 export * from "./services/indexing";
+export * from "./services/provider-folders";
 export * from "./runtime/sync-runner";
 export type {
   ProviderAdapter,

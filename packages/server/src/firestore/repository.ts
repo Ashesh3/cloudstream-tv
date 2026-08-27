@@ -2,11 +2,11 @@ import type {
   AdminSession,
   ApproveDeviceRequestInput,
   AssignedRoot,
-  ConnectSourceInput,
   Device,
   DeviceRequest,
   DeviceSession,
   Household,
+  IndexCheckpoint,
   MediaNode,
   OAuthState,
   DisableRootInput,
@@ -19,7 +19,14 @@ import type {
 } from "@cloudframe/shared";
 import type { Firestore, Query, Transaction, WriteBatch } from "@google-cloud/firestore";
 import { createHash } from "node:crypto";
-import { recomputeFolderMetadata, type IndexBatchCommitInput } from "@cloudframe/indexer";
+import { isDeepStrictEqual } from "node:util";
+import {
+  applyIndexRemovals,
+  recomputeFolderMetadata,
+  type IndexBatchCommitInput,
+  type TransitionToReconcileInput
+} from "@cloudframe/indexer";
+import { decodeSourceDocument } from "./decode";
 
 export interface RateLimitConsumeInput {
   bucket: string;
@@ -88,6 +95,16 @@ export interface SourceCredentialMutationInput {
   credentials: Pick<Source, "encryptedRefreshToken" | "encryptedAccessToken" | "accessTokenExpiresAt">;
 }
 
+export interface ReconnectSourceInput {
+  sourceId: string;
+  householdId: string;
+  provider: Source["provider"];
+  providerAccountId: string;
+  providerRootId: string;
+  accountLabel: string;
+  credentials: Pick<Source, "encryptedRefreshToken" | "encryptedAccessToken" | "accessTokenExpiresAt">;
+}
+
 export function assignedRootDocumentId(
   householdId: string,
   sourceId: string,
@@ -135,6 +152,7 @@ export type RepositoryErrorCode =
   | "SYNC_LEASE_STALE"
   | "SYNC_CHECKPOINT_STALE"
   | "SOURCE_NOT_FOUND"
+  | "SOURCE_RECONNECT_MISMATCH"
   | "ROOT_NOT_FOUND"
   | "ROOT_CONFLICT";
 
@@ -179,7 +197,8 @@ export interface AppRepository {
   putSource(source: Source): Promise<void>;
   updateSourceCredentialsIfCurrent(input: SourceCredentialMutationInput): Promise<Source | null>;
   markSourceReauthRequiredIfCurrent(input: Omit<SourceCredentialMutationInput, "credentials">): Promise<Source | null>;
-  connectSourceWithRoot(input: ConnectSourceInput): Promise<void>;
+  reconnectSource(input: ReconnectSourceInput): Promise<Source>;
+  connectSource(source: Source): Promise<void>;
   getSource(id: string): Promise<Source | null>;
   listSources(householdId: string): Promise<Source[]>;
   getSourceImpact(householdId: string, sourceId: string): Promise<SourceImpact>;
@@ -189,8 +208,14 @@ export interface AppRepository {
   listOAuthStates(householdId: string): Promise<OAuthState[]>;
   acquireSyncLease(input: SyncLeaseInput): Promise<boolean>;
   releaseSyncLease(sourceId: string, owner: string): Promise<boolean>;
+  transitionToReconcileIfCurrent(input: TransitionToReconcileInput): Promise<boolean>;
   putRoot(root: AssignedRoot): Promise<void>;
   createOrEnableRoot(root: AssignedRoot): Promise<AssignedRoot>;
+  enableRootAndResetInitial(input: {
+    root: AssignedRoot;
+    sourceId: string;
+    resetAt: Date;
+  }): Promise<AssignedRoot>;
   disableRoot(input: DisableRootInput): Promise<SourceImpact>;
   getRoot(id: string): Promise<AssignedRoot | null>;
   listRootsForSource(sourceId: string): Promise<AssignedRoot[]>;
@@ -275,7 +300,7 @@ export class FirestoreRepository implements AppRepository {
       const reference = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
       const snapshot = await transaction.get(reference);
       if (!snapshot.exists) return null;
-      const current = decodeFirestoreDocument<Source>(snapshot.id, snapshot.data());
+      const current = decodeSourceDocument(snapshot.id, snapshot.data());
       if (!sameEncryptedSecret(current.encryptedRefreshToken, input.expectedEncryptedRefreshToken)) return current;
       const updated: Source = {
         ...current,
@@ -292,26 +317,84 @@ export class FirestoreRepository implements AppRepository {
       const reference = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
       const snapshot = await transaction.get(reference);
       if (!snapshot.exists) return null;
-      const current = decodeFirestoreDocument<Source>(snapshot.id, snapshot.data());
+      const current = decodeSourceDocument(snapshot.id, snapshot.data());
       if (!sameEncryptedSecret(current.encryptedRefreshToken, input.expectedEncryptedRefreshToken)) return current;
       const updated = { ...current, status: "reauth-required" as const, lastSyncErrorCode: "PROVIDER_REAUTH_REQUIRED" };
       transaction.set(reference, updated);
       return updated;
     });
   }
-  async connectSourceWithRoot(input: ConnectSourceInput): Promise<void> {
+  async connectSource(source: Source): Promise<void> {
     await this.firestore.runTransaction(async transaction => {
-      const sourceRef = this.firestore.collection(COLLECTIONS.sources).doc(input.source.id);
-      const rootId = assignedRootDocumentId(input.root.householdId, input.root.sourceId, input.root.providerNodeId);
-      const rootRef = this.firestore.collection(COLLECTIONS.roots).doc(rootId);
-      const [source, root] = await Promise.all([transaction.get(sourceRef), transaction.get(rootRef)]);
-      if (source.exists || root.exists) throw new RepositoryError("ROOT_CONFLICT", "Source connection conflicts with existing data");
-      transaction.create(sourceRef, input.source);
-      transaction.create(rootRef, { ...input.root, id: rootId });
+      const reference = this.firestore.collection(COLLECTIONS.sources).doc(source.id);
+      if ((await transaction.get(reference)).exists) {
+        throw new RepositoryError("ROOT_CONFLICT", "Source already exists");
+      }
+      transaction.create(reference, source);
     });
   }
-  getSource(id: string) { return this.getById<Source>(COLLECTIONS.sources, id); }
-  listSources(householdId: string) { return this.getMany<Source>(this.query(COLLECTIONS.sources, "householdId", householdId)); }
+  async reconnectSource(input: ReconnectSourceInput): Promise<Source> {
+    return this.firestore.runTransaction(async transaction => {
+      const reference = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+      const rootsQuery = this.firestore
+        .collection(COLLECTIONS.roots)
+        .where("sourceId", "==", input.sourceId)
+        .where("enabled", "==", true);
+      const [snapshot, rootsSnapshot] = await Promise.all([
+        transaction.get(reference),
+        transaction.get(rootsQuery)
+      ]);
+      if (!snapshot.exists) {
+        throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
+      }
+      const current = decodeSourceDocument(snapshot.id, snapshot.data());
+      if (current.householdId !== input.householdId || current.provider !== input.provider) {
+        throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
+      }
+      const migrationReconnect =
+        current.providerAccountId === null &&
+        current.status === "reauth-required" &&
+        current.lastSyncErrorCode?.startsWith("MIGRATION_") === true;
+      if (!migrationReconnect && current.providerAccountId !== input.providerAccountId) {
+        throw new RepositoryError(
+          "SOURCE_RECONNECT_MISMATCH",
+          "Reconnect account does not match the current source"
+        );
+      }
+      if (current.providerRootId !== null && current.providerRootId !== input.providerRootId) {
+        throw new RepositoryError(
+          "SOURCE_RECONNECT_MISMATCH",
+          "Reconnect root does not match the current source"
+        );
+      }
+      const hasEnabledRoots = rootsSnapshot.docs.some(root => {
+        const decoded = decodeFirestoreDocument<AssignedRoot>(root.id, root.data());
+        return decoded.householdId === input.householdId;
+      });
+      const hasResumableSync =
+        current.status === "syncing" ||
+        current.crawlCheckpoint !== null ||
+        current.activeWorkflowRunId !== null;
+      const patch: Partial<Source> = {
+        providerAccountId: current.providerAccountId ?? input.providerAccountId,
+        providerRootId: current.providerRootId ?? input.providerRootId,
+        accountLabel: input.accountLabel,
+        ...input.credentials,
+        status: hasEnabledRoots && hasResumableSync ? "syncing" : "healthy",
+        lastSyncErrorCode: null
+      };
+      transaction.update(reference, patch);
+      return { ...current, ...patch };
+    });
+  }
+  async getSource(id: string): Promise<Source | null> {
+    const snapshot = await this.firestore.collection(COLLECTIONS.sources).doc(id).get();
+    return snapshot.exists ? decodeSourceDocument(snapshot.id, snapshot.data()) : null;
+  }
+  async listSources(householdId: string): Promise<Source[]> {
+    const snapshot = await this.query(COLLECTIONS.sources, "householdId", householdId).get();
+    return snapshot.docs.map(document => decodeSourceDocument(document.id, document.data()));
+  }
   async getSourceImpact(householdId: string, sourceId: string): Promise<SourceImpact> {
     const source = await this.getSource(sourceId);
     if (!source || source.householdId !== householdId) throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
@@ -324,7 +407,7 @@ export class FirestoreRepository implements AppRepository {
     const sourceRef = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
     return this.firestore.runTransaction(async transaction => {
       const sourceSnapshot = await transaction.get(sourceRef);
-      const source = sourceSnapshot.exists ? decodeFirestoreDocument<Source>(sourceSnapshot.id, sourceSnapshot.data()) : null;
+      const source = sourceSnapshot.exists ? decodeSourceDocument(sourceSnapshot.id, sourceSnapshot.data()) : null;
       if (!source || source.householdId !== input.householdId) throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
       const [rootSnapshots, deviceSnapshots] = await Promise.all([
         transaction.get(this.firestore.collection(COLLECTIONS.roots).where("sourceId", "==", input.sourceId)),
@@ -414,6 +497,72 @@ export class FirestoreRepository implements AppRepository {
       return deterministic;
     });
   }
+  async enableRootAndResetInitial(input: {
+    root: AssignedRoot;
+    sourceId: string;
+    resetAt: Date;
+  }): Promise<AssignedRoot> {
+    if (input.root.sourceId !== input.sourceId) {
+      throw new RepositoryError("ROOT_CONFLICT", "Root source identity conflicts with the requested source");
+    }
+    return this.firestore.runTransaction(async transaction => {
+      const value = input.root;
+      const sourceRef = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+      const deterministicId = assignedRootDocumentId(value.householdId, value.sourceId, value.providerNodeId);
+      const deterministicRef = this.firestore.collection(COLLECTIONS.roots).doc(deterministicId);
+      const duplicateQuery = this.firestore.collection(COLLECTIONS.roots)
+        .where("sourceId", "==", value.sourceId)
+        .where("providerNodeId", "==", value.providerNodeId)
+        .limit(1);
+      const [sourceSnapshot, deterministicSnapshot, duplicateSnapshots, deviceSnapshots] = await Promise.all([
+        transaction.get(sourceRef),
+        transaction.get(deterministicRef),
+        transaction.get(duplicateQuery),
+        transaction.get(this.firestore.collection(COLLECTIONS.devices).where("householdId", "==", value.householdId))
+      ]);
+      const source = sourceSnapshot.exists
+        ? decodeSourceDocument(sourceSnapshot.id, sourceSnapshot.data())
+        : null;
+      if (!source || source.householdId !== value.householdId || source.status === "disabled") {
+        throw new RepositoryError("SOURCE_NOT_FOUND", "Source not found");
+      }
+
+      let enabled: AssignedRoot;
+      let alreadyEnabledIdenticalRoot = false;
+      if (deterministicSnapshot.exists) {
+        const current = decodeFirestoreDocument<AssignedRoot>(deterministicSnapshot.id, deterministicSnapshot.data());
+        if (current.householdId !== value.householdId || current.sourceId !== value.sourceId || current.providerNodeId !== value.providerNodeId) {
+          throw new RepositoryError("ROOT_CONFLICT", "Root identity conflicts with existing data");
+        }
+        alreadyEnabledIdenticalRoot = sameEnabledRootSelection(current, value);
+        enabled = { ...current, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true };
+        transaction.set(deterministicRef, enabled);
+      } else {
+        const duplicate = duplicateSnapshots.docs[0];
+        if (duplicate) {
+          const current = decodeFirestoreDocument<AssignedRoot>(duplicate.id, duplicate.data());
+          if (current.householdId !== value.householdId) throw new RepositoryError("ROOT_CONFLICT", "Root conflicts with another household");
+          alreadyEnabledIdenticalRoot = sameEnabledRootSelection(current, value);
+          enabled = { ...current, id: deterministicId, displayName: value.displayName, ancestryProviderIds: [...value.ancestryProviderIds], enabled: true };
+          transaction.create(deterministicRef, enabled);
+          transaction.delete(duplicate.ref);
+          for (const snapshot of deviceSnapshots.docs) {
+            const device = decodeFirestoreDocument<Device>(snapshot.id, snapshot.data());
+            if (device.assignedRootIds.includes(current.id)) {
+              transaction.update(snapshot.ref, { assignedRootIds: device.assignedRootIds.map(id => id === current.id ? deterministicId : id) });
+            }
+          }
+        } else {
+          enabled = { ...value, id: deterministicId, enabled: true, createdAt: input.resetAt };
+          transaction.create(deterministicRef, enabled);
+        }
+      }
+      if (!(alreadyEnabledIdenticalRoot && hasActiveSelectedRootSync(source, input.resetAt))) {
+        transaction.update(sourceRef, initialSourceReset());
+      }
+      return enabled;
+    });
+  }
   async disableRoot(input: DisableRootInput): Promise<SourceImpact> {
     const rootRef = this.firestore.collection(COLLECTIONS.roots).doc(input.rootId);
     return this.firestore.runTransaction(async transaction => {
@@ -487,15 +636,17 @@ export class FirestoreRepository implements AppRepository {
     const existingNodes = await this.listNodesForSource(input.sourceId);
     const byId = new Map(existingNodes.map(node => [node.id, node]));
     for (const node of input.nodes) byId.set(node.id, node);
-    for (const id of input.removedNodeIds) {
-      const node = byId.get(id);
-      if (node) byId.set(id, { ...node, available: false, indexedAt: input.completedAt ?? node.indexedAt });
-    }
-    recomputeAffectedFolders(byId, input.affectedAncestorNodeIds);
+    const removedIds = applyIndexRemovals(byId, input.removedNodeIds, input.committedAt);
+    const affectedIds = affectedFoldersForRemovals(
+      byId,
+      input.affectedAncestorNodeIds,
+      removedIds
+    );
+    recomputeAffectedFolders(byId, affectedIds);
     const changedIds = new Set([
       ...input.nodes.map(node => node.id),
-      ...input.removedNodeIds,
-      ...input.affectedAncestorNodeIds
+      ...removedIds,
+      ...affectedIds
     ]);
     const writes = [...changedIds]
       .map(id => byId.get(id))
@@ -506,16 +657,13 @@ export class FirestoreRepository implements AppRepository {
     await this.firestore.runTransaction(async transaction => {
       const snapshot = await transaction.get(sourceRef);
       const current = snapshot.exists
-        ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data())
+        ? decodeSourceDocument(snapshot.id, snapshot.data())
         : null;
       validateIndexCommit(current, input);
       const liveNodes = new Map(existingNodes.map(node => [node.id, node]));
       for (const node of input.nodes) liveNodes.set(node.id, node);
-      for (const id of input.removedNodeIds) {
-        const node = liveNodes.get(id);
-        if (node) liveNodes.set(id, { ...node, available: false });
-      }
-      recomputeAffectedFolders(liveNodes, input.affectedAncestorNodeIds);
+      applyIndexRemovals(liveNodes, input.removedNodeIds, input.committedAt);
+      recomputeAffectedFolders(liveNodes, affectedIds);
       for (const node of writes) {
         transaction.set(
           this.firestore.collection(COLLECTIONS.nodes).doc(node.id),
@@ -542,7 +690,7 @@ export class FirestoreRepository implements AppRepository {
     await this.firestore.runTransaction(async transaction => {
       const snapshot = await transaction.get(sourceRef);
       const source = snapshot.exists
-        ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data())
+        ? decodeSourceDocument(snapshot.id, snapshot.data())
         : null;
       if (
         !source ||
@@ -610,7 +758,7 @@ export class FirestoreRepository implements AppRepository {
     const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
     await this.firestore.runTransaction(async transaction => {
       const snapshot = await transaction.get(ref);
-      const source = snapshot.exists ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data()) : null;
+      const source = snapshot.exists ? decodeSourceDocument(snapshot.id, snapshot.data()) : null;
       if (
         !source ||
         source.leaseOwner !== input.leaseOwner ||
@@ -632,11 +780,31 @@ export class FirestoreRepository implements AppRepository {
     });
   }
 
+  async transitionToReconcileIfCurrent(input: TransitionToReconcileInput): Promise<boolean> {
+    const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
+    return this.firestore.runTransaction(async transaction => {
+      const snapshot = await transaction.get(ref);
+      const source = snapshot.exists ? decodeSourceDocument(snapshot.id, snapshot.data()) : null;
+      if (
+        !source ||
+        source.leaseOwner !== input.expectedLeaseOwner ||
+        !source.leaseExpiresAt ||
+        source.leaseExpiresAt <= input.changedAt ||
+        !sameIndexCheckpoint(source.crawlCheckpoint, input.expectedPreviousCheckpoint)
+      ) return false;
+      transaction.update(ref, {
+        crawlCheckpoint: input.newCheckpoint,
+        leaseExpiresAt: input.leaseExpiresAt
+      });
+      return true;
+    });
+  }
+
   async markSyncRunStarted(input: { sourceId: string; leaseOwner: string; runId: string; startedAt: Date }): Promise<boolean> {
     const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
     return this.firestore.runTransaction(async transaction => {
       const snapshot = await transaction.get(ref);
-      const source = snapshot.exists ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data()) : null;
+      const source = snapshot.exists ? decodeSourceDocument(snapshot.id, snapshot.data()) : null;
       if (!source || source.leaseOwner !== input.leaseOwner || !source.leaseExpiresAt || source.leaseExpiresAt <= input.startedAt) return false;
       transaction.update(ref, { status: "syncing", activeWorkflowRunId: input.runId, lastSyncStartedAt: input.startedAt, lastSyncErrorCode: null });
       return true;
@@ -655,7 +823,7 @@ export class FirestoreRepository implements AppRepository {
     const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
     return this.firestore.runTransaction(async transaction => {
       const snapshot = await transaction.get(ref);
-      const source = snapshot.exists ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data()) : null;
+      const source = snapshot.exists ? decodeSourceDocument(snapshot.id, snapshot.data()) : null;
       if (
         !source ||
         source.leaseOwner !== input.expectedLeaseOwner ||
@@ -959,7 +1127,7 @@ export class FirestoreRepository implements AppRepository {
       const ref = this.firestore.collection(COLLECTIONS.sources).doc(input.sourceId);
       const snapshot = await transaction.get(ref);
       const source = snapshot.exists
-        ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data())
+        ? decodeSourceDocument(snapshot.id, snapshot.data())
         : undefined;
       if (!source) throw new Error("Source not found");
       if (source.leaseOwner && source.leaseExpiresAt && source.leaseExpiresAt > input.now) return false;
@@ -973,7 +1141,7 @@ export class FirestoreRepository implements AppRepository {
       const ref = this.firestore.collection(COLLECTIONS.sources).doc(sourceId);
       const snapshot = await transaction.get(ref);
       const source = snapshot.exists
-        ? decodeFirestoreDocument<Source>(snapshot.id, snapshot.data())
+        ? decodeSourceDocument(snapshot.id, snapshot.data())
         : undefined;
       if (!source) throw new Error("Source not found");
       if (source.leaseOwner !== owner) return false;
@@ -1044,6 +1212,63 @@ export class FirestoreRepository implements AppRepository {
 
 function sameEncryptedSecret(left: Source["encryptedRefreshToken"], right: Source["encryptedRefreshToken"]): boolean {
   return left.keyVersion === right.keyVersion && left.iv === right.iv && left.ciphertext === right.ciphertext && left.authTag === right.authTag;
+}
+
+export function sameIndexCheckpoint(
+  left: IndexCheckpoint | null,
+  right: IndexCheckpoint | null
+): boolean {
+  return isDeepStrictEqual(left, right);
+}
+
+function initialSourceReset(): Pick<
+  Source,
+  | "status"
+  | "deltaCursor"
+  | "crawlCheckpoint"
+  | "activeWorkflowRunId"
+  | "syncGeneration"
+  | "nextSyncAt"
+  | "leaseOwner"
+  | "leaseExpiresAt"
+  | "lastSyncErrorCode"
+> {
+  return {
+    status: "syncing",
+    deltaCursor: null,
+    crawlCheckpoint: null,
+    activeWorkflowRunId: null,
+    syncGeneration: null,
+    nextSyncAt: null,
+    leaseOwner: null,
+    leaseExpiresAt: null,
+    lastSyncErrorCode: null
+  };
+}
+
+function hasActiveSelectedRootSync(source: Source, resetAt: Date): boolean {
+  return (
+    source.status === "syncing" &&
+    source.deltaCursor === null &&
+    (
+      source.crawlCheckpoint === null ||
+      source.crawlCheckpoint.mode === "initial" ||
+      source.crawlCheckpoint.mode === "reconcile"
+    ) &&
+    source.nextSyncAt === null &&
+    source.lastSyncErrorCode === null &&
+    source.leaseOwner !== null &&
+    source.leaseExpiresAt !== null &&
+    source.leaseExpiresAt > resetAt
+  );
+}
+
+function sameEnabledRootSelection(current: AssignedRoot, requested: AssignedRoot): boolean {
+  return (
+    current.enabled &&
+    current.ancestryProviderIds.length === requested.ancestryProviderIds.length &&
+    current.ancestryProviderIds.every((providerId, index) => providerId === requested.ancestryProviderIds[index])
+  );
 }
 
 export type FirestoreAtomicWriter = Transaction | WriteBatch;
@@ -1152,7 +1377,7 @@ function isFirestoreTimestamp(value: unknown): value is FirestoreTimestampLike {
   );
 }
 
-function decodeFirestoreValue(value: unknown): unknown {
+export function decodeFirestoreValue(value: unknown): unknown {
   if (value instanceof Date) return value;
   if (isFirestoreTimestamp(value)) return value.toDate();
   if (Array.isArray(value)) return value.map(decodeFirestoreValue);
@@ -1220,4 +1445,19 @@ function recomputeAffectedFolders(
     );
     nodes.set(id, recomputeFolderMetadata(folder, descendants));
   }
+}
+
+function affectedFoldersForRemovals(
+  nodes: ReadonlyMap<string, MediaNode>,
+  existingAffectedIds: readonly string[],
+  removedIds: readonly string[]
+): string[] {
+  const affected = new Set(existingAffectedIds);
+  for (const id of removedIds) {
+    const node = nodes.get(id);
+    if (!node) continue;
+    node.ancestorNodeIds.forEach(ancestorId => affected.add(ancestorId));
+    if (node.parentNodeId) affected.add(node.parentNodeId);
+  }
+  return [...affected];
 }

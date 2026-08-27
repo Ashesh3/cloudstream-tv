@@ -78,6 +78,7 @@ export interface IndexCheckpoint {
   providerPageCursor: string | null;
   processedNodeCount: number;
   generation: string;
+  rootProviderIds?: string[];
   currentProviderFolderId?: string | null;
   pendingProviderFolderIds?: string[];
   reconciliationCursor?: string | null;
@@ -95,6 +96,7 @@ export interface Source extends StoredEntity {
   householdId: EntityId;
   provider: ProviderKind;
   providerAccountId: string | null;
+  providerRootId: string | null;
   accountLabel: string;
   encryptedRefreshToken: EncryptedSecret;
   encryptedAccessToken: EncryptedSecret | null;
@@ -203,7 +205,6 @@ export interface UpdateHouseholdSettingsInput {
 
 export interface ConnectSourceInput {
   source: Source;
-  root: AssignedRoot;
 }
 
 export interface RemoveSourceInput {

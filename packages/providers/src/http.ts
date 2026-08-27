@@ -48,7 +48,13 @@ export async function providerFetch(
       { retryable: true, retryAfterSeconds }
     );
   }
-
+  if (response.status === 404) {
+    throw new ProviderError(
+      "PROVIDER_NOT_FOUND",
+      "Provider item was not found.",
+      { retryable: false }
+    );
+  }
   const errorCode = await readProviderErrorCode(response);
   if (response.status === 401 || errorCode === "invalid_grant") {
     throw new ProviderError(

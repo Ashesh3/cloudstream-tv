@@ -41,7 +41,11 @@ describe("unified TV viewer", () => {
     render(<Viewer api={viewerApi()} items={items} selectedItemId="image-1" slideshowSeconds={8} previews={{}} onClose={closed} />);
     await screen.findByRole("img", { name: "First.jpg" });
     fireEvent.keyDown(window, { key: "ArrowUp" });
-    expect(screen.getByRole("dialog", { name: "Media details" })).toBeVisible();
+    const details = screen.getByRole("dialog", { name: "Media details" });
+    expect(details).toBeVisible();
+    const title = screen.getByRole("heading", { name: "First.jpg" });
+    const screening = screen.getByText("Now screening · Still");
+    expect(title.compareDocumentPosition(screening) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Media details" })).not.toBeInTheDocument();
     expect(closed).not.toHaveBeenCalled();

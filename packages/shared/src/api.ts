@@ -8,6 +8,10 @@ import type {
   Source,
   WatchHistory
 } from "./contracts";
+import {
+  sourceIndexStateKind,
+  type SourceIndexStateKind
+} from "./index-state";
 
 export interface ApiError {
   code: string;
@@ -67,6 +71,31 @@ export interface SourceDto {
   lastSyncErrorCode: string | null;
   indexProgress: { mode: IndexCheckpoint["mode"]; processedNodeCount: number; pendingFolderCount: number; reconciliationActive: boolean } | null;
   createdAt: string;
+  providerRootId: string | null;
+  indexState: SourceIndexStateDto;
+}
+
+export interface SourceIndexStateDto {
+  kind: SourceIndexStateKind;
+  processedNodeCount: number;
+  pendingFolderCount: number;
+  recoverable: boolean;
+  errorCode: string | null;
+}
+
+export interface ProviderFolderDto {
+  providerNodeId: string;
+  parentProviderId: string | null;
+  name: string;
+  assignedRootId: string | null;
+}
+
+export interface AdminProviderFolderPageResponse {
+  source: SourceDto;
+  current: ProviderFolderDto;
+  breadcrumbs: ProviderFolderDto[];
+  folders: ProviderFolderDto[];
+  nextCursor: string | null;
 }
 
 export interface AssignedRootDto {
@@ -164,10 +193,12 @@ export interface TvRootCardDto {
   displayName: string;
   provider: Source["provider"];
   accountLabel: string;
-  nodeId: string;
+  nodeId: string | null;
   folderCoverNodeIds: string[];
   childFolderCount: number;
   childMediaCount: number;
+  readiness: "preparing" | "ready" | "blocked";
+  readinessMessage: string;
 }
 
 export interface MediaUrlResponse {
@@ -214,7 +245,7 @@ export interface AdminFolderTreeResponse {
 }
 
 export interface CreateAssignedRootBody {
-  nodeId: string;
+  providerNodeId: string;
   displayName?: string;
 }
 
@@ -272,7 +303,7 @@ export function encodeDeviceDto(value: Device): DeviceDto {
   };
 }
 
-export function encodeSourceDto(value: Source): SourceDto {
+export function encodeSourceDto(value: Source, enabledRootCount: number): SourceDto {
   return {
     id: value.id,
     provider: value.provider,
@@ -289,7 +320,33 @@ export function encodeSourceDto(value: Source): SourceDto {
       pendingFolderCount: value.crawlCheckpoint.pendingProviderFolderIds?.length ?? 0,
       reconciliationActive: value.crawlCheckpoint.mode === "reconcile"
     } : null,
-    createdAt: iso(value.createdAt)
+    createdAt: iso(value.createdAt),
+    providerRootId: value.providerRootId,
+    indexState: encodeSourceIndexState(value, enabledRootCount)
+  };
+}
+
+export function encodeSourceIndexState(
+  source: Source,
+  enabledRootCount: number
+): SourceIndexStateDto {
+  const checkpoint = source.crawlCheckpoint;
+  const processedNodeCount = checkpoint?.processedNodeCount ?? 0;
+  const pendingFolderCount = checkpoint?.pendingProviderFolderIds?.length ?? 0;
+  const errorCode = source.lastSyncErrorCode;
+  const kind = sourceIndexStateKind(source, enabledRootCount);
+  return {
+    kind,
+    processedNodeCount,
+    pendingFolderCount,
+    recoverable:
+      kind === "quota-exhausted" ||
+      kind === "reauth-required" ||
+      kind === "provider-error" ||
+      (kind === "queued" && source.activeWorkflowRunId === null),
+    errorCode: kind === "quota-exhausted" || kind === "reauth-required" || kind === "provider-error"
+      ? errorCode
+      : null
   };
 }
 
@@ -385,11 +442,21 @@ export function encodeBootstrapResponse(
 export function encodeAdminOverviewResponse(
   value: AdminOverviewDomainResponse
 ): AdminOverviewResponse {
+  const enabledRootCountBySource = new Map<string, number>();
+  for (const root of value.roots) {
+    if (!root.enabled) continue;
+    enabledRootCountBySource.set(
+      root.sourceId,
+      (enabledRootCountBySource.get(root.sourceId) ?? 0) + 1
+    );
+  }
   return {
     household: encodeHouseholdDto(value.household),
     pendingRequests: value.pendingRequests.map(encodeDeviceRequestDto),
     devices: value.devices.map(encodeDeviceDto),
-    sources: value.sources.map(encodeSourceDto),
+    sources: value.sources.map(source =>
+      encodeSourceDto(source, enabledRootCountBySource.get(source.id) ?? 0)
+    ),
     roots: value.roots.map(encodeAssignedRootDto)
   };
 }

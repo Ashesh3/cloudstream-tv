@@ -1,15 +1,19 @@
 import { ProviderError, type ProviderRegistry } from "@cloudframe/providers";
 import type { IndexCheckpoint, Source } from "@cloudframe/shared";
-import { runIndexBatch, type IndexBatchRepository } from "./batch";
+import {
+  filterDeltaPageToEnabledRoots,
+  runIndexBatch,
+  type IndexBatchRepository
+} from "./batch";
 import { runReconciliationBatch, type ReconciliationRepository } from "./reconcile";
 import type { SyncMode, SyncWorkflowRunner } from "./workflow";
 
 export interface IndexOrchestratorRepository
   extends IndexBatchRepository,
     ReconciliationRepository {
-  putSource(source: Source): Promise<void>;
   listRootsForSource(sourceId: string): Promise<Array<{ providerNodeId: string; enabled: boolean }>>;
   releaseSyncLease(sourceId: string, owner: string): Promise<boolean>;
+  transitionToReconcileIfCurrent(input: TransitionToReconcileInput): Promise<boolean>;
   completeSyncRun(input: {
     sourceId: string;
     leaseOwner: string;
@@ -25,6 +29,15 @@ export interface IndexOrchestratorRepository
     errorCode: string;
     nextSyncAt: Date | null;
   }): Promise<boolean>;
+}
+
+export interface TransitionToReconcileInput {
+  sourceId: string;
+  expectedLeaseOwner: string;
+  expectedPreviousCheckpoint: IndexCheckpoint | null;
+  changedAt: Date;
+  newCheckpoint: IndexCheckpoint;
+  leaseExpiresAt: Date;
 }
 
 export interface IndexOrchestratorDependencies {
@@ -57,7 +70,26 @@ export function createIndexOrchestrator(
       if (!source) throw new Error("Source not found");
       try {
         const mode = source.crawlCheckpoint?.mode ?? requestedMode;
-        const generation = source.crawlCheckpoint?.generation ?? createGeneration();
+        const enabledRoots = (await dependencies.repository.listRootsForSource(sourceId))
+          .filter(root => root.enabled);
+        const roots = enabledRoots
+          .map(root => root.providerNodeId)
+          .sort((left, right) => left.localeCompare(right));
+        const restartInitial = mode === "initial" && (
+          source.crawlCheckpoint?.mode !== "initial" ||
+          !sameRootProviderIds(source.crawlCheckpoint.rootProviderIds, roots)
+        );
+        const generation = restartInitial
+          ? createGeneration()
+          : source.crawlCheckpoint?.generation ?? createGeneration();
+        if (
+          roots.length === 0 &&
+          mode !== "reconcile" &&
+          source.crawlCheckpoint?.mode !== "initial"
+        ) {
+          await finishSource(dependencies.repository, sourceId, leaseOwner, now());
+          return { complete: true };
+        }
         if (mode === "reconcile") {
           const result = await runReconciliationBatch({
             repository: dependencies.repository,
@@ -79,6 +111,17 @@ export function createIndexOrchestrator(
           return { complete: result.complete };
         }
 
+        if (mode === "initial" && roots.length === 0) {
+          await transitionToReconcile(
+            dependencies.repository,
+            source,
+            initialCheckpoint(generation, roots),
+            leaseOwner,
+            now()
+          );
+          return { complete: false };
+        }
+
         const credentials = await dependencies.getCredentials(sourceId, source.householdId);
         if (mode === "delta") {
           const cursor = source.crawlCheckpoint?.providerPageCursor ?? source.deltaCursor;
@@ -87,97 +130,107 @@ export function createIndexOrchestrator(
             cursor,
             pageSize
           });
+          const filteredPage = await filterDeltaPageToEnabledRoots(
+            page,
+            enabledRoots,
+            dependencies.repository,
+            sourceId
+          );
           const complete = page.nextCursor === null;
           await runIndexBatch({
-          repository: dependencies.repository,
-          sourceId,
-          mode,
-          generation,
-            now: now(),
-          complete,
-          leaseOwner
-        }, page);
-          if (complete) {
-          await finishSource(
-            dependencies.repository,
+            repository: dependencies.repository,
             sourceId,
-            leaseOwner,
-            now()
-          );
-        }
+            mode,
+            generation,
+            now: now(),
+            complete,
+            leaseOwner
+          }, filteredPage);
+          if (complete) {
+            await finishSource(
+              dependencies.repository,
+              sourceId,
+              leaseOwner,
+              now()
+            );
+          }
           return { complete };
         }
 
-      const roots = (await dependencies.repository.listRootsForSource(sourceId))
-        .filter(root => root.enabled)
-        .map(root => root.providerNodeId);
-      const rootSeed = roots.map(rootProviderId =>
-        syntheticRootProviderNode(source, rootProviderId)
-      );
-      const checkpoint = source.crawlCheckpoint?.mode === "initial"
-        ? source.crawlCheckpoint
-        : initialCheckpoint(generation, roots);
-      const currentFolder = checkpoint.currentProviderFolderId ?? checkpoint.pendingProviderFolderIds?.[0];
-      if (!currentFolder) {
-        await transitionToReconcile(
-          dependencies.repository,
-          source,
-          checkpoint,
-          leaseOwner,
-          now()
+        const rootSeed = roots.map(rootProviderId =>
+          syntheticRootProviderNode(source, rootProviderId)
         );
-        return { complete: false };
-      }
-      const providerPage = await dependencies.providers.get(source.provider).listFolder({
-        credentials,
-        folderId: currentFolder,
-        cursor: checkpoint.providerPageCursor,
-        pageSize
-      });
-      const page = {
-        ...providerPage,
-        items: source.crawlCheckpoint?.mode === "initial"
-          ? providerPage.items
-          : [...rootSeed, ...providerPage.items]
-      };
-      const folders = providerPage.items.filter(item => item.kind === "folder").map(item => item.providerNodeId);
-      const pending = [...(checkpoint.pendingProviderFolderIds ?? roots)];
-      if (page.nextCursor === null) pending.shift();
-      pending.push(...folders.filter(id => !pending.includes(id)));
-      await runIndexBatch({
-        repository: dependencies.repository,
-        sourceId,
-        mode: "initial",
-        generation,
-        now: now(),
-        complete: false,
-        leaseOwner,
-        checkpointPatch: {
-          currentProviderFolderId: page.nextCursor ? currentFolder : pending[0] ?? null,
-          pendingProviderFolderIds: pending
-        }
-      }, page);
-      if (page.nextCursor === null && pending.length === 0) {
-        const updated = await dependencies.repository.getSource(sourceId);
-        if (updated) {
+        const checkpoint = !restartInitial && source.crawlCheckpoint?.mode === "initial"
+          ? source.crawlCheckpoint
+          : initialCheckpoint(generation, roots);
+        const currentFolder = checkpoint.currentProviderFolderId ?? checkpoint.pendingProviderFolderIds?.[0];
+        if (!currentFolder) {
           await transitionToReconcile(
             dependencies.repository,
-            updated,
-            updated.crawlCheckpoint ?? checkpoint,
+            source,
+            checkpoint,
             leaseOwner,
             now()
           );
+          return { complete: false };
         }
-      }
+        const providerPage = await dependencies.providers.get(source.provider).listFolder({
+          credentials,
+          folderId: currentFolder,
+          cursor: checkpoint.providerPageCursor,
+          pageSize
+        });
+        const page = {
+          ...providerPage,
+          items: restartInitial
+            ? [...rootSeed, ...providerPage.items]
+            : providerPage.items
+        };
+        const folders = providerPage.items
+          .filter(item => item.kind === "folder")
+          .map(item => item.providerNodeId);
+        const pending = [...(checkpoint.pendingProviderFolderIds ?? roots)];
+        if (page.nextCursor === null) pending.shift();
+        pending.push(...folders.filter(id => !pending.includes(id)));
+        await runIndexBatch({
+          repository: dependencies.repository,
+          sourceId,
+          mode: "initial",
+          generation,
+          now: now(),
+          complete: false,
+          leaseOwner,
+          checkpointPatch: {
+            rootProviderIds: roots,
+            currentProviderFolderId: page.nextCursor ? currentFolder : pending[0] ?? null,
+            pendingProviderFolderIds: pending
+          }
+        }, page);
+        if (page.nextCursor === null && pending.length === 0) {
+          const updated = await dependencies.repository.getSource(sourceId);
+          if (updated) {
+            await transitionToReconcile(
+              dependencies.repository,
+              updated,
+              updated.crawlCheckpoint ?? checkpoint,
+              leaseOwner,
+              now()
+            );
+          }
+        }
         return { complete: false };
       } catch (error) {
-        await recordProviderFailure(
-          dependencies.repository,
-          source,
-          leaseOwner,
-          error,
-          now()
-        );
+        try {
+          await recordProviderFailure(
+            dependencies.repository,
+            source,
+            leaseOwner,
+            error,
+            now()
+          );
+        } catch {
+          // Preserve the provider or quota failure that caused this step to fail.
+        }
         throw error;
       }
     }
@@ -191,22 +244,25 @@ async function transitionToReconcile(
   leaseOwner: string,
   changedAt: Date
 ): Promise<void> {
-  if (
-    source.leaseOwner !== leaseOwner ||
-    !source.leaseExpiresAt ||
-    source.leaseExpiresAt <= changedAt
-  ) throw new Error("Sync lease is stale");
-  await repository.putSource({
-    ...source,
-    leaseExpiresAt: new Date(changedAt.getTime() + 10 * 60 * 1000),
-    crawlCheckpoint: {
+  const transitioned = await repository.transitionToReconcileIfCurrent({
+    sourceId: source.id,
+    expectedLeaseOwner: leaseOwner,
+    expectedPreviousCheckpoint: source.crawlCheckpoint,
+    changedAt,
+    newCheckpoint: {
       mode: "reconcile",
       providerPageCursor: null,
       processedNodeCount: checkpoint.processedNodeCount,
       generation: checkpoint.generation,
       reconciliationCursor: null
-    }
+    },
+    leaseExpiresAt: new Date(changedAt.getTime() + 10 * 60 * 1000)
   });
+  if (!transitioned) {
+    throw Object.assign(new Error("Sync checkpoint is stale"), {
+      code: "SYNC_CHECKPOINT_STALE" as const
+    });
+  }
 }
 
 function syntheticRootProviderNode(
@@ -237,11 +293,28 @@ async function recordProviderFailure(
   error: unknown,
   failedAt: Date
 ): Promise<void> {
+  const current = await repository.getSource(source.id);
+  if (!current) return;
+  const expectedCheckpoint = current.leaseOwner === leaseOwner
+    ? current.crawlCheckpoint
+    : source.crawlCheckpoint;
+  if (isResourceExhausted(error)) {
+    await repository.recordSyncFailure({
+      sourceId: source.id,
+      expectedLeaseOwner: leaseOwner,
+      expectedCheckpoint,
+      failedAt,
+      status: "error",
+      errorCode: "RESOURCE_EXHAUSTED",
+      nextSyncAt: null
+    });
+    return;
+  }
   if (!(error instanceof ProviderError)) return;
   await repository.recordSyncFailure({
     sourceId: source.id,
     expectedLeaseOwner: leaseOwner,
-    expectedCheckpoint: source.crawlCheckpoint,
+    expectedCheckpoint,
     failedAt,
     status: error.code === "PROVIDER_REAUTH_REQUIRED" ? "reauth-required" : "error",
     errorCode: error.code,
@@ -251,15 +324,34 @@ async function recordProviderFailure(
   });
 }
 
+function isResourceExhausted(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (
+    (error as { code?: unknown }).code === 8 ||
+    (error as { code?: unknown }).code === "RESOURCE_EXHAUSTED"
+  );
+}
+
 function initialCheckpoint(generation: string, roots: string[]): IndexCheckpoint {
   return {
     mode: "initial",
     providerPageCursor: null,
     processedNodeCount: 0,
     generation,
+    rootProviderIds: roots,
     currentProviderFolderId: roots[0] ?? null,
     pendingProviderFolderIds: roots
   };
+}
+
+function sameRootProviderIds(
+  checkpointRoots: readonly string[] | undefined,
+  enabledRoots: readonly string[]
+): boolean {
+  return Boolean(
+    checkpointRoots &&
+    checkpointRoots.length === enabledRoots.length &&
+    checkpointRoots.every((root, index) => root === enabledRoots[index])
+  );
 }
 
 async function finishSource(

@@ -19,7 +19,8 @@ const request: DeviceRequestDto = {
 const source: SourceDto = {
   id: "source-1", provider: "google", accountLabel: "Home Drive", status: "healthy",
   accessTokenExpiresAt: null, nextSyncAt: null, lastSyncStartedAt: null,
-  lastSyncCompletedAt: null, lastSyncErrorCode: null, indexProgress: null, createdAt: "2026-08-20T00:00:00.000Z"
+  lastSyncCompletedAt: null, lastSyncErrorCode: null, indexProgress: null, createdAt: "2026-08-20T00:00:00.000Z",
+  providerRootId: "provider-root", indexState: { kind: "healthy", processedNodeCount: 0, pendingFolderCount: 0, recoverable: false, errorCode: null }
 };
 const roots: AssignedRootDto[] = [
   { id: "root-1", sourceId: "source-1", providerNodeId: "a", displayName: "Family Photos", ancestryProviderIds: [], enabled: true, createdAt: "2026-08-20T00:00:00.000Z" },
@@ -59,5 +60,26 @@ describe("approval sheet accessibility", () => {
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     expect(close).toHaveBeenCalledTimes(1);
     expect(submit).not.toHaveBeenCalled();
+  });
+
+  it("shows provider, account, index readiness, and affected access for every root", () => {
+    render(<ApprovalSheet request={request} roots={roots} sources={[source]} onApprove={vi.fn()} onClose={vi.fn()} />);
+    const row = screen.getByLabelText("Family Photos").closest("label")!;
+    expect(within(row).getByText("Google Drive · Home Drive")).toBeVisible();
+    expect(within(row).getByText("Program ready")).toBeVisible();
+    expect(within(row).getByText("Available after approval")).toBeVisible();
+  });
+
+  it("keeps quota-paused roots assignable and explains delayed content", () => {
+    const quotaSource: SourceDto = {
+      ...source,
+      indexState: { kind: "quota-exhausted", processedNodeCount: 7, pendingFolderCount: 2, recoverable: true, errorCode: "RESOURCE_EXHAUSTED" }
+    };
+    render(<ApprovalSheet request={request} roots={roots} sources={[quotaSource]} onApprove={vi.fn()} onClose={vi.fn()} />);
+    const checkbox = screen.getByLabelText("Family Photos");
+    expect(checkbox).toBeEnabled();
+    const row = checkbox.closest("label")!;
+    expect(within(row).getByText("Indexing paused")).toBeVisible();
+    expect(within(row).getByText("Content appears after indexing resumes.")).toBeVisible();
   });
 });
