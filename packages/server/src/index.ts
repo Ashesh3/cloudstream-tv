@@ -5,6 +5,8 @@ export * from "./auth/sealed-sessions";
 export * from "./auth/tokens";
 export * from "./crypto/aead";
 export * from "./crypto/provider-tokens";
+export * from "./control-plane/schema";
+export * from "./control-plane/envelope";
 export * from "./firestore/memory-repository";
 export * from "./firestore/decode";
 export * from "./firestore/repository";
