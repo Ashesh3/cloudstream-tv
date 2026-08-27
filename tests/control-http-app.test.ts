@@ -446,6 +446,67 @@ describe("final control HTTP API", () => {
     expect(harness.controlStore.loadCount).toBe(0);
   });
 
+  it("returns 413 without waiting for an oversized reader cancellation", async () => {
+    const harness = await createControlApiHarness();
+    const cancelStarted = deferredSignal();
+    const request = requestWithReader(harness.origin, {
+      read: async () => ({ done: false, value: new Uint8Array(32_769) }),
+      cancel: () => {
+        cancelStarted.resolve();
+        return new Promise<never>(() => undefined);
+      }
+    });
+
+    const responsePromise = harness.app(request);
+    await cancelStarted.promise;
+    const response = await settlesWithinMicrotasks(responsePromise);
+
+    expect(response.status).toBe(413);
+    expect(harness.controlStore.loadCount).toBe(0);
+    expect(harness.provider.mediaUrlCalls).toBe(0);
+  });
+
+  it("returns invalid JSON without waiting for cancellation after a read failure", async () => {
+    const harness = await createControlApiHarness();
+    const cancelStarted = deferredSignal();
+    const request = requestWithReader(harness.origin, {
+      read: async () => {
+        throw new Error("private stream failure");
+      },
+      cancel: () => {
+        cancelStarted.resolve();
+        return new Promise<never>(() => undefined);
+      }
+    });
+
+    const responsePromise = harness.app(request);
+    await cancelStarted.promise;
+    const response = await settlesWithinMicrotasks(responsePromise);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "INVALID_JSON" });
+    expect(harness.controlStore.loadCount).toBe(0);
+    expect(harness.provider.mediaUrlCalls).toBe(0);
+  });
+
+  it("maps a locked request body reader to invalid JSON", async () => {
+    const harness = await createControlApiHarness();
+    const request = streamRequest(
+      `${harness.origin}/api/tv/media-url`,
+      new Headers({ "content-type": "application/json" }),
+      [new TextEncoder().encode('{"handle":"sealed"}')]
+    );
+    const lock = request.body!.getReader();
+
+    const response = await harness.app(request);
+    lock.releaseLock();
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "INVALID_JSON" });
+    expect(harness.controlStore.loadCount).toBe(0);
+    expect(harness.provider.mediaUrlCalls).toBe(0);
+  });
+
   it.each([
     ["/api/bootstrap/", "GET", undefined, {}],
     ["/api/bootstrap?extra=1", "GET", undefined, {}],
@@ -557,4 +618,44 @@ function streamRequest(
     body,
     duplex: "half"
   } as RequestInit & { duplex: "half" });
+}
+
+function requestWithReader(
+  origin: string,
+  reader: {
+    read(): Promise<ReadableStreamReadResult<Uint8Array>>;
+    cancel(): Promise<unknown>;
+  }
+): Request {
+  const request = new Request(`${origin}/api/tv/media-url`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}"
+  });
+  Object.defineProperty(request, "body", {
+    configurable: true,
+    value: { getReader: () => reader }
+  });
+  return request;
+}
+
+function deferredSignal() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settled) => {
+    resolve = settled;
+  });
+  return { promise, resolve };
+}
+
+async function settlesWithinMicrotasks<T>(promise: Promise<T>): Promise<T> {
+  const pending = Symbol("pending");
+  const result = await Promise.race([
+    promise,
+    (async () => {
+      for (let index = 0; index < 100; index += 1) await Promise.resolve();
+      return pending;
+    })()
+  ]);
+  if (result === pending) throw new Error("response waited for reader cancellation");
+  return result as T;
 }
