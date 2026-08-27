@@ -19,6 +19,115 @@ export interface ApiError {
   retryAfterSeconds?: number;
 }
 
+export interface ControlHouseholdDto {
+  allowNewDeviceRequests: boolean;
+  defaultMediaOrder: Household["defaultMediaOrder"];
+  defaultSlideshowSeconds: number;
+}
+
+export interface ControlDeviceDto {
+  id: string;
+  name: string;
+  enabled: boolean;
+  assignedRootIds: string[];
+  mediaOrder: Device["mediaOrder"];
+  slideshowSeconds: number | null;
+  createdAt: string;
+  approvedAt: string;
+  revokedAt: string | null;
+}
+
+export interface ControlRequestDto {
+  id: string;
+  requestedName: string;
+  status: DeviceRequest["status"];
+  createdAt: string;
+  expiresAt: string;
+  resolvedAt: string | null;
+  approvedDeviceId: string | null;
+}
+
+export interface ControlSourceDto {
+  id: string;
+  provider: Source["provider"];
+  accountLabel: string;
+  status: "healthy" | "reauth-required" | "disabled";
+  createdAt: string;
+}
+
+export interface ControlRootDto {
+  id: string;
+  sourceId: string;
+  displayName: string;
+  enabled: boolean;
+  createdAt: string;
+}
+
+export interface AdminSnapshotResponse {
+  revision: number;
+  household: ControlHouseholdDto;
+  pendingRequests: ControlRequestDto[];
+  devices: ControlDeviceDto[];
+  sources: ControlSourceDto[];
+  roots: ControlRootDto[];
+  recoveryCopy: { status: "current" | "delayed"; revision: number | null };
+}
+
+export interface TvBootstrapResponse {
+  enrollment:
+    | { state: "requests-disabled" | "unenrolled" }
+    | { state: "pending"; request: ControlRequestDto }
+    | { state: "ready"; device: ControlDeviceDto; household: ControlHouseholdDto }
+    | { state: "denied" | "expired" | "revoked" };
+}
+
+export interface TvBrowseItemDto {
+  id: string;
+  handle: string;
+  name: string;
+  normalizedName: string;
+  kind: "folder" | "image" | "video";
+  mimeType: string | null;
+  size: number | null;
+  width: number | null;
+  height: number | null;
+  capturedAt: string | null;
+  createdAtProvider: string | null;
+  modifiedAtProvider: string | null;
+  thumbnailRevision: string | null;
+  hasPreview: boolean;
+}
+
+export interface TvRootDto {
+  id: string;
+  handle: string;
+  displayName: string;
+  provider: "google" | "onedrive";
+  accountLabel: string;
+}
+
+export interface TvFolderPageResponse {
+  parent: TvBrowseItemDto;
+  children: TvBrowseItemDto[];
+  nextCursor: string | null;
+}
+
+export interface DirectThumbnailItem {
+  itemId: string;
+  status: "ready" | "unavailable";
+  url?: string;
+  expiresAt?: string;
+  revision?: string | null;
+}
+
+export interface DirectMediaUrlResponse {
+  itemId: string;
+  kind: "image" | "video";
+  url: string;
+  expiresAt: string;
+  revision: string | null;
+}
+
 export type ApiResult<T> =
   | { ok: true; data: T }
   | { ok: false; error: ApiError };
