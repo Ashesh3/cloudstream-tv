@@ -25,6 +25,7 @@ export * from "./services/control-admin";
 export * from "./services/control-enrollment";
 export * from "./services/control-oauth";
 export * from "./services/credential-broker";
+export * from "./services/live-provider-folders";
 export * from "./services/bootstrap";
 export * from "./services/device-auth";
 export * from "./services/device-enrollment";
