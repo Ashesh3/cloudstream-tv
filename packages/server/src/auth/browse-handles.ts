@@ -9,6 +9,7 @@ import {
 
 const ITEM_PURPOSE = "cloudframe/browse-item/v2";
 const CURSOR_PURPOSE = "cloudframe/browse-cursor/v2";
+const CURSOR_MAX_LIFETIME_MS = 30 * 60_000;
 
 export interface BrowseItemClaims {
   version: 2;
@@ -125,8 +126,13 @@ function parseItem(value: unknown, now: Date): BrowseItemClaims {
 
 function parseCursor(value: unknown, now: Date): BrowseCursorClaims {
   const input = record(value);
+  const parsed = common(input, now);
+  const lifetime = parsed.expiresAt - parsed.issuedAt;
+  if (lifetime <= 0 || lifetime > CURSOR_MAX_LIFETIME_MS) {
+    fail();
+  }
   return {
-    ...common(input, now),
+    ...parsed,
     folderProviderNodeId: string(input.folderProviderNodeId),
     providerCursor: string(input.providerCursor)
   };

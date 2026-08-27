@@ -2,7 +2,7 @@ import { createHmac } from "node:crypto";
 
 import { describe, expect, it } from "vitest";
 
-import { createBrowseHandleCodec } from "@cloudframe/server";
+import { createBrowseHandleCodec, sealJson } from "@cloudframe/server";
 import { TEST_NOW, testAeadKeyring } from "./helpers/control-plane";
 
 describe("opaque browse handles", () => {
@@ -77,6 +77,33 @@ describe("opaque browse handles", () => {
     now = new Date(TEST_NOW.getTime() + 30 * 60_000);
     expect(() => codec.openItem(item)).toThrow(/invalid/i);
     expect(() => codec.openCursor(cursor)).toThrow(/invalid/i);
+  });
+
+  it("rejects provider cursors whose lifetime exceeds 30 minutes", () => {
+    const keyring = testAeadKeyring();
+    const codec = createBrowseHandleCodec(keyring, "id-secret", () => TEST_NOW);
+    const claims = {
+      version: 2 as const,
+      householdId: "h1",
+      deviceId: "d1",
+      sourceId: "s1",
+      rootId: "r1",
+      folderProviderNodeId: "folder-secret",
+      providerCursor: "cursor-secret",
+      credentialVersion: 4,
+      issuedAt: TEST_NOW.getTime(),
+      expiresAt: TEST_NOW.getTime() + 30 * 60_000
+    };
+    const overlong = { ...claims, expiresAt: claims.expiresAt + 1 };
+    const overlongToken = sealJson("cloudframe/browse-cursor/v2", overlong, keyring);
+
+    expect(codec.openCursor(codec.sealCursor(claims))).toMatchObject(claims);
+    expect.soft(() => codec.sealCursor(overlong)).toThrowError(
+      expect.objectContaining({ code: "SEALED_VALUE_INVALID", message: "SEALED_VALUE_INVALID" })
+    );
+    expect.soft(() => codec.openCursor(overlongToken)).toThrowError(
+      expect.objectContaining({ code: "SEALED_VALUE_INVALID", message: "SEALED_VALUE_INVALID" })
+    );
   });
 
   it("uses an unambiguous length-prefixed HMAC for stable item IDs", () => {
