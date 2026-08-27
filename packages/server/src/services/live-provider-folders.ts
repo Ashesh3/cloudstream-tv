@@ -84,6 +84,16 @@ export class LiveProviderFolderError extends Error {
   }
 }
 
+export type LiveProviderFolderConfigurationErrorCode =
+  "ROOT_ID_SECRET_INVALID";
+
+export class LiveProviderFolderConfigurationError extends Error {
+  constructor(readonly code: LiveProviderFolderConfigurationErrorCode) {
+    super(code);
+    this.name = "LiveProviderFolderConfigurationError";
+  }
+}
+
 export interface CreateLiveProviderFolderServiceOptions {
   controlStore: ControlPlaneStore;
   controlState: () => ControlRequestContext;
@@ -110,6 +120,17 @@ interface ResolvedNodes {
 
 function folderError(code: LiveProviderFolderErrorCode): LiveProviderFolderError {
   return new LiveProviderFolderError(code);
+}
+
+function requireRootIdSecret(value: string): string {
+  if (
+    value.length === 0 ||
+    value !== value.trim() ||
+    Buffer.byteLength(value, "utf8") < 32
+  ) {
+    throw new LiveProviderFolderConfigurationError("ROOT_ID_SECRET_INVALID");
+  }
+  return value;
 }
 
 function providerReauthRequired(): ProviderError {
@@ -246,6 +267,7 @@ function validProviderNodeId(value: string): string {
 export function createLiveProviderFolderService(
   options: CreateLiveProviderFolderServiceOptions,
 ): LiveProviderFolderService {
+  const rootIdSecret = requireRootIdSecret(options.rootIdSecret);
   const now = options.now ?? (() => new Date());
 
   async function sourceContext(
@@ -443,7 +465,7 @@ export function createLiveProviderFolderService(
     await resolveNodes(context, input.providerNodeId);
     const resolved = await resolveNodes(context, input.providerNodeId);
     const id = rootId(
-      options.rootIdSecret,
+      rootIdSecret,
       input.householdId,
       input.sourceId,
       resolved.current.providerNodeId,

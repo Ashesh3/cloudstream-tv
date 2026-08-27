@@ -7,6 +7,7 @@ import {
 } from "@cloudframe/providers";
 import type { ControlPlaneDocumentV2 } from "@cloudframe/shared";
 import {
+  LiveProviderFolderConfigurationError,
   LiveProviderFolderError,
   createLiveProviderFolderService,
   type ControlMutationReducer,
@@ -89,6 +90,11 @@ class ProviderHarness {
   getNodeCalls = 0;
   listFolderCalls = 0;
   listFolderCredentials: string[] = [];
+  listFolderInputs: Array<{
+    folderId: string;
+    cursor: string | null;
+    pageSize: number;
+  }> = [];
   listFolderError: unknown;
   failListFolderOnce: unknown;
   getRootError: unknown;
@@ -117,6 +123,11 @@ class ProviderHarness {
     listFolder: async (input) => {
       this.listFolderCalls += 1;
       this.listFolderCredentials.push(input.credentials.accessToken);
+      this.listFolderInputs.push({
+        folderId: input.folderId,
+        cursor: input.cursor,
+        pageSize: input.pageSize,
+      });
       if (this.failListFolderOnce !== undefined) {
         const error = this.failListFolderOnce;
         this.failListFolderOnce = undefined;
@@ -133,7 +144,12 @@ class ProviderHarness {
   };
 }
 
-function createHarness(document = testControlDocument()) {
+const validRootIdSecret = "r".repeat(32);
+
+function createHarness(
+  document = testControlDocument(),
+  rootIdSecret = validRootIdSecret,
+) {
   const store = new MemoryStore(structuredClone(document));
   const provider = new ProviderHarness();
   const providerRegistry: ProviderRegistry = {
@@ -168,7 +184,7 @@ function createHarness(document = testControlDocument()) {
     },
     credentialBroker: broker,
     providers: providerRegistry,
-    rootIdSecret: "root-id-secret",
+    rootIdSecret,
     now: () => new Date(TEST_NOW),
   });
 
@@ -192,6 +208,22 @@ function createHarness(document = testControlDocument()) {
 }
 
 describe("live provider folders", () => {
+  it.each([
+    ["empty", ""],
+    ["whitespace", " ".repeat(32)],
+    ["31-byte", "x".repeat(31)],
+  ])("rejects a %s root ID secret before returning a service", (_case, secret) => {
+    expect(() => createHarness(testControlDocument(), secret)).toThrowError(
+      new LiveProviderFolderConfigurationError("ROOT_ID_SECRET_INVALID"),
+    );
+  });
+
+  it("accepts a 32-byte root ID secret", () => {
+    expect(() =>
+      createHarness(testControlDocument(), "x".repeat(32)),
+    ).not.toThrow();
+  });
+
   it("lists provider folders from the API without reading indexed nodes", async () => {
     const document = testControlDocument();
     document.roots["root-1"] = {
@@ -248,7 +280,7 @@ describe("live provider folders", () => {
     });
 
     const expectedId =
-      "root_XVfRTAe1QN7vWbMICq6ZhP8lNtAtMZYA5gDdWZKv7MY";
+      "root_B2Yc95KQaJkI3aWPCREB7fETiVsGBh5xefov07urJA0";
     expect(result.root).toEqual({
       id: expectedId,
       sourceId: "source-1",
@@ -402,6 +434,53 @@ describe("live provider folders", () => {
     expect(harness.provider.getRootCalls).toBe(1);
     expect(harness.provider.getNodeCalls).toBe(1);
     expect(harness.provider.listFolderCalls).toBe(1);
+    expect(harness.provider.listFolderInputs).toEqual([
+      { folderId: "albums", cursor: "cursor-1", pageSize: 25 },
+    ]);
+  });
+
+  it("keeps deterministic root IDs stable and separates ambiguous tuples", async () => {
+    const firstDocument = testControlDocument();
+    firstDocument.roots = {};
+    firstDocument.devices["device-1"].assignedRootIds = [];
+    firstDocument.sources.a = {
+      ...firstDocument.sources["source-1"],
+      id: "a",
+    };
+    delete firstDocument.sources["source-1"];
+    const first = createHarness(firstDocument);
+    first.provider.nodes.set("bc", node("bc", "BC", "provider-root"));
+
+    const secondDocument = testControlDocument();
+    secondDocument.roots = {};
+    secondDocument.devices["device-1"].assignedRootIds = [];
+    secondDocument.sources.ab = {
+      ...secondDocument.sources["source-1"],
+      id: "ab",
+    };
+    delete secondDocument.sources["source-1"];
+    const second = createHarness(secondDocument);
+    second.provider.nodes.set("c", node("c", "C", "provider-root"));
+
+    const firstResult = await first.service.createRoot({
+      householdId: "h1",
+      sourceId: "a",
+      providerNodeId: "bc",
+    });
+    const repeated = await first.service.createRoot({
+      householdId: "h1",
+      sourceId: "a",
+      providerNodeId: "bc",
+    });
+    const secondResult = await second.service.createRoot({
+      householdId: "h1",
+      sourceId: "ab",
+      providerNodeId: "c",
+    });
+
+    expect("h1" + "a" + "bc").toBe("h1" + "ab" + "c");
+    expect(repeated.root.id).toBe(firstResult.root.id);
+    expect(secondResult.root.id).not.toBe(firstResult.root.id);
   });
 
   it("rejects ancestry when the provider account root no longer matches the source", async () => {
