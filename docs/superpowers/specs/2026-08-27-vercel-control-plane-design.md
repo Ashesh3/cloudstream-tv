@@ -91,12 +91,16 @@ Watch history:                            localStorage
 
 ### 4.1 Active state ownership
 
-The encrypted private Vercel Blob snapshot is the runtime source of truth. Vercel Runtime Cache is a hot copy of that snapshot. Public request handling never falls through to Firestore when the cache is empty:
+The encrypted private Vercel Blob snapshot is the runtime source of truth. Vercel Runtime Cache is a hot copy of that snapshot, but it is never trusted without conditional Blob revalidation. Each protected public request loads the control document once:
 
-1. Read and decrypt the Runtime Cache entry.
-2. On a Runtime Cache miss, read and decrypt the private Blob snapshot.
-3. On a missing, corrupt, or undecryptable Blob snapshot, fail closed with `CONTROL_PLANE_UNAVAILABLE`.
-4. Do not automatically read Firestore from a public request.
+1. Read the encrypted Runtime Cache entry and its Blob ETag, if present.
+2. Call private Blob `get` with `useCache: false` and `If-None-Match` set to the cached ETag.
+3. On `304 Not Modified`, decrypt and use the cached envelope. On `200`, decrypt the returned envelope and replace the Runtime Cache entry.
+4. On a cache miss, read and decrypt the complete private Blob snapshot.
+5. On a missing, corrupt, or undecryptable Blob snapshot, fail closed with `CONTROL_PLANE_UNAVAILABLE`.
+6. Do not automatically read Firestore from a public request.
+
+The verified document is carried in a request-scoped context and reused by authentication, authorization, credential brokering, and response encoding. One HTTP request performs at most one authoritative Blob revalidation.
 
 This rule ensures that traffic volume, cold starts, cache eviction, deployments, provider errors, or malicious requests cannot amplify Firestore reads.
 
@@ -109,6 +113,10 @@ controlPlaneBackups/{householdId}
 ```
 
 The application writes the complete compact control document after an actual control-state mutation. The application does not query collections to reconstruct normal request state.
+
+The permanent Vercel runtime writer service account has a custom write-only role containing `datastore.entities.create` and `datastore.entities.update`, with no get/list permission. Apply an IAM Condition scoped to the recovery document path where the current Firestore IAM resource attributes support it. Migration and restore run under a separate operator identity with temporary explicit read permission.
+
+During the bounded legacy-cookie exchange only, a second Vercel service account with the exact session/device/household read permissions is available behind `ENABLE_LEGACY_SESSION_EXCHANGE=1`. It has no write permission and is instantiated only when the flag is enabled. After the one admin browser and one TV receive sealed version-2 cookies, the flag, reader service-account binding, environment variable, exchange code, and read-capable identity are removed. The permanent runtime then has no Firestore read identity at all.
 
 Firestore reads are limited to:
 
@@ -123,7 +131,7 @@ The restore script reads exactly one `controlPlaneBackups/{householdId}` documen
 The active snapshot is stored at a deterministic private pathname:
 
 ```text
-cloudframe/control-plane/{householdId}.json.enc
+cloudframe/control-plane/{environment}/{householdId}.json.enc
 ```
 
 The snapshot is protected twice:
@@ -134,10 +142,10 @@ The snapshot is protected twice:
 Vercel Runtime Cache stores the same encrypted envelope under:
 
 ```text
-cloudframe:control-plane:v2:{householdId}
+cloudframe:control-plane:v2:{environment}:{householdId}
 ```
 
-The Runtime Cache entry has a five-minute TTL and the tag `cloudframe-control:{householdId}`. Its loss causes one private Blob read, never a Firestore read. The short TTL bounds any stale-cache exposure if invalidation or replacement fails. The project continues to run only in `bom1`, preventing cross-region replicas from producing inconsistent active state.
+The Runtime Cache entry has a five-minute TTL and the tag `cloudframe-control:{environment}:{householdId}`. Its loss causes one complete private Blob read, never a Firestore read. Because every protected request revalidates the cached ETag against Blob origin, a stale cache entry cannot extend device/root/source authorization. The project continues to run only in `bom1`, preventing cross-region replicas from producing inconsistent active state.
 
 Vercel documents Runtime Cache as transient regional storage exposed through `@vercel/functions`; it is an optimization, not the durable source. The private Blob snapshot remains authoritative when Runtime Cache is empty.
 
@@ -167,6 +175,7 @@ interface ControlPlaneDocumentV2 {
     slideshowSeconds: number | null;
     sessionVersion: number;
     createdAt: string;
+    approvedAt: string;
     revokedAt: string | null;
   }>;
   pendingDeviceRequests: Record<string, {
@@ -176,6 +185,8 @@ interface ControlPlaneDocumentV2 {
     status: "pending" | "approved" | "denied" | "expired";
     createdAt: string;
     expiresAt: string;
+    resolvedAt: string | null;
+    approvedDeviceId: string | null;
   }>;
   sources: Record<string, {
     id: string;
@@ -226,12 +237,12 @@ Device approval, revocation, root assignment, household settings, OAuth connecti
 3. Apply one domain mutation in memory and increment `revision` exactly once.
 4. Encrypt the new snapshot.
 5. Overwrite the private Blob using its current ETag through Blob's `ifMatch` option.
-6. Replace the Runtime Cache entry with the committed encrypted snapshot and immediately read it back to confirm the new revision.
+6. Replace the Runtime Cache entry with the committed encrypted snapshot; on cache failure, delete/expire it best-effort so the next request performs a complete Blob read.
 7. Write the full logical document to `controlPlaneBackups/{householdId}` using Firestore `set`, without reading Firestore.
 
 An ETag conflict reloads the Blob and retries the domain mutation up to three times. After three conflicts the API returns `CONTROL_PLANE_CONFLICT`; it does not overwrite concurrent work.
 
-If Runtime Cache replacement or revision verification fails, the Blob mutation remains committed but the admin mutation response is `503 CONTROL_CACHE_REFRESH_REQUIRED`, not success. The API deletes/expires the cache key best-effort and the next request reloads the authoritative Blob. Security-sensitive mutations such as device revocation, root removal, source disable, and passphrase rotation therefore never report success while knowingly serving the prior cached authorization state. Any unknown stale entry expires within five minutes even if deletion fails.
+Runtime Cache replacement failure does not roll back a committed Blob mutation. The next protected request conditionally revalidates against Blob origin and therefore observes the committed revision even if cache deletion also fails. Security-sensitive mutations such as device revocation, root removal, source disable, and passphrase rotation take effect on the next request without a Firestore lookup.
 
 ### 6.2 Firestore mirror failure
 
@@ -551,7 +562,7 @@ Production structured logs include secret-safe counters for private Blob reads, 
 
 - AES-GCM control-envelope round trip, key rotation, tamper rejection, and redaction;
 - Blob ETag compare-and-swap and three-attempt conflict handling;
-- Runtime Cache hit/miss behavior with no Firestore fallback;
+- conditional Blob revalidation of every cached control snapshot, with one load per HTTP request and no Firestore fallback;
 - write-only Firestore mirror composition;
 - explicit one-document restore behavior;
 - sealed admin/device cookie expiry and version invalidation;
