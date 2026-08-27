@@ -46,6 +46,10 @@ export class ControlAdminServiceError extends Error {
 }
 
 export interface ControlAdminService {
+  recoveryStatus(): Promise<{
+    status: "current" | "delayed";
+    revision: number | null;
+  }>;
   snapshot(householdId: string): Promise<AdminSnapshotResponse>;
   updateSettings(
     householdId: string,
@@ -447,6 +451,7 @@ export function createControlAdminService(
   }
 
   return {
+    recoveryStatus: () => cache.getMirrorStatus(),
     snapshot,
     updateSettings,
     rotatePassphrase,

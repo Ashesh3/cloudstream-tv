@@ -19,6 +19,8 @@ export * from "./firestore/repository";
 export * from "./firestore/client";
 export * from "./http/app";
 export * from "./http/errors";
+export * from "./http/request-context";
+export * from "./http/control-app";
 export * from "./services/admin-auth";
 export * from "./services/control-auth";
 export * from "./services/control-admin";
