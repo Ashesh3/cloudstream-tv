@@ -145,6 +145,42 @@ describe("local TV watch history", () => {
     expect(history.available).toBe(false);
   });
 
+  it("clears persisted history after a transient write failure made the store unavailable", () => {
+    const storage = memoryStorage({
+      "cloudframe.tv.watch-history.v1:device-1": JSON.stringify({
+        version: 1,
+        entries: { item_old: { ...validHistory(), updatedAt: now.toISOString() } }
+      })
+    });
+    let failWrite = true;
+    const originalSetItem = storage.setItem;
+    storage.setItem = (key, value) => {
+      if (failWrite) {
+        failWrite = false;
+        throw Object.assign(new Error("quota"), { name: "QuotaExceededError" });
+      }
+      originalSetItem(key, value);
+    };
+    const history = createLocalWatchHistory(storage, "device-1", () => now);
+
+    history.save("item_new", validHistory());
+    expect(history.available).toBe(false);
+    history.clear();
+
+    expect(storage.values.has("cloudframe.tv.watch-history.v1:device-1")).toBe(false);
+    expect(history.list()).toEqual([]);
+  });
+
+  it("keeps clear nonthrowing and unavailable when persisted removal fails", () => {
+    const storage = memoryStorage();
+    storage.removeItem = () => { throw Object.assign(new Error("denied"), { name: "SecurityError" }); };
+    const history = createLocalWatchHistory(storage, "device-1", () => now);
+
+    expect(() => history.clear()).not.toThrow();
+    expect(history.available).toBe(false);
+    expect(history.list()).toEqual([]);
+  });
+
   it("rejects invalid device ids, item ids, values, and timestamps without touching storage", () => {
     const storage = memoryStorage();
     const invalidDevice = createLocalWatchHistory(storage, "../device", () => now);

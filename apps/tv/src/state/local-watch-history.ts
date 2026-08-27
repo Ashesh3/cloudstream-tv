@@ -76,7 +76,7 @@ export function createLocalWatchHistory(
     },
     clear() {
       entries = {};
-      if (!available || !storage || !storageKey) return;
+      if (!storage || !storageKey) return;
       try {
         storage.removeItem(storageKey);
       } catch {

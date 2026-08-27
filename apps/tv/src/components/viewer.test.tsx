@@ -176,6 +176,88 @@ describe("unified TV viewer", () => {
     expect(save).toHaveBeenCalledWith("item_video_1", { positionSeconds: 33, durationSeconds: 100, completed: false });
   });
 
+  it("saves adjacent video A with A's element values before video B replaces it", async () => {
+    const sequence = [
+      media("item_video_a", "video", "A.mp4", "video/mp4"),
+      media("item_video_b", "video", "B.mp4", "video/mp4")
+    ];
+    const history = viewerHistory();
+    const save = vi.spyOn(history, "save");
+    render(<Viewer history={history} api={viewerApi()} items={sequence} selectedItemId="item_video_a" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    const videoA = await screen.findByLabelText("Playing A.mp4") as HTMLVideoElement;
+    Object.defineProperty(videoA, "duration", {
+      configurable: true,
+      get: () => videoA.getAttribute("src")?.includes("item_video_b") ? 200 : 100
+    });
+    Object.defineProperty(videoA, "currentTime", {
+      configurable: true,
+      get: () => videoA.getAttribute("src")?.includes("item_video_b") ? 7 : 35,
+      set: () => undefined
+    });
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    const videoB = await screen.findByLabelText("Playing B.mp4") as HTMLVideoElement;
+
+    expect(videoB).not.toBe(videoA);
+    expect(history.get("item_video_a")).toMatchObject({ positionSeconds: 35, durationSeconds: 100, completed: false });
+    expect(save).not.toHaveBeenCalledWith("item_video_a", { positionSeconds: 7, durationSeconds: 200, completed: false });
+  });
+
+  it("never falls back to the previous video's element when the next video closes before metadata", async () => {
+    const sequence = [
+      media("item_video_a", "video", "A.mp4", "video/mp4"),
+      media("item_video_b", "video", "B.mp4", "video/mp4")
+    ];
+    const history = viewerHistory();
+    const save = vi.spyOn(history, "save");
+    render(<Viewer history={history} api={viewerApi()} items={sequence} selectedItemId="item_video_a" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    const videoA = await screen.findByLabelText("Playing A.mp4") as HTMLVideoElement;
+    Object.defineProperty(videoA, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(videoA, "currentTime", { configurable: true, value: 35 });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    const videoB = await screen.findByLabelText("Playing B.mp4") as HTMLVideoElement;
+    Object.defineProperty(videoB, "duration", { configurable: true, value: Number.NaN });
+    Object.defineProperty(videoB, "currentTime", { configurable: true, value: 0 });
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(history.get("item_video_a")).toMatchObject({ positionSeconds: 35, durationSeconds: 100, completed: false });
+    expect(history.get("item_video_b")).toBeNull();
+    expect(save).not.toHaveBeenCalledWith("item_video_b", { positionSeconds: 35, durationSeconds: 100, completed: false });
+  });
+
+  it("preserves existing resume history when a quick close happens before metadata", async () => {
+    const history = viewerHistory();
+    history.save("item_video_1", { positionSeconds: 42, durationSeconds: 100, completed: false });
+    const save = vi.spyOn(history, "save");
+    render(<Viewer history={history} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(video, "duration", { configurable: true, value: Number.NaN });
+    Object.defineProperty(video, "currentTime", { configurable: true, value: 0 });
+
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    expect(save).not.toHaveBeenCalled();
+    expect(history.get("item_video_1")).toMatchObject({ positionSeconds: 42, durationSeconds: 100, completed: false });
+  });
+
+  it("saves valid progress on media error and keeps that item association through close and unmount", async () => {
+    const history = viewerHistory();
+    const save = vi.spyOn(history, "save");
+    const view = render(<Viewer history={history} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(video, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(video, "currentTime", { configurable: true, value: 37 });
+
+    fireEvent.error(video);
+    expect(history.get("item_video_1")).toMatchObject({ positionSeconds: 37, durationSeconds: 100, completed: false });
+    fireEvent.keyDown(window, { key: "Escape" });
+    view.unmount();
+
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith("item_video_1", { positionSeconds: 37, durationSeconds: 100, completed: false });
+  });
+
   it("keeps playback operable and shows a polite status when local history is unavailable", async () => {
     const history = createLocalWatchHistory({
       getItem() { throw Object.assign(new Error("denied"), { name: "SecurityError" }); },
@@ -185,7 +267,10 @@ describe("unified TV viewer", () => {
 
     render(<Viewer history={history} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
-    expect(screen.getByRole("status")).toHaveTextContent("Watch progress is unavailable on this TV, but playback will continue.");
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("Watch progress is unavailable on this TV, but playback will continue.");
+    expect(status).toHaveClass("viewer-history-status");
+    expect(status).not.toHaveAttribute("tabindex");
     fireEvent.keyDown(window, { key: "Enter" });
     fireEvent.play(video);
     expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
