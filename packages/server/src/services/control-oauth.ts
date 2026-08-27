@@ -32,6 +32,10 @@ import {
   encryptProviderToken,
   type ProviderTokenKeyring
 } from "../crypto/provider-tokens";
+import type {
+  AuthenticatedControlAdmin,
+  ControlRequestContext
+} from "./control-auth";
 
 const OAUTH_STATE_BYTES = 32;
 const OAUTH_VERIFIER_BYTES = 48;
@@ -40,10 +44,9 @@ const OAUTH_STATE_LIFETIME_SECONDS = OAUTH_STATE_LIFETIME_MS / 1_000;
 const OAUTH_COOKIE_NAME = "oauth_state";
 
 export interface ControlOAuthBeginInput {
-  householdId: string;
-  adminSessionId: string;
+  admin: AuthenticatedControlAdmin;
+  context: ControlRequestContext;
   provider: ProviderKind;
-  redirectUri: string;
   reconnectSourceId?: string;
 }
 
@@ -53,10 +56,9 @@ export interface ControlOAuthBeginResult {
 }
 
 export interface ControlOAuthCompleteInput {
-  householdId: string;
-  adminSessionId: string;
+  admin: AuthenticatedControlAdmin;
+  context: ControlRequestContext;
   provider: ProviderKind;
-  redirectUri: string;
   state: string;
   stateCookie: string;
   code?: string;
@@ -91,6 +93,7 @@ export interface ControlOAuthServiceDependencies {
   codec: SealedSessionCodec;
   providers: ProviderRegistry;
   keyring: ProviderTokenKeyring;
+  redirectUris: Record<ProviderKind, string>;
   runtimeCache?: ControlOAuthReplayCache;
   now?: () => Date;
   createId?: () => string;
@@ -98,7 +101,6 @@ export interface ControlOAuthServiceDependencies {
 }
 
 export type ControlOAuthServiceErrorCode =
-  | "HOUSEHOLD_NOT_FOUND"
   | "OAUTH_ACCOUNT_MISMATCH"
   | "OAUTH_CANCELLED"
   | "OAUTH_PROVIDER_ERROR"
@@ -129,11 +131,7 @@ function nonEmpty(value: unknown): value is string {
 }
 
 function visibleLabel(value: unknown): value is string {
-  return (
-    nonEmpty(value) &&
-    value.length <= 120 &&
-    value === value.trim()
-  );
+  return nonEmpty(value) && value.length <= 120 && value === value.trim();
 }
 
 function sameHash(left: string, right: string): boolean {
@@ -177,22 +175,38 @@ function cookieToken(value: string): string {
   }
 }
 
-function assertHousehold(
-  document: ControlPlaneDocumentV2,
-  householdId: string
-): void {
-  if (document.householdId !== householdId) fail("HOUSEHOLD_NOT_FOUND");
+function assertActiveAdmin(
+  admin: AuthenticatedControlAdmin,
+  context: ControlRequestContext
+): ControlPlaneDocumentV2 {
+  const { document, revision } = context;
+  if (
+    revision !== document.revision ||
+    admin.householdId !== document.householdId ||
+    admin.adminPassphraseVersion !== document.household.adminPassphraseVersion
+  ) {
+    stateInvalid();
+  }
+  return document;
 }
 
 function reconnectSource(
   document: ControlPlaneDocumentV2,
   sourceId: string,
-  provider: ProviderKind,
-  householdId: string
+  provider: ProviderKind
 ): ControlPlaneSource {
-  assertHousehold(document, householdId);
   const source = document.sources[sourceId];
   if (!source || source.provider !== provider) fail("SOURCE_NOT_FOUND");
+  return source;
+}
+
+function activeReconnectSource(
+  document: ControlPlaneDocumentV2,
+  sourceId: string,
+  provider: ProviderKind
+): ControlPlaneSource {
+  const source = document.sources[sourceId];
+  if (!source || source.provider !== provider) stateInvalid();
   return source;
 }
 
@@ -221,13 +235,9 @@ function encryptedBootstrapAccessToken(
   account: ProviderAccount,
   keyring: ProviderTokenKeyring
 ): { token: EncryptedSecret | null; expiresAt: string | null } {
-  const { accessToken, accessTokenExpiresAt } = account.credentials;
-  if (!nonEmpty(accessToken)) {
-    return { token: null, expiresAt: null };
-  }
   return {
-    token: encryptProviderToken(accessToken, keyring),
-    expiresAt: accessTokenExpiresAt.toISOString()
+    token: encryptProviderToken(account.credentials.accessToken, keyring),
+    expiresAt: account.credentials.accessTokenExpiresAt.toISOString()
   };
 }
 
@@ -300,16 +310,14 @@ export function createControlOAuthService(
   async function beginAuthorization(
     input: ControlOAuthBeginInput
   ): Promise<ControlOAuthBeginResult> {
-    const { document } = await dependencies.store.load();
-    assertHousehold(document, input.householdId);
-    if (input.reconnectSourceId) {
-      reconnectSource(
-        document,
-        input.reconnectSourceId,
-        input.provider,
-        input.householdId
-      );
-    }
+    const document = assertActiveAdmin(input.admin, input.context);
+    const redirectUri = dependencies.redirectUris[input.provider];
+    if (!nonEmpty(redirectUri)) stateInvalid();
+    const reconnect = input.reconnectSourceId
+      ? reconnectSource(document, input.reconnectSourceId, input.provider)
+      : undefined;
+    const sourceId = reconnect?.id ?? createId();
+    if (!nonEmpty(sourceId)) stateInvalid();
 
     const issuedAt = now();
     const expiresAt = new Date(issuedAt.getTime() + OAUTH_STATE_LIFETIME_MS);
@@ -317,13 +325,17 @@ export function createControlOAuthService(
     const pkceVerifier = base64url(randomBytes(OAUTH_VERIFIER_BYTES));
     const stateToken = dependencies.codec.issueOAuthState({
       version: 2,
-      householdId: input.householdId,
-      adminSessionId: input.adminSessionId,
+      householdId: input.admin.householdId,
+      adminSessionId: input.admin.sessionId,
       provider: input.provider,
-      redirectUri: input.redirectUri,
-      ...(input.reconnectSourceId === undefined
+      redirectUri,
+      sourceId,
+      ...(reconnect === undefined
         ? {}
-        : { reconnectSourceId: input.reconnectSourceId }),
+        : {
+            reconnectSourceId: reconnect.id,
+            expectedCredentialVersion: reconnect.credentialVersion
+          }),
       pkceVerifier,
       stateHash: hashOpaqueToken(rawState),
       issuedAt: issuedAt.getTime(),
@@ -332,7 +344,7 @@ export function createControlOAuthService(
     const started = await providerCall(() =>
       dependencies.providers.get(input.provider).beginAuthorization({
         state: rawState,
-        redirectUri: input.redirectUri,
+        redirectUri,
         codeChallenge: pkceChallenge(pkceVerifier)
       })
     );
@@ -346,18 +358,21 @@ export function createControlOAuthService(
   async function completeAuthorization(
     input: ControlOAuthCompleteInput
   ): Promise<ControlOAuthCompleteResult> {
+    assertActiveAdmin(input.admin, input.context);
     let claims;
     try {
       claims = dependencies.codec.openOAuthState(cookieToken(input.stateCookie));
     } catch {
       stateInvalid();
     }
+    const redirectUri = dependencies.redirectUris[input.provider];
     const currentTime = now().getTime();
     if (
-      claims.householdId !== input.householdId ||
-      claims.adminSessionId !== input.adminSessionId ||
+      !nonEmpty(redirectUri) ||
+      claims.householdId !== input.admin.householdId ||
+      claims.adminSessionId !== input.admin.sessionId ||
       claims.provider !== input.provider ||
-      claims.redirectUri !== input.redirectUri ||
+      claims.redirectUri !== redirectUri ||
       claims.issuedAt > currentTime ||
       claims.expiresAt <= currentTime ||
       claims.expiresAt - claims.issuedAt <= 0 ||
@@ -381,35 +396,38 @@ export function createControlOAuthService(
       }
       if (!nonEmpty(input.code)) providerInvalid();
 
+      const activeDocument = assertActiveAdmin(input.admin, input.context);
+      const expectedReconnect = claims.reconnectSourceId
+        ? activeReconnectSource(
+            activeDocument,
+            claims.reconnectSourceId,
+            claims.provider
+          )
+        : undefined;
+      if (
+        expectedReconnect &&
+        expectedReconnect.credentialVersion !== claims.expectedCredentialVersion
+      ) {
+        stateInvalid();
+      }
+
       const adapter: ProviderAdapter = dependencies.providers.get(claims.provider);
       const account = await providerCall(() =>
         adapter.completeAuthorization({
           code: input.code!,
-          redirectUri: claims.redirectUri,
+          redirectUri,
           codeVerifier: claims.pkceVerifier
         })
       );
       const root = await providerCall(() => adapter.getRoot(account.credentials));
       validProviderResult(account, root);
 
-      let expectedReconnect: ControlPlaneSource | undefined;
-      if (claims.reconnectSourceId) {
-        const { document } = await dependencies.store.load();
-        expectedReconnect = reconnectSource(
-          document,
-          claims.reconnectSourceId,
-          claims.provider,
-          claims.householdId
-        );
-        if (
-          expectedReconnect.providerAccountId !== account.accountId ||
-          expectedReconnect.providerRootId !== root.providerNodeId
-        ) {
-          fail("OAUTH_ACCOUNT_MISMATCH");
-        }
-      } else {
-        const { document } = await dependencies.store.load();
-        assertHousehold(document, claims.householdId);
+      if (
+        expectedReconnect &&
+        (expectedReconnect.providerAccountId !== account.accountId ||
+          expectedReconnect.providerRootId !== root.providerNodeId)
+      ) {
+        fail("OAUTH_ACCOUNT_MISMATCH");
       }
 
       const bootstrap = encryptedBootstrapAccessToken(
@@ -422,8 +440,7 @@ export function createControlOAuthService(
             dependencies.keyring
           )
         : undefined;
-      if (!claims.reconnectSourceId && !encryptedRefreshToken) providerInvalid();
-      const sourceId = claims.reconnectSourceId ?? createId();
+      if (!expectedReconnect && !encryptedRefreshToken) providerInvalid();
       const createdAt = now().toISOString();
 
       await markReplayUsed(
@@ -432,22 +449,28 @@ export function createControlOAuthService(
         base64url(randomBytes(OAUTH_STATE_BYTES))
       );
       const stored = await dependencies.store.mutate(
-        claims.reconnectSourceId ? "reconnect-source" : "connect-source",
+        expectedReconnect ? "reconnect-source" : "connect-source",
         (current) => {
-          assertHousehold(current, claims.householdId);
+          if (
+            current.householdId !== input.admin.householdId ||
+            current.household.adminPassphraseVersion !==
+              input.admin.adminPassphraseVersion
+          ) {
+            stateInvalid();
+          }
           if (claims.reconnectSourceId) {
-            const currentSource = reconnectSource(
+            const currentSource = activeReconnectSource(
               current,
               claims.reconnectSourceId,
-              claims.provider,
-              claims.householdId
+              claims.provider
             );
             if (
-              !expectedReconnect ||
-              currentSource.providerAccountId !==
-                expectedReconnect.providerAccountId ||
-              currentSource.providerRootId !==
-                expectedReconnect.providerRootId ||
+              currentSource.credentialVersion !==
+              claims.expectedCredentialVersion
+            ) {
+              stateInvalid();
+            }
+            if (
               currentSource.providerAccountId !== account.accountId ||
               currentSource.providerRootId !== root.providerNodeId
             ) {
@@ -469,8 +492,9 @@ export function createControlOAuthService(
             );
           }
 
+          if (current.sources[claims.sourceId]) stateInvalid();
           const source: ControlPlaneSource = {
-            id: sourceId,
+            id: claims.sourceId,
             provider: claims.provider,
             providerAccountId: account.accountId,
             providerRootId: root.providerNodeId,

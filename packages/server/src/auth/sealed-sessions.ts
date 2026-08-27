@@ -45,7 +45,9 @@ export interface OAuthStateClaims {
   adminSessionId: string;
   provider: ProviderKind;
   redirectUri: string;
+  sourceId: string;
   reconnectSourceId?: string;
+  expectedCredentialVersion?: number;
   pkceVerifier: string;
   stateHash: string;
   issuedAt: number;
@@ -153,13 +155,27 @@ function parseOAuth(value: unknown, now: Date): OAuthStateClaims {
   if (reconnectSourceId !== undefined && (typeof reconnectSourceId !== "string" || reconnectSourceId.length === 0)) {
     fail();
   }
+  const sourceId = string(input.sourceId);
+  const expectedCredentialVersion = input.expectedCredentialVersion;
+  if (
+    (reconnectSourceId === undefined && expectedCredentialVersion !== undefined) ||
+    (reconnectSourceId !== undefined &&
+      (reconnectSourceId !== sourceId ||
+        expectedCredentialVersion === undefined))
+  ) {
+    fail();
+  }
 
   return {
     ...common(input, now),
     adminSessionId: string(input.adminSessionId),
     provider,
     redirectUri: string(input.redirectUri),
+    sourceId,
     ...(reconnectSourceId === undefined ? {} : { reconnectSourceId }),
+    ...(expectedCredentialVersion === undefined
+      ? {}
+      : { expectedCredentialVersion: positiveInteger(expectedCredentialVersion) }),
     pkceVerifier: string(input.pkceVerifier),
     stateHash: string(input.stateHash)
   };

@@ -10,8 +10,11 @@ import {
   ControlOAuthServiceError,
   createControlOAuthService,
   createSealedSessionCodec,
-  decryptProviderToken
+  decryptProviderToken,
+  type AuthenticatedControlAdmin,
+  type ControlRequestContext
 } from "@cloudframe/server";
+import type { ControlPlaneStore } from "../packages/server/src/control-plane/store";
 import { describe, expect, it } from "vitest";
 
 import { controlStoreHarness } from "../packages/server/src/control-plane/memory";
@@ -60,6 +63,42 @@ class MemoryReplayCache {
       }
       await this.synchronizedSetGate;
     }
+  }
+}
+
+class InterleavedReplayCache {
+  private value: unknown | null = null;
+  private initialReads = 0;
+  private readonly initialReadGate: Promise<void>;
+  private releaseInitialReads!: () => void;
+  private markerReads = 0;
+  readonly firstMarkerVerified: Promise<void>;
+  private releaseFirstMarker!: () => void;
+
+  constructor() {
+    this.initialReadGate = new Promise<void>((resolve) => {
+      this.releaseInitialReads = resolve;
+    });
+    this.firstMarkerVerified = new Promise<void>((resolve) => {
+      this.releaseFirstMarker = resolve;
+    });
+  }
+
+  async get(): Promise<unknown | null> {
+    if (this.initialReads < 2) {
+      this.initialReads += 1;
+      if (this.initialReads === 2) this.releaseInitialReads();
+      await this.initialReadGate;
+      return null;
+    }
+    this.markerReads += 1;
+    const value = this.value;
+    if (this.markerReads === 1) this.releaseFirstMarker();
+    return value;
+  }
+
+  async set(_key: string, value: unknown): Promise<void> {
+    this.value = structuredClone(value);
   }
 }
 
@@ -160,14 +199,40 @@ function setup(options: { replaceFailures?: number } = {}) {
     currentVersion: "provider-v1",
     keys: { "provider-v1": Buffer.alloc(32, 9) }
   };
+  const admin: AuthenticatedControlAdmin = {
+    householdId: "h1",
+    sessionId: "admin-1",
+    adminPassphraseVersion: 1,
+    csrfToken: "csrf-token"
+  };
+  const context = (): ControlRequestContext => {
+    const document = structuredClone(control.durable.currentDocument!);
+    return { document, revision: document.revision };
+  };
+  let serviceStoreLoadCount = 0;
+  const serviceStore: ControlPlaneStore = {
+    async load() {
+      serviceStoreLoadCount += 1;
+      return control.store.load();
+    },
+    mutate: (name, reducer) => control.store.mutate(name, reducer)
+  };
   let randomByte = 1;
-  const createOAuth = (sourceId = "source-new") =>
+  const createOAuth = (
+    sourceId = "source-new",
+    store = serviceStore,
+    cache: MemoryReplayCache | InterleavedReplayCache = replayCache
+  ) =>
     createControlOAuthService({
-      store: control.store,
+      store,
       codec,
       providers,
       keyring,
-      runtimeCache: replayCache,
+      redirectUris: {
+        google: REDIRECT_URI,
+        onedrive: "https://app.test/api/admin/sources/onedrive/callback"
+      },
+      runtimeCache: cache,
       now: () => TEST_NOW,
       createId: () => sourceId,
       randomBytes: (size) => Buffer.alloc(size, randomByte++)
@@ -176,10 +241,9 @@ function setup(options: { replaceFailures?: number } = {}) {
 
   async function beginGoogle(reconnectSourceId?: string) {
     return oauth.beginAuthorization({
-      householdId: "h1",
-      adminSessionId: "admin-1",
+      admin,
+      context: context(),
       provider: "google",
-      redirectUri: REDIRECT_URI,
       ...(reconnectSourceId === undefined ? {} : { reconnectSourceId })
     });
   }
@@ -189,10 +253,9 @@ function setup(options: { replaceFailures?: number } = {}) {
     overrides: Partial<Parameters<typeof oauth.completeAuthorization>[0]> = {}
   ) {
     return {
-      householdId: "h1",
-      adminSessionId: "admin-1",
+      admin,
+      context: context(),
       provider: "google" as const,
-      redirectUri: REDIRECT_URI,
       state: stateFromAuthorizationUrl(started.authorizationUrl),
       code: "provider-code",
       stateCookie: started.stateCookie,
@@ -201,14 +264,17 @@ function setup(options: { replaceFailures?: number } = {}) {
   }
 
   return {
+    admin,
     callback,
     codec,
     control,
+    context,
     createOAuth,
     keyring,
     oauth,
     provider,
     replayCache,
+    serviceStoreLoadCount: () => serviceStoreLoadCount,
     beginGoogle
   };
 }
@@ -218,10 +284,9 @@ describe("sealed control OAuth", () => {
     const harness = setup();
 
     const started = await harness.oauth.beginAuthorization({
-      householdId: "h1",
-      adminSessionId: "admin-1",
+      admin: harness.admin,
+      context: harness.context(),
       provider: "google",
-      redirectUri: REDIRECT_URI
     });
 
     expect(started.stateCookie).not.toMatch(/verifier|admin-1|google/);
@@ -240,6 +305,7 @@ describe("sealed control OAuth", () => {
       adminSessionId: "admin-1",
       provider: "google",
       redirectUri: REDIRECT_URI,
+      sourceId: "source-new",
       issuedAt: TEST_NOW.getTime(),
       expiresAt: TEST_NOW.getTime() + 10 * 60_000
     });
@@ -261,6 +327,7 @@ describe("sealed control OAuth", () => {
     );
     expect(harness.control.durable.writeAttempts).toBe(0);
     expect(harness.control.mirror.writeCount).toBe(0);
+    expect(harness.serviceStoreLoadCount()).toBe(0);
   });
 
   it("rejects replay through the Runtime Cache replay marker", async () => {
@@ -334,13 +401,81 @@ describe("sealed control OAuth", () => {
     expect(["source-new", "source-other"]).toContain(connectedIds[0]);
   });
 
+  it("uses Blob CAS when both instances pass the non-atomic replay marker", async () => {
+    const harness = setup();
+    const interleavedCache = new InterleavedReplayCache();
+    let releaseFirstMutation!: () => void;
+    let firstMutationStarted!: () => void;
+    const firstMutationGate = new Promise<void>((resolve) => {
+      releaseFirstMutation = resolve;
+    });
+    const mutationStarted = new Promise<void>((resolve) => {
+      firstMutationStarted = resolve;
+    });
+    const delayedStore: ControlPlaneStore = {
+      load: () => harness.control.store.load(),
+      async mutate(name, reducer) {
+        firstMutationStarted();
+        await firstMutationGate;
+        return harness.control.store.mutate(name, reducer);
+      }
+    };
+    const firstOAuth = harness.createOAuth(
+      "unused-a",
+      delayedStore,
+      interleavedCache
+    );
+    const secondOAuth = harness.createOAuth(
+      "unused-b",
+      undefined,
+      interleavedCache
+    );
+    const started = await harness.beginGoogle();
+    const originalComplete = harness.provider.adapter.completeAuthorization;
+    harness.provider.adapter.completeAuthorization = async (input) => {
+      if (input.code === "second-code") {
+        await interleavedCache.firstMarkerVerified;
+      }
+      return originalComplete(input);
+    };
+
+    const first = firstOAuth.completeAuthorization(
+      harness.callback(started, { code: "first-code" })
+    );
+    const secondPromise = secondOAuth.completeAuthorization(
+      harness.callback(started, { code: "second-code" })
+    );
+    await mutationStarted;
+    const second = await secondPromise;
+    releaseFirstMutation();
+
+    await expect(first).rejects.toMatchObject({ code: "OAUTH_STATE_INVALID" });
+    expect(second).toEqual({ sourceId: "source-new", status: "connected" });
+    expect(harness.control.durable.writeAttempts).toBe(1);
+  });
+
+  it("rejects a new-source replay through Blob CAS after its cache marker is lost", async () => {
+    const harness = setup();
+    const started = await harness.beginGoogle();
+
+    await harness.oauth.completeAuthorization(harness.callback(started));
+    harness.replayCache.values.clear();
+
+    await expect(
+      harness.createOAuth().completeAuthorization(harness.callback(started))
+    ).rejects.toMatchObject({ code: "OAUTH_STATE_INVALID" });
+    expect(harness.control.durable.writeAttempts).toBe(1);
+    expect(harness.provider.completeInputs).toHaveLength(2);
+  });
+
   it("rejects cookie, state, and callback binding changes before provider exchange", async () => {
     const harness = setup();
     const started = await harness.beginGoogle();
 
     for (const overrides of [
-      { adminSessionId: "admin-other" },
-      { redirectUri: `${REDIRECT_URI}/other` },
+      {
+        admin: { ...harness.admin, sessionId: "admin-other" }
+      },
       { state: "tampered-state" }
     ]) {
       await expect(
@@ -354,15 +489,94 @@ describe("sealed control OAuth", () => {
     expect(harness.replayCache.sets).toEqual([]);
   });
 
+  it("rejects forged or stale admin context before provider work", async () => {
+    const harness = setup();
+    const validContext = harness.context();
+    const cases = [
+      {
+        admin: { ...harness.admin, householdId: "other-household" },
+        context: validContext
+      },
+      {
+        admin: harness.admin,
+        context: { ...validContext, revision: validContext.revision + 1 }
+      },
+      {
+        admin: { ...harness.admin, adminPassphraseVersion: 2 },
+        context: validContext
+      }
+    ];
+
+    for (const invalid of cases) {
+      await expect(
+        harness.oauth.beginAuthorization({
+          ...invalid,
+          provider: "google"
+        })
+      ).rejects.toMatchObject({ code: "OAUTH_STATE_INVALID" });
+    }
+
+    expect(harness.provider.beginInputs).toEqual([]);
+    expect(harness.serviceStoreLoadCount()).toBe(0);
+  });
+
+  it("derives the redirect URI from trusted configuration", async () => {
+    const harness = setup();
+    const started = await harness.oauth.beginAuthorization({
+      admin: harness.admin,
+      context: harness.context(),
+      provider: "google",
+      redirectUri: "https://attacker.test/callback"
+    } as Parameters<typeof harness.oauth.beginAuthorization>[0] & {
+      redirectUri: string;
+    });
+
+    expect(harness.provider.beginInputs[0].redirectUri).toBe(REDIRECT_URI);
+    const claims = harness.codec.openOAuthState(
+      sealedCookieValue(started.stateCookie)
+    );
+    expect(claims.redirectUri).toBe(REDIRECT_URI);
+  });
+
+  it("rejects a forged or stale admin callback before provider exchange", async () => {
+    const harness = setup();
+    const started = await harness.beginGoogle();
+    const validContext = harness.context();
+    const cases = [
+      {
+        admin: { ...harness.admin, sessionId: "admin-forged" },
+        context: validContext
+      },
+      {
+        admin: harness.admin,
+        context: { ...validContext, revision: validContext.revision + 1 }
+      },
+      {
+        admin: { ...harness.admin, adminPassphraseVersion: 2 },
+        context: validContext
+      }
+    ];
+
+    for (const invalid of cases) {
+      await expect(
+        harness.oauth.completeAuthorization(
+          harness.callback(started, invalid)
+        )
+      ).rejects.toMatchObject({ code: "OAUTH_STATE_INVALID" });
+    }
+
+    expect(harness.provider.completeInputs).toEqual([]);
+    expect(harness.serviceStoreLoadCount()).toBe(0);
+  });
+
   it("rejects a reconnect source for another provider before authorization begins", async () => {
     const harness = setup();
 
     await expect(
       harness.oauth.beginAuthorization({
-        householdId: "h1",
-        adminSessionId: "admin-1",
+        admin: harness.admin,
+        context: harness.context(),
         provider: "onedrive",
-        redirectUri: REDIRECT_URI,
         reconnectSourceId: "source-1"
       })
     ).rejects.toMatchObject({ code: "SOURCE_NOT_FOUND" });
@@ -378,6 +592,7 @@ describe("sealed control OAuth", () => {
       adminSessionId: "admin-1",
       provider: "google",
       redirectUri: REDIRECT_URI,
+      sourceId: "source-new",
       pkceVerifier: "overlong-verifier",
       stateHash: createHash("sha256").update(rawState).digest("hex"),
       issuedAt: TEST_NOW.getTime(),
@@ -386,10 +601,9 @@ describe("sealed control OAuth", () => {
 
     await expect(
       harness.oauth.completeAuthorization({
-        householdId: "h1",
-        adminSessionId: "admin-1",
+        admin: harness.admin,
+        context: harness.context(),
         provider: "google",
-        redirectUri: REDIRECT_URI,
         state: rawState,
         code: "provider-code",
         stateCookie
@@ -517,6 +731,14 @@ describe("sealed control OAuth", () => {
       providerNodeId: original.providerRootId
     };
     const started = await harness.beginGoogle("source-1");
+    const claims = harness.codec.openOAuthState(
+      sealedCookieValue(started.stateCookie)
+    );
+    expect(claims).toMatchObject({
+      sourceId: "source-1",
+      reconnectSourceId: "source-1",
+      expectedCredentialVersion: 1
+    });
 
     await harness.oauth.completeAuthorization(harness.callback(started));
 
@@ -538,6 +760,49 @@ describe("sealed control OAuth", () => {
         harness.keyring.keys
       )
     ).toBe("bootstrap-access");
+  });
+
+  it("rejects reconnect replay through credential-version CAS after marker loss", async () => {
+    const harness = setup();
+    const original = harness.control.durable.currentDocument!.sources["source-1"];
+    harness.provider.account = {
+      ...harness.provider.account,
+      accountId: original.providerAccountId
+    };
+    harness.provider.root = {
+      ...harness.provider.root,
+      providerNodeId: original.providerRootId
+    };
+    const started = await harness.beginGoogle("source-1");
+
+    await harness.oauth.completeAuthorization(harness.callback(started));
+    harness.replayCache.values.clear();
+
+    await expect(
+      harness.createOAuth().completeAuthorization(harness.callback(started))
+    ).rejects.toMatchObject({ code: "OAUTH_STATE_INVALID" });
+    expect(
+      harness.control.durable.currentDocument!.sources["source-1"]
+        .credentialVersion
+    ).toBe(2);
+    expect(harness.control.durable.writeAttempts).toBe(1);
+  });
+
+  it("normalizes a reconnect target removed after begin as invalid state", async () => {
+    const harness = setup();
+    const started = await harness.beginGoogle("source-1");
+    const changed = structuredClone(harness.control.durable.currentDocument!);
+    delete changed.sources["source-1"];
+    delete changed.roots["root-1"];
+    changed.devices["device-1"].assignedRootIds = [];
+    changed.revision += 1;
+    harness.control.durable.replaceOutOfBand(changed);
+
+    await expect(
+      harness.createOAuth().completeAuthorization(harness.callback(started))
+    ).rejects.toMatchObject({ code: "OAUTH_STATE_INVALID" });
+    expect(harness.provider.completeInputs).toEqual([]);
+    expect(harness.replayCache.sets).toEqual([]);
   });
 
   it("does not mark a reconnect used until provider account and root identity match", async () => {

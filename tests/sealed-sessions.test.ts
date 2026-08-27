@@ -85,7 +85,7 @@ describe("sealed sessions", () => {
       expiresAt: now.getTime() + 60_000
     });
 
-    expect(token).not.toContain("d1");
+    expect(token.split(".")).toHaveLength(5);
     expect(codec.openDevice(token)).toMatchObject({ deviceId: "d1", sessionVersion: 3 });
     const replacement = token.endsWith("A") ? "B" : "A";
     expect(() => codec.openDevice(`${token.slice(0, -1)}${replacement}`)).toThrow(/invalid/i);
@@ -119,7 +119,9 @@ describe("sealed sessions", () => {
       adminSessionId: "admin-1",
       provider: "google",
       redirectUri: "https://app.test/api/admin/sources/google/callback",
+      sourceId: "source-1",
       reconnectSourceId: "source-1",
+      expectedCredentialVersion: 3,
       pkceVerifier: "pkce-verifier",
       stateHash: "state-hash",
       issuedAt: now.getTime(),
@@ -131,7 +133,12 @@ describe("sealed sessions", () => {
     expect(oauth).not.toMatch(/admin-1|google|pkce-verifier|state-hash|source-1/);
     expect(codec.openAdmin(admin)).toMatchObject({ sessionId: "admin-1", adminPassphraseVersion: 4 });
     expect(codec.openRequest(request)).toMatchObject({ requestId: "request-1", requestSecret: "request-secret" });
-    expect(codec.openOAuthState(oauth)).toMatchObject({ provider: "google", reconnectSourceId: "source-1" });
+    expect(codec.openOAuthState(oauth)).toMatchObject({
+      provider: "google",
+      sourceId: "source-1",
+      reconnectSourceId: "source-1",
+      expectedCredentialVersion: 3
+    });
     expect(() => codec.openDevice(admin)).toThrow(invalidSealedValue());
     expect(() => codec.openRequest(oauth)).toThrow(invalidSealedValue());
   });
@@ -165,10 +172,51 @@ describe("sealed sessions", () => {
       adminSessionId: "admin-1",
       provider: "dropbox" as "google",
       redirectUri: "https://app.test/callback",
+      sourceId: "source-1",
       pkceVerifier: "verifier",
       stateHash: "hash",
       issuedAt: now.getTime(),
       expiresAt: now.getTime() + 60_000
     })).toThrow(invalidSealedValue());
+  });
+
+  it("requires a reserved source and an exact positive reconnect version", () => {
+    const now = TEST_NOW;
+    const codec = createSealedSessionCodec(testAeadKeyring(), () => now);
+    const valid = {
+      version: 2 as const,
+      householdId: "h1",
+      adminSessionId: "admin-1",
+      provider: "google" as const,
+      redirectUri: "https://app.test/callback",
+      sourceId: "source-1",
+      pkceVerifier: "verifier",
+      stateHash: "hash",
+      issuedAt: now.getTime(),
+      expiresAt: now.getTime() + 60_000
+    };
+
+    expect(codec.openOAuthState(codec.issueOAuthState(valid))).toMatchObject({
+      sourceId: "source-1"
+    });
+    for (const claims of [
+      { ...valid, sourceId: "" },
+      { ...valid, expectedCredentialVersion: 1 },
+      { ...valid, reconnectSourceId: "source-1" },
+      {
+        ...valid,
+        reconnectSourceId: "source-other",
+        expectedCredentialVersion: 1
+      },
+      {
+        ...valid,
+        reconnectSourceId: "source-1",
+        expectedCredentialVersion: 0
+      }
+    ]) {
+      expect(() => codec.issueOAuthState(claims as typeof valid)).toThrow(
+        invalidSealedValue()
+      );
+    }
   });
 });
