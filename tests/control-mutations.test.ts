@@ -221,12 +221,108 @@ describe("control-plane mutations", () => {
     ]);
   });
 
+  it("prunes eight expired approved and denied records before adding a request", () => {
+    const current = testControlDocument();
+    current.pendingDeviceRequests = {};
+    for (let index = 1; index <= CONTROL_PLANE_LIMITS.pendingRequests; index += 1) {
+      const id = `resolved-${index}`;
+      current.pendingDeviceRequests[id] = {
+        id,
+        requestedName: `Resolved ${index}`,
+        requestSecretHash: `resolved-hash-${index}`,
+        status: index % 2 === 0 ? "approved" : "denied",
+        createdAt: new Date(TEST_NOW.getTime() - 60 * 60_000).toISOString(),
+        expiresAt: new Date(TEST_NOW.getTime() - index * 1_000).toISOString(),
+        resolvedAt: new Date(TEST_NOW.getTime() - 30 * 60_000).toISOString(),
+        approvedDeviceId: index % 2 === 0 ? "device-1" : null
+      };
+    }
+    const request: ControlPlaneRequest = {
+      id: "request-new",
+      requestedName: "Office",
+      requestSecretHash: "new-secret-hash",
+      status: "pending",
+      createdAt: later.toISOString(),
+      expiresAt: new Date(later.getTime() + 30 * 60_000).toISOString(),
+      resolvedAt: null,
+      approvedDeviceId: null
+    };
+
+    const result = createDeviceRequestMutation(current, request);
+
+    expect(Object.keys(result.next.pendingDeviceRequests)).toEqual(["request-new"]);
+  });
+
+  it("retains a resolved request until its expiry deadline", () => {
+    const current = testControlDocument();
+    current.pendingDeviceRequests["request-1"] = {
+      ...current.pendingDeviceRequests["request-1"],
+      status: "denied",
+      resolvedAt: new Date(TEST_NOW.getTime() + 5 * 60_000).toISOString()
+    };
+    const request: ControlPlaneRequest = {
+      id: "request-new",
+      requestedName: "Office",
+      requestSecretHash: "new-secret-hash",
+      status: "pending",
+      createdAt: new Date(TEST_NOW.getTime() + 10 * 60_000).toISOString(),
+      expiresAt: new Date(TEST_NOW.getTime() + 40 * 60_000).toISOString(),
+      resolvedAt: null,
+      approvedDeviceId: null
+    };
+
+    const result = createDeviceRequestMutation(current, request);
+
+    expect(result.next.pendingDeviceRequests["request-1"]).toMatchObject({
+      status: "denied",
+      expiresAt: new Date(TEST_NOW.getTime() + 30 * 60_000).toISOString()
+    });
+    expect(Object.keys(result.next.pendingDeviceRequests)).toEqual([
+      "request-1",
+      "request-new"
+    ]);
+  });
+
   it("rejects device assignments to missing or disabled roots", () => {
     expect(() =>
       updateDeviceMutation(testControlDocument(), "device-1", {
         assignedRootIds: ["missing-root"]
       })
     ).toThrowError(expect.objectContaining({ code: "INVALID_ROOT_ASSIGNMENT" }));
+  });
+
+  it("rejects re-enabling a revoked device without changing source state", () => {
+    const current = revokeDeviceMutation(
+      testControlDocument(),
+      "device-1",
+      later
+    ).next;
+    const before = structuredClone(current);
+
+    expect(() =>
+      updateDeviceMutation(current, "device-1", { enabled: true })
+    ).toThrowError(expect.objectContaining({ code: "DEVICE_REVOKED" }));
+    expect(current).toEqual(before);
+  });
+
+  it("allows display changes while a revoked device remains disabled", () => {
+    const current = revokeDeviceMutation(
+      testControlDocument(),
+      "device-1",
+      later
+    ).next;
+
+    const result = updateDeviceMutation(current, "device-1", {
+      name: "Retired Living Room",
+      enabled: false
+    });
+
+    expect(result.next.devices["device-1"]).toMatchObject({
+      name: "Retired Living Room",
+      enabled: false,
+      sessionVersion: 2,
+      revokedAt: later.toISOString()
+    });
   });
 
   it("connects a source only while the source ceiling has capacity", () => {

@@ -16,6 +16,7 @@ export type ControlMutationErrorCode =
   | "CONTROL_PLANE_LIMIT_EXCEEDED"
   | "DEVICE_ALREADY_EXISTS"
   | "DEVICE_NOT_FOUND"
+  | "DEVICE_REVOKED"
   | "DEVICE_REQUEST_EXPIRED"
   | "DEVICE_REQUEST_NOT_FOUND"
   | "DEVICE_REQUEST_RESOLVED"
@@ -93,7 +94,7 @@ function pruneExpired(
     document.pendingDeviceRequests
   )) {
     if (requestId === retainedRequestId) continue;
-    if (request.status === "expired" || (request.status === "pending" && expired(request, now))) {
+    if (expired(request, now)) {
       delete document.pendingDeviceRequests[requestId];
       pruned = true;
     }
@@ -155,10 +156,10 @@ export function createDeviceRequestMutation(
     }
     return pruned ? changed(next, existing) : unchanged(document, existing);
   }
-  const livePendingCount = Object.values(next.pendingDeviceRequests).filter(
-    (value) => value.status === "pending" && !expired(value, now)
-  ).length;
-  if (livePendingCount >= CONTROL_PLANE_LIMITS.pendingRequests) {
+  if (
+    Object.keys(next.pendingDeviceRequests).length >=
+    CONTROL_PLANE_LIMITS.pendingRequests
+  ) {
     throw new ControlMutationError("CONTROL_PLANE_LIMIT_EXCEEDED");
   }
   next.pendingDeviceRequests[request.id] = structuredClone(request);
@@ -245,6 +246,9 @@ export function updateDeviceMutation(
   const device = next.devices[deviceId];
   if (!device) {
     throw new ControlMutationError("DEVICE_NOT_FOUND");
+  }
+  if (device.revokedAt !== null && patch.enabled === true) {
+    throw new ControlMutationError("DEVICE_REVOKED");
   }
   const updated: ControlPlaneDevice = {
     ...device,
