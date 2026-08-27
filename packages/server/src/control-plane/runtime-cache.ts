@@ -140,6 +140,7 @@ export function createVercelRuntimeControlCache(
       if (verified !== null) {
         throw cacheOperationFailed();
       }
+      return "unverifiable";
     },
 
     async getMirrorStatus() {

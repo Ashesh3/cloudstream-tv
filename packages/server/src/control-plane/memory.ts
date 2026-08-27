@@ -162,10 +162,11 @@ export class MemoryControlHotCache implements ControlHotCache {
     this.value = cloneStored(value);
   }
 
-  async delete(key?: string): Promise<void> {
+  async delete(key?: string): Promise<"confirmed"> {
     void key;
     this.deleteCount += 1;
     this.value = null;
+    return "confirmed";
   }
 
   async getMirrorStatus(): Promise<MirrorStatus> {

@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createControlPlaneStore,
   encryptControlPlaneDocument
 } from "@cloudframe/server";
 import { BlobPreconditionFailedError } from "@vercel/blob";
 import {
   createMemoryControlHotCache,
+  MemoryControlDurableStore,
+  MemoryDeferredTasks,
+  MemoryRecoveryMirror,
   controlStoreHarness
 } from "../packages/server/src/control-plane/memory";
 import {
@@ -313,6 +317,34 @@ describe("control-plane store", () => {
     expect(harness.cache.deleteCount).toBe(1);
   });
 
+  it("keeps a committed Blob mutation when cache cleanup is unverifiable", async () => {
+    const keyring = testAeadKeyring();
+    const initial = {
+      envelope: encryptControlPlaneDocument(testControlDocument(), keyring),
+      etag: "etag-1"
+    };
+    const durable = new MemoryControlDurableStore(initial, 0, keyring.keys);
+    const cache = {
+      get: vi.fn(async () => structuredClone(initial)),
+      set: vi.fn(async () => { throw new Error("cache write failed"); }),
+      delete: vi.fn(async () => "unverifiable" as const),
+      getMirrorStatus: vi.fn(async () => ({ status: "current" as const, revision: null })),
+      setMirrorStatus: vi.fn(async () => undefined)
+    };
+    const mirror = new MemoryRecoveryMirror();
+    const deferred = new MemoryDeferredTasks();
+    const store = createControlPlaneStore({ durable, cache, mirror, deferred, keyring });
+
+    await expect(store.mutate("settings", current => ({
+      changed: true,
+      next: { ...current, revision: current.revision + 1 },
+      result: "committed"
+    }))).resolves.toBe("committed");
+
+    expect(durable.currentRevision).toBe(2);
+    expect(cache.delete).toHaveBeenCalledOnce();
+  });
+
   it("retries a deferred mirror write three times and marks recovery delayed", async () => {
     const harness = controlStoreHarness(testControlDocument(), { mirrorFailures: 3 });
 
@@ -466,7 +498,7 @@ describe("Vercel control-plane adapters", () => {
     });
   });
 
-  it("detects a swallowed Runtime Cache delete", async () => {
+  it("rejects a Runtime Cache delete when the residual value remains visible", async () => {
     const envelope = encryptControlPlaneDocument(testControlDocument(), testAeadKeyring());
     const stored = { envelope, etag: "etag-1" };
     const runtime = {
@@ -481,6 +513,53 @@ describe("Vercel control-plane adapters", () => {
     await expect(cache.delete()).rejects.toMatchObject({
       code: "CONTROL_CACHE_OPERATION_FAILED"
     });
+  });
+
+  it("surfaces a null Runtime Cache delete probe as unverifiable", async () => {
+    const runtime = {
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+      expireTag: vi.fn(async () => undefined)
+    };
+    runtimeCacheSdk.getCache.mockReturnValue(runtime);
+    const cache = createVercelRuntimeControlCache({ environment: "preview", householdId: "h1" });
+
+    await expect(cache.delete()).resolves.toBe("unverifiable");
+  });
+
+  it("continues with authoritative Blob after unverifiable corrupt-cache cleanup", async () => {
+    const keyring = testAeadKeyring();
+    const initial = {
+      envelope: encryptControlPlaneDocument(testControlDocument(), keyring),
+      etag: "etag-1"
+    };
+    const corrupt = { ...initial, cleartext: testControlDocument() };
+    let cached: unknown = corrupt;
+    let getCount = 0;
+    const runtime = {
+      get: vi.fn(async () => {
+        getCount += 1;
+        if (getCount === 2) return null;
+        return cached;
+      }),
+      set: vi.fn(async (_key: string, value: unknown) => { cached = value; }),
+      delete: vi.fn(async () => undefined),
+      expireTag: vi.fn(async () => undefined)
+    };
+    runtimeCacheSdk.getCache.mockReturnValue(runtime);
+    const cache = createVercelRuntimeControlCache({ environment: "preview", householdId: "h1" });
+    const durable = new MemoryControlDurableStore(initial, 0, keyring.keys);
+    const mirror = new MemoryRecoveryMirror();
+    const deferred = new MemoryDeferredTasks();
+    const store = createControlPlaneStore({ durable, cache, mirror, deferred, keyring });
+
+    const loaded = await store.load();
+
+    expect(loaded.document.revision).toBe(1);
+    expect(durable.ifNoneMatches).toEqual([undefined]);
+    expect(runtime.delete).toHaveBeenCalledOnce();
+    expect(runtime.set).toHaveBeenCalledOnce();
   });
 
   it("reports an invalid Runtime Cache value without deleting it inside get", async () => {

@@ -25,7 +25,7 @@ export interface ControlDurableStore {
 export interface ControlHotCache {
   get(): Promise<StoredControlEnvelope | null>;
   set(value: StoredControlEnvelope, ttlSeconds: number): Promise<void>;
-  delete(): Promise<void>;
+  delete(): Promise<"confirmed" | "unverifiable">;
   getMirrorStatus(): Promise<{ status: "current" | "delayed"; revision: number | null }>;
   setMirrorStatus(value: { status: "current" | "delayed"; revision: number | null }): Promise<void>;
 }
@@ -122,17 +122,17 @@ async function replaceCacheBestEffort(
   try {
     await cache.set(value, CONTROL_CACHE_TTL_SECONDS);
   } catch {
-    try {
-      await cache.delete();
-    } catch {
-      // Blob remains authoritative; a later request still revalidates against it.
-    }
+    await deleteCacheBestEffort(cache);
   }
 }
 
 async function deleteCacheBestEffort(cache: ControlHotCache): Promise<void> {
   try {
-    await cache.delete();
+    const outcome = await cache.delete();
+    if (outcome === "unverifiable") {
+      // Blob revalidation, not cache deletion, protects correctness.
+      return;
+    }
   } catch {
     // The complete origin read below does not trust this cache entry.
   }
