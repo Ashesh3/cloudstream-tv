@@ -507,6 +507,81 @@ describe("final control HTTP API", () => {
     expect(harness.provider.mediaUrlCalls).toBe(0);
   });
 
+  it("keeps 413 and cancels exactly once when oversized cancellation throws synchronously", async () => {
+    const harness = await createControlApiHarness();
+    let cancelCalls = 0;
+    let releaseCalls = 0;
+    const request = requestWithReader(harness.origin, {
+      read: async () => ({ done: false, value: new Uint8Array(32_769) }),
+      cancel: () => {
+        cancelCalls += 1;
+        throw new Error("synchronous cancel failure");
+      },
+      releaseLock: () => {
+        releaseCalls += 1;
+      }
+    });
+
+    const response = await harness.app(request);
+
+    expect(response.status).toBe(413);
+    expect(cancelCalls).toBe(1);
+    expect(releaseCalls).toBe(1);
+    expect(harness.controlStore.loadCount).toBe(0);
+    expect(harness.provider.mediaUrlCalls).toBe(0);
+  });
+
+  it("keeps invalid JSON and cancels exactly once when read-failure cancellation throws synchronously", async () => {
+    const harness = await createControlApiHarness();
+    let cancelCalls = 0;
+    let releaseCalls = 0;
+    const request = requestWithReader(harness.origin, {
+      read: async () => {
+        throw new Error("private read failure");
+      },
+      cancel: () => {
+        cancelCalls += 1;
+        throw new Error("synchronous cancel failure");
+      },
+      releaseLock: () => {
+        releaseCalls += 1;
+      }
+    });
+
+    const response = await harness.app(request);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ code: "INVALID_JSON" });
+    expect(cancelCalls).toBe(1);
+    expect(releaseCalls).toBe(1);
+    expect(harness.controlStore.loadCount).toBe(0);
+    expect(harness.provider.mediaUrlCalls).toBe(0);
+  });
+
+  it("releases the reader only after its pending read settles", async () => {
+    const harness = await createControlApiHarness();
+    const read = deferredRead();
+    let releaseCalls = 0;
+    const request = requestWithReader(harness.origin, {
+      read: () => read.promise,
+      cancel: async () => undefined,
+      releaseLock: () => {
+        releaseCalls += 1;
+      }
+    });
+
+    const responsePromise = harness.app(request);
+    await Promise.resolve();
+    expect(releaseCalls).toBe(0);
+
+    read.resolve({ done: true, value: undefined });
+    const response = await responsePromise;
+
+    expect(response.status).toBe(400);
+    expect(releaseCalls).toBe(1);
+    expect(harness.controlStore.loadCount).toBe(0);
+  });
+
   it.each([
     ["/api/bootstrap/", "GET", undefined, {}],
     ["/api/bootstrap?extra=1", "GET", undefined, {}],
@@ -625,6 +700,7 @@ function requestWithReader(
   reader: {
     read(): Promise<ReadableStreamReadResult<Uint8Array>>;
     cancel(): Promise<unknown>;
+    releaseLock?(): void;
   }
 ): Request {
   const request = new Request(`${origin}/api/tv/media-url`, {
@@ -634,7 +710,12 @@ function requestWithReader(
   });
   Object.defineProperty(request, "body", {
     configurable: true,
-    value: { getReader: () => reader }
+    value: {
+      getReader: () => ({
+        ...reader,
+        releaseLock: reader.releaseLock ?? (() => undefined)
+      })
+    }
   });
   return request;
 }
@@ -644,6 +725,16 @@ function deferredSignal() {
   const promise = new Promise<void>((settled) => {
     resolve = settled;
   });
+  return { promise, resolve };
+}
+
+function deferredRead() {
+  let resolve!: (value: ReadableStreamReadResult<Uint8Array>) => void;
+  const promise = new Promise<ReadableStreamReadResult<Uint8Array>>(
+    (settled) => {
+      resolve = settled;
+    }
+  );
   return { promise, resolve };
 }
 

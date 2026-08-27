@@ -1519,21 +1519,32 @@ async function readBoundedJsonObject(
   }
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      let read: ReadableStreamReadResult<Uint8Array>;
+      try {
+        read = await reader.read();
+      } catch {
+        cancelReaderBestEffort(reader);
+        throw new HttpError(
+          400,
+          "INVALID_JSON",
+          "The request body is not valid JSON."
+        );
+      }
+      const { done, value } = read;
       if (done) break;
       totalBytes += value.byteLength;
       if (totalBytes > MAX_JSON_BODY_BYTES) {
-        void reader.cancel().catch(() => undefined);
+        cancelReaderBestEffort(reader);
         throw new HttpError(413, "BODY_TOO_LARGE", "Request body is too large.");
       }
       chunks.push(value);
     }
-  } catch {
-    void reader.cancel().catch(() => undefined);
-    if (totalBytes > MAX_JSON_BODY_BYTES) {
-      throw new HttpError(413, "BODY_TOO_LARGE", "Request body is too large.");
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      // Lock release is cleanup only and never changes the response.
     }
-    throw new HttpError(400, "INVALID_JSON", "The request body is not valid JSON.");
   }
   const bytes = new Uint8Array(totalBytes);
   let offset = 0;
@@ -1555,6 +1566,22 @@ async function readBoundedJsonObject(
     return value as Record<string, unknown>;
   } catch {
     throw new HttpError(400, "INVALID_JSON", "The request body is not valid JSON.");
+  }
+}
+
+function cancelReaderBestEffort(
+  reader: ReadableStreamDefaultReader<Uint8Array>
+): void {
+  try {
+    const cancellation = reader.cancel();
+    if (
+      cancellation &&
+      typeof (cancellation as PromiseLike<unknown>).then === "function"
+    ) {
+      void Promise.resolve(cancellation).catch(() => undefined);
+    }
+  } catch {
+    // Cancellation is advisory cleanup and never changes the response.
   }
 }
 
