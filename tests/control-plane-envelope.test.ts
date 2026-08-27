@@ -101,6 +101,28 @@ describe("encrypted control-plane envelopes", () => {
     );
   });
 
+  it("orders distinct Unicode record keys independently of locale collation", () => {
+    const composed = "\u00e9";
+    const decomposed = "e\u0301";
+    const request = testControlDocument().pendingDeviceRequests["request-1"];
+    const first = testControlDocument();
+    first.pendingDeviceRequests = {
+      [composed]: { ...request, id: composed },
+      [decomposed]: { ...request, id: decomposed }
+    };
+    const second = testControlDocument();
+    second.pendingDeviceRequests = {
+      [decomposed]: { ...request, id: decomposed },
+      [composed]: { ...request, id: composed }
+    };
+
+    expect(
+      decryptPlaintext(encryptControlPlaneDocument(first, testAeadKeyring()))
+    ).toBe(
+      decryptPlaintext(encryptControlPlaneDocument(second, testAeadKeyring()))
+    );
+  });
+
   it("normalizes malformed envelopes, missing keys, and invalid documents", () => {
     const envelope = encryptControlPlaneDocument(
       testControlDocument(),
