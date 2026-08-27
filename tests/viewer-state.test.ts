@@ -95,18 +95,18 @@ describe("viewer reducer", () => {
     expect(state.mediaError).toMatchObject({ nodeId: "image-1", kind: "generic" });
   });
 
-  it("ignores stale URL completions and permits exactly one refresh per node revision", () => {
+  it("ignores stale URL completions and permits one refresh for each issued URL", () => {
     let state = createViewerState(media, "image-1");
     const first = state.urls["image-1"]!;
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "image-1", requestId: first.requestId + 100,
-      url: "https://stale.example/media", revision: "r1"
+      url: "https://stale.example/media", expiresAtEpoch: 10_000, revision: "r1"
     });
     expect(state.urls["image-1"]!.status).toBe("loading");
 
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "image-1", requestId: first.requestId,
-      url: "https://provider.example/media", revision: "r1"
+      url: "https://provider.example/media", expiresAtEpoch: 10_000, revision: "r1"
     });
     state = viewerReducer(state, { type: "authorization-expired", nodeId: "image-1", resumeSeconds: 37 });
     const retry = state.urls["image-1"]!;
@@ -116,30 +116,62 @@ describe("viewer reducer", () => {
 
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "image-1", requestId: retry.requestId,
-      url: "https://provider.example/fresh", revision: "r1"
+      url: "https://provider.example/fresh", expiresAtEpoch: 20_000, revision: "r1"
     });
     state = viewerReducer(state, { type: "authorization-expired", nodeId: "image-1", resumeSeconds: 41 });
-    expect(state.urls["image-1"]!.status).toBe("error");
-    expect(state.urls["image-1"]!.errorKind).toBe("authorization");
+    expect(state.urls["image-1"]).toMatchObject({ status: "loading", refreshUsed: true, resumeSeconds: 41 });
   });
 
-  it("shares the one-refresh cap with manual retry but resets it for a new revision", () => {
+  it("gives each successfully issued URL its own one-error retry allowance", () => {
     let state = createViewerState(media, "image-1");
     const initial = state.urls["image-1"]!;
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "image-1", requestId: initial.requestId,
-      url: "https://provider.example/media", revision: "r1"
+      url: "https://provider.example/media", expiresAtEpoch: 10_000, revision: "r1"
     });
     state = viewerReducer(state, { type: "manual-retry", nodeId: "image-1", resumeSeconds: 12 });
     const retry = state.urls["image-1"]!;
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "image-1", requestId: retry.requestId,
-      url: "https://provider.example/revised", revision: "r2"
+      url: "https://provider.example/reissued", expiresAtEpoch: 20_000, revision: "r1"
     });
     expect(state.urls["image-1"]!.refreshUsed).toBe(false);
     state = viewerReducer(state, { type: "manual-retry", nodeId: "image-1", resumeSeconds: 14 });
     expect(state.urls["image-1"]!.status).toBe("loading");
     expect(state.urls["image-1"]!.refreshUsed).toBe(true);
+  });
+
+  it("renews an expected URL expiry without consuming the error retry allowance", () => {
+    let state = createViewerState(media, "video-1");
+    const initial = state.urls["video-1"]!;
+    state = viewerReducer(state, {
+      type: "url-ready", nodeId: "video-1", requestId: initial.requestId,
+      url: "https://provider.example/video", expiresAtEpoch: 10_000, revision: "r1"
+    });
+    state = viewerReducer(state, { type: "url-expired", nodeId: "video-1", requestId: initial.requestId, resumeSeconds: 37 });
+    const renewal = state.urls["video-1"]!;
+    expect(renewal).toMatchObject({ status: "loading", refreshUsed: false, resumeSeconds: 37 });
+    state = viewerReducer(state, {
+      type: "url-ready", nodeId: "video-1", requestId: renewal.requestId,
+      url: "https://provider.example/video-fresh", expiresAtEpoch: 20_000, revision: "r1"
+    });
+    expect(state.urls["video-1"]).toMatchObject({ status: "ready", expiresAtEpoch: 20_000, refreshUsed: false });
+    state = viewerReducer(state, { type: "authorization-expired", nodeId: "video-1", resumeSeconds: 39 });
+    expect(state.urls["video-1"]).toMatchObject({ status: "loading", refreshUsed: true, resumeSeconds: 39 });
+  });
+
+  it("ignores expiry from a superseded request and drops expiry data outside the URL window", () => {
+    let state = createViewerState(media, "image-1");
+    const initial = state.urls["image-1"]!;
+    state = viewerReducer(state, {
+      type: "url-ready", nodeId: "image-1", requestId: initial.requestId,
+      url: "https://provider.example/image", expiresAtEpoch: 10_000, revision: "r1"
+    });
+    const unchanged = viewerReducer(state, { type: "url-expired", nodeId: "image-1", requestId: initial.requestId + 1, resumeSeconds: 0 });
+    expect(unchanged.urls["image-1"]).toMatchObject({ status: "ready", expiresAtEpoch: 10_000 });
+    state = viewerReducer(state, { type: "navigate", direction: 1 });
+    state = viewerReducer(state, { type: "navigate", direction: 1 });
+    expect(state.urls["image-1"]).toBeUndefined();
   });
 
   it("hides controls only while the active video is playing with no overlay", () => {

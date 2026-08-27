@@ -126,6 +126,7 @@
 .empty-folder-icon { position: relative; width: 90px; height: 62px; border: 1px solid var(--stock-dim); }
 .empty-folder-icon::before { content: ""; position: absolute; width: 32px; height: 12px; left: 9px; top: -13px; border: 1px solid var(--stock-dim); border-bottom: 0; }
 .empty-folder-icon i { position: absolute; left: 18px; right: 18px; top: 29px; height: 1px; background: var(--cue); }
+.pagination-status { position: fixed; right: var(--safe-x); bottom: var(--safe-y); z-index: 6; max-width: 430px; margin: 0; padding: 9px 13px; border: 1px solid var(--hairline); background: rgba(7, 7, 5, .94); color: var(--stock); font-size: 12px; line-height: 1.4; pointer-events: none; }
 .projection-skeleton { height: 485px; display: grid; grid-template-columns: 62% 38%; border-bottom: 1px solid var(--hairline); }
 .projection-skeleton div { background: #11100d; animation: shimmer 1.4s linear infinite; }
 .projection-skeleton span { display: block; width: 65%; height: 12px; margin: 120px 0 0 42px; background: #292823; }

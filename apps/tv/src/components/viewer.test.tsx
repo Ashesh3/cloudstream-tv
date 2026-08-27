@@ -74,7 +74,7 @@ describe("unified TV viewer", () => {
     expect(history.get("item_video_1")).toMatchObject({ positionSeconds: 100, durationSeconds: 100, completed: true });
   });
 
-  it("does not infer authorization from a generic media error and caps manual fresh-URL retry at one", async () => {
+  it("does not infer authorization from generic media errors and gives each reissued URL one retry", async () => {
     const api = viewerApi();
     render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const image = await screen.findByRole("img", { name: "First.jpg" });
@@ -85,9 +85,8 @@ describe("unified TV viewer", () => {
     await waitFor(() => expect(api.mediaUrl).toHaveBeenCalledTimes(3));
     fireEvent.error(await screen.findByRole("img", { name: "First.jpg" }));
     fireEvent.click(screen.getByRole("button", { name: "Try fresh URL" }));
-    await act(async () => { await Promise.resolve(); });
-    expect(api.mediaUrl).toHaveBeenCalledTimes(3);
-    expect(screen.getByText("A fresh link did not solve this media error.")).toBeVisible();
+    await waitFor(() => expect(api.mediaUrl).toHaveBeenCalledTimes(4));
+    expect(await screen.findByRole("img", { name: "First.jpg" })).toBeVisible();
   });
 
   it("automatically retries one URL-vending authorization failure and then stops", async () => {
@@ -125,7 +124,7 @@ describe("unified TV viewer", () => {
     history.save("item_video_1", { positionSeconds: 42, durationSeconds: 100, completed: false });
     const save = vi.spyOn(history, "save");
     const view = render(<Viewer history={history} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
-    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     let video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { configurable: true, value: 100 });
     Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 0 });
@@ -152,7 +151,7 @@ describe("unified TV viewer", () => {
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(save).toHaveBeenCalledTimes(4);
     fireEvent.keyDown(window, { key: "ArrowLeft" });
-    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     const returned = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(returned, "duration", { configurable: true, value: 100 });
     Object.defineProperty(returned, "currentTime", { configurable: true, writable: true, value: 60 });
@@ -297,7 +296,7 @@ describe("unified TV viewer", () => {
     render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     expect(video.src).toBe("https://provider.example/item_video_1");
-    expect(api.mediaUrl).toHaveBeenCalledWith("sealed-item_video_1", expect.any(AbortSignal));
+    expect(api.mediaUrl).toHaveBeenCalledWith("sealed-item_video_1", expect.any(AbortSignal), { itemId: "item_video_1", kind: "video" });
   });
 
   it("prefetches at most one adjacent image on each side", async () => {
@@ -319,7 +318,7 @@ describe("unified TV viewer", () => {
   it("auto-hides controls only after playback starts and exposes buffered progress", async () => {
     vi.useFakeTimers();
     const { container } = render(<Viewer history={viewerHistory()} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
-    await act(async () => { await vi.runOnlyPendingTimersAsync(); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     let video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { configurable: true, value: 100 });
     Object.defineProperty(video, "buffered", { configurable: true, value: { length: 1, end: () => 60 } });
@@ -359,7 +358,7 @@ describe("unified TV viewer", () => {
     fireEvent.keyDown(window, { key: "ArrowRight" });
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(await screen.findByRole("img", { name: "Last.jpg" })).toBeVisible();
-    await act(async () => { resolveFirst?.({ itemId: "item_image_1", kind: "image", url: "https://provider.example/stale", expiresAt: "2026-08-26T01:00:00.000Z", revision: "revision-1" }); });
+    await act(async () => { resolveFirst?.({ itemId: "item_image_1", kind: "image", url: "https://provider.example/stale", expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: "revision-1" }); });
     expect(screen.getByRole("img", { name: "Last.jpg" })).toHaveAttribute("src", "https://provider.example/item_image_2");
     expect(screen.queryByDisplayValue("https://provider.example/stale")).not.toBeInTheDocument();
   });
@@ -411,6 +410,146 @@ describe("unified TV viewer", () => {
     expect(screen.queryByText("NAVIGATION_EXPIRED")).not.toBeInTheDocument();
   });
 
+  it("renews an active image when its direct URL expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const api = viewerApi();
+    let calls = 0;
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => ({
+      ...mediaResponse(handle),
+      url: `https://provider.example/image-${++calls}`,
+      expiresAt: new Date(Date.now() + (handle === "sealed-item_image_1" ? 1_000 : 60_000)).toISOString()
+    }));
+    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(screen.getByRole("img", { name: "First.jpg" })).toHaveAttribute("src", "https://provider.example/image-1");
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); });
+
+    expect(api.mediaUrl).toHaveBeenCalledTimes(3);
+    await waitFor(() => expect(screen.getByRole("img", { name: "First.jpg" })).toHaveAttribute("src", "https://provider.example/image-3"));
+  });
+
+  it("resumes an active video at its exact position after timed URL renewal", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const api = viewerApi();
+    let videoCalls = 0;
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => {
+      const result = mediaResponse(handle);
+      return {
+        ...result,
+        url: result.kind === "video" ? `https://provider.example/video-${++videoCalls}` : result.url,
+        expiresAt: new Date(Date.now() + (result.kind === "video" ? 1_000 : 60_000)).toISOString()
+      };
+    });
+    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const first = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(first, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(first, "currentTime", { configurable: true, value: 37 });
+    fireEvent.timeUpdate(first);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); await Promise.resolve(); });
+    const renewed = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(renewed, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(renewed, "currentTime", { configurable: true, writable: true, value: 0 });
+    fireEvent.loadedMetadata(renewed);
+
+    expect(renewed.src).toBe("https://provider.example/video-2");
+    expect(renewed.currentTime).toBe(37);
+  });
+
+  it("renews an expired adjacent URL and ignores later timers after close", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const api = viewerApi();
+    let videoCalls = 0;
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => {
+      const result = mediaResponse(handle);
+      if (result.kind === "video") videoCalls += 1;
+      return { ...result, expiresAt: new Date(Date.now() + (result.kind === "video" && videoCalls === 1 ? 1_000 : 60_000)).toISOString() };
+    });
+    const closed = vi.fn();
+    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const callsBefore = vi.mocked(api.mediaUrl).mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); await Promise.resolve(); });
+    expect(vi.mocked(api.mediaUrl).mock.calls.filter(call => call[0] === "sealed-item_video_1")).toHaveLength(2);
+    fireEvent.keyDown(window, { key: "Escape" });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(api.mediaUrl).toHaveBeenCalledTimes(callsBefore + 1);
+  });
+
+  it("cancels an obsolete adjacent expiry timer when navigation removes its URL window entry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const sequence = [
+      media("item_image_0", "image", "Before.jpg", "image/jpeg"),
+      media("item_image_1", "image", "First.jpg", "image/jpeg"),
+      media("item_image_2", "image", "After.jpg", "image/jpeg"),
+      media("item_image_3", "image", "Last.jpg", "image/jpeg")
+    ];
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => ({
+      ...mediaResponseFor(sequence, handle),
+      expiresAt: new Date(Date.now() + (handle === "sealed-item_image_0" ? 1_000 : 60_000)).toISOString()
+    }));
+    render(<Viewer history={viewerHistory()} api={api} items={sequence} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    const before = vi.mocked(api.mediaUrl).mock.calls.filter(call => call[0] === "sealed-item_image_0").length;
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_001); });
+
+    expect(vi.mocked(api.mediaUrl).mock.calls.filter(call => call[0] === "sealed-item_image_0")).toHaveLength(before);
+  });
+
+  it("cancels a long-delay renewal chain after its first bounded timeout chunk", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => ({
+      ...mediaResponse(handle),
+      expiresAt: new Date(Date.now() + 2_147_001_000).toISOString()
+    }));
+    const closed = vi.fn();
+    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const before = vi.mocked(api.mediaUrl).mock.calls.length;
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_147_000_000); });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(vi.getTimerCount()).toBe(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(api.mediaUrl).toHaveBeenCalledTimes(before);
+  });
+
+  it.each([
+    ["mismatched item ID", { ...mediaResponse("sealed-item_image_1"), itemId: "item_other" }],
+    ["mismatched kind", { ...mediaResponse("sealed-item_image_1"), kind: "video" as const }]
+  ])("rejects a %s media response without displaying its URL", async (_name, result) => {
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockImplementation(async (handle, _signal, expected) => {
+      if (handle === "sealed-item_image_1") {
+        if (result.itemId !== expected?.itemId || result.kind !== expected.kind) throw Object.assign(new Error("invalid"), { code: "INVALID_RESPONSE" });
+        return result;
+      }
+      return mediaResponse(handle);
+    });
+    const expired = vi.fn();
+    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} onNavigationExpired={expired} />);
+
+    await waitFor(() => expect(expired).toHaveBeenCalledTimes(1));
+    expect(document.body.innerHTML).not.toContain(result.url);
+  });
+
 });
 
 const items: TvBrowseItemDto[] = [
@@ -444,9 +583,15 @@ function mediaResponse(handle: string): DirectMediaUrlResponse {
     itemId: id,
     kind,
     url: `https://provider.example/${id}`,
-    expiresAt: "2026-08-26T01:00:00.000Z",
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
     revision: "revision-1"
   };
+}
+
+function mediaResponseFor(sequence: TvBrowseItemDto[], handle: string): DirectMediaUrlResponse {
+  const id = handle.replace(/^sealed-/, "");
+  const item = sequence.find(candidate => candidate.id === id)!;
+  return { itemId: id, kind: item.kind as "image" | "video", url: `https://provider.example/${id}`, expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: "revision-1" };
 }
 
 function viewerHistory(): LocalWatchHistory {

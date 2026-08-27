@@ -28,6 +28,7 @@ interface BrowseState {
   loadedPageCursors: (string | null)[];
   loading: boolean;
   error: string | null;
+  paginationError: string | null;
 }
 
 interface BrowseStackEntry extends BrowseState {
@@ -36,6 +37,11 @@ interface BrowseStackEntry extends BrowseState {
   focusedIndex: number;
   scrollTop: number;
 }
+
+type ThumbnailState = DirectThumbnailItem & {
+  requestedHandle: string;
+  expiresAtEpoch?: number;
+};
 
 export function TvApp({ api = tvApi, browserSupported = detectBrowserSupport() }: {
   api?: TvApi;
@@ -80,7 +86,8 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   const [scrollTop, setScrollTop] = useState(0);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [stack, setStack] = useState<BrowseStackEntry[]>([]);
-  const [thumbnails, setThumbnails] = useState<Record<string, DirectThumbnailItem>>({});
+  const [thumbnails, setThumbnails] = useState<Record<string, ThumbnailState>>({});
+  const [thumbnailRequestRevision, setThumbnailRequestRevision] = useState(0);
   const [mountedIds, setMountedIds] = useState<string[]>([]);
   const [restoredFocusTick, setRestoredFocusTick] = useState(0);
   const [viewer, setViewer] = useState<{ items: TvBrowseItemDto[]; selectedItemId: string } | null>(null);
@@ -91,6 +98,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   const requestedFocusItemId = useRef<string | null>(null);
   const restoreFocusAfterDrawer = useRef<number | null>(null);
   const mountedRequest = useRef<AbortController | null>(null);
+  const thumbnailExpiryTimers = useRef<Record<string, () => void>>({});
   const browseRef = useRef(browse);
   const scrollTopRef = useRef(scrollTop);
   const columns = useResponsiveColumns();
@@ -98,6 +106,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
 
   useEffect(() => { browseRef.current = browse; }, [browse]);
   useEffect(() => { scrollTopRef.current = scrollTop; }, [scrollTop]);
+  useEffect(() => () => clearScheduled(thumbnailExpiryTimers.current), []);
 
   const closeDrawerAndRestore = useCallback(() => {
     setDrawerOpen(false);
@@ -111,8 +120,9 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   }, []);
 
   const applyHome = useCallback((response: TvHomeResponse) => {
-    const items = response.roots.map(root => ({ ...root, itemType: "root" as const }));
-    const next = homeBrowseState(response.roots, items);
+    const roots = dedupeLastById(response.roots);
+    const items = roots.map(root => ({ ...root, itemType: "root" as const }));
+    const next = homeBrowseState(roots, items);
     browseRef.current = next;
     setBrowse(next);
     setFocusedIndex(0);
@@ -156,7 +166,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
 
   const loadFolder = useCallback(async (
     handle: string,
-    options: { cursor?: string | null; append?: boolean; breadcrumbs: TvBreadcrumb[] }
+    options: { expectedParentId: string; cursor?: string | null; append?: boolean; breadcrumbs: TvBreadcrumb[] }
   ) => {
     const append = options.append === true;
     const version = ++loadVersion.current;
@@ -164,28 +174,46 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     try {
       const response = await api.folder(handle, options.cursor);
       if (version !== loadVersion.current) return;
+      if (response.parent.id !== options.expectedParentId) {
+        handleBrowseError(Object.assign(new Error("Invalid folder response."), { code: "NAVIGATION_EXPIRED" }), append);
+        return;
+      }
       const incoming = response.children.map(node => ({ ...node, itemType: "node" as const }));
       setBrowse(current => {
         const pending = requestedFocus.current;
+        const previousFocusId = requestedFocusItemId.current;
+        const existingIds: Record<string, boolean> = {};
+        current.items.forEach(item => { existingIds[item.id] = true; });
+        const newIdCount = incoming.reduce((count, item) => count + (existingIds[item.id] ? 0 : 1), 0);
         const pageTargetId = append && pending !== null && pending >= current.items.length
           ? incoming[pending - current.items.length]?.id ?? null
-          : requestedFocusItemId.current;
+          : previousFocusId;
         const items = append
           ? mergeFolderItems(current.items, incoming, mediaOrder)
-          : sortFolderBrowseItems(incoming, mediaOrder);
+          : sortFolderBrowseItems(dedupeLastById(incoming), mediaOrder);
+        const cursorCycle = append && response.nextCursor !== null && (
+          response.nextCursor === options.cursor || current.loadedPageCursors.indexOf(response.nextCursor) >= 0
+        );
+        const noProgress = append && newIdCount === 0;
         const next: BrowseState = {
           parent: response.parent,
           breadcrumbs: options.breadcrumbs,
           roots: current.roots,
           items,
-          nextCursor: response.nextCursor,
+          nextCursor: cursorCycle || noProgress ? null : response.nextCursor,
           loadedPageCursors: append ? [...current.loadedPageCursors, options.cursor ?? null] : [null],
           loading: false,
-          error: null
+          error: null,
+          paginationError: cursorCycle
+            ? "More items could not be loaded. Refresh this collection to try again."
+            : noProgress
+              ? "No additional items were returned. Refresh this collection to check again."
+              : null
         };
         browseRef.current = next;
         if (append && pending !== null) {
-          const restored = pageTargetId ? items.findIndex(item => item.id === pageTargetId) : -1;
+          const targetId = noProgress ? previousFocusId : pageTargetId;
+          const restored = targetId ? items.findIndex(item => item.id === targetId) : -1;
           setFocusedIndex(restored >= 0 ? restored : Math.min(pending, Math.max(0, items.length - 1)));
         }
         return next;
@@ -202,9 +230,14 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
 
   const appendNextPage = useCallback((pendingIndex?: number) => {
     if (!browse.parent || !browse.nextCursor || pageRequest.current) return;
+    if (browse.loadedPageCursors.indexOf(browse.nextCursor) >= 0) {
+      setBrowse(current => ({ ...current, nextCursor: null, paginationError: "More items could not be loaded. Refresh this collection to try again." }));
+      return;
+    }
     requestedFocus.current = pendingIndex ?? null;
-    requestedFocusItemId.current = pendingIndex === undefined ? null : browse.items[pendingIndex]?.id ?? null;
+    requestedFocusItemId.current = browse.items[focusedIndex]?.id ?? null;
     const promise = loadFolder(browse.parent.handle, {
+      expectedParentId: browse.parent.id,
       cursor: browse.nextCursor,
       append: true,
       breadcrumbs: browse.breadcrumbs
@@ -212,13 +245,13 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
       if (pageRequest.current === promise) pageRequest.current = null;
     });
     pageRequest.current = promise;
-  }, [browse.breadcrumbs, browse.nextCursor, browse.parent, loadFolder]);
+  }, [browse.breadcrumbs, browse.items, browse.loadedPageCursors, browse.nextCursor, browse.parent, focusedIndex, loadFolder]);
 
   useEffect(() => { void loadHome(); }, [loadHome]);
 
   useEffect(() => {
     mountedRequest.current?.abort();
-    const requested = visibleThumbnailItems(browse.items, mountedIds);
+    const requested = visibleThumbnailItems(browse.items, mountedIds).filter(item => thumbnails[item.id]?.requestedHandle !== item.handle);
     if (requested.length === 0) return;
     const controller = new AbortController();
     mountedRequest.current = controller;
@@ -229,16 +262,52 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
       setThumbnails(current => {
         const next = { ...current };
         response.items.forEach(item => {
-          if (requestedIds[item.itemId]) next[item.itemId] = item;
+          if (!requestedIds[item.itemId]) return;
+          const requestedItem = requested.find(candidate => candidate.id === item.itemId);
+          if (!requestedItem) return;
+          if (item.status === "unavailable") {
+            next[item.itemId] = { ...item, requestedHandle: requestedItem.handle };
+            return;
+          }
+          const expiresAtEpoch = futureExpiryEpoch(item.expiresAt);
+          if (expiresAtEpoch === null) return;
+          next[item.itemId] = { ...item, requestedHandle: requestedItem.handle, expiresAtEpoch };
         });
         return next;
       });
     }).catch(error => {
       if (controller.signal.aborted) return;
-      if (errorCode(error) === "DEVICE_UNAUTHORIZED" || errorCode(error) === "NAVIGATION_EXPIRED") handleBrowseError(error, true);
+      const code = errorCode(error);
+      if (code === "DEVICE_UNAUTHORIZED" || code === "NAVIGATION_EXPIRED" || code === "ITEM_NOT_FOUND") handleBrowseError(error, true);
     });
     return () => controller.abort();
-  }, [api, browse.items, handleBrowseError, mountedIds.join("|")]);
+  }, [api, browse.items, handleBrowseError, mountedIds.join("|"), thumbnailRequestRevision]);
+
+  useEffect(() => {
+    const visible: Record<string, boolean> = {};
+    visibleThumbnailItems(browse.items, mountedIds).forEach(item => { visible[item.id] = true; });
+    Object.keys(thumbnails).forEach(itemId => {
+      const entry = thumbnails[itemId]!;
+      if (entry.status !== "ready" || entry.expiresAtEpoch === undefined || !visible[itemId] || thumbnailExpiryTimers.current[itemId]) return;
+      thumbnailExpiryTimers.current[itemId] = scheduleBoundedAt(entry.expiresAtEpoch, () => {
+        delete thumbnailExpiryTimers.current[itemId];
+        setThumbnails(current => {
+          const active = current[itemId];
+          if (!active || active.status !== "ready" || active.expiresAt !== entry.expiresAt) return current;
+          const next = { ...current };
+          delete next[itemId];
+          return next;
+        });
+        setThumbnailRequestRevision(value => value + 1);
+      });
+    });
+    Object.keys(thumbnailExpiryTimers.current).forEach(itemId => {
+      const entry = thumbnails[itemId];
+      if (visible[itemId] && entry?.status === "ready") return;
+      thumbnailExpiryTimers.current[itemId]!();
+      delete thumbnailExpiryTimers.current[itemId];
+    });
+  }, [browse.items, mountedIds.join("|"), thumbnails]);
 
   const goBack = useCallback(() => {
     const entry = stack[stack.length - 1];
@@ -256,7 +325,8 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
       nextCursor: entry.nextCursor,
       loadedPageCursors: entry.loadedPageCursors,
       loading: entry.loading,
-      error: entry.error
+      error: entry.error,
+      paginationError: entry.paginationError
     };
     browseRef.current = next;
     setBrowse(next);
@@ -309,7 +379,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     const breadcrumbs = current.parent
       ? [...current.breadcrumbs, { id: current.parent.id, name: current.parent.name }]
       : [];
-    void loadFolder(handle, { breadcrumbs });
+    void loadFolder(handle, { expectedParentId: item.id, breadcrumbs });
   };
 
   const openRootFromDrawer = (root: TvRootDto) => {
@@ -327,7 +397,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     }]);
     setFocusedIndex(0);
     setScrollTop(0);
-    void loadFolder(root.handle, { breadcrumbs: [] });
+    void loadFolder(root.handle, { expectedParentId: root.id, breadcrumbs: [] });
   };
 
   const closeViewer = (restorationItemId: string) => {
@@ -344,7 +414,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   }, [api, applyHome]);
 
   if (browse.loading && browse.items.length === 0) return <BrowseSkeleton />;
-  if (browse.error && browse.items.length === 0) return <StatePanel title="Source temporarily unavailable" body={browse.error}><button className="primary-action" onClick={() => browse.parent ? loadFolder(browse.parent.handle, { breadcrumbs: browse.breadcrumbs }) : loadHome()}>Retry</button></StatePanel>;
+  if (browse.error && browse.items.length === 0) return <StatePanel title="Source temporarily unavailable" body={browse.error}><button className="primary-action" onClick={() => browse.parent ? loadFolder(browse.parent.handle, { expectedParentId: browse.parent.id, breadcrumbs: browse.breadcrumbs }) : loadHome()}>Retry</button></StatePanel>;
   if (!browse.parent && browse.items.length === 0) return <StatePanel title="No folders assigned" body="Ask the household administrator to assign at least one folder to this TV."><button className="primary-action" onClick={loadHome}>Refresh</button></StatePanel>;
   if (viewer) return <Viewer api={api} history={history} items={viewer.items} selectedItemId={viewer.selectedItemId} slideshowSeconds={slideshowSeconds} previews={thumbnails} onClose={closeViewer} onUnauthorized={onUnauthorized} onNavigationExpired={refreshExpiredNavigation} />;
 
@@ -406,6 +476,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
           />
         </section>
       )}
+      {browse.paginationError ? <p className="pagination-status" role="status">{browse.paginationError}</p> : null}
       <SourceDrawer open={drawerOpen} roots={browse.roots} onClose={closeDrawerAndRestore} onHome={() => { setDrawerOpen(false); void loadHome(); }} onSelect={openRootFromDrawer} />
     </main>
   );
@@ -440,11 +511,11 @@ function BrowseSkeleton() {
 }
 
 function emptyBrowseState(): BrowseState {
-  return { parent: null, breadcrumbs: [], roots: [], items: [], nextCursor: null, loadedPageCursors: [], loading: true, error: null };
+  return { parent: null, breadcrumbs: [], roots: [], items: [], nextCursor: null, loadedPageCursors: [], loading: true, error: null, paginationError: null };
 }
 
 function homeBrowseState(roots: TvRootDto[], items: BrowseItem[]): BrowseState {
-  return { parent: null, breadcrumbs: [], roots, items, nextCursor: null, loadedPageCursors: [], loading: false, error: null };
+  return { parent: null, breadcrumbs: [], roots, items, nextCursor: null, loadedPageCursors: [], loading: false, error: null, paginationError: null };
 }
 
 function mergeFolderItems(current: BrowseItem[], incoming: BrowseItem[], order: MediaOrder): BrowseItem[] {
@@ -452,6 +523,16 @@ function mergeFolderItems(current: BrowseItem[], incoming: BrowseItem[], order: 
   current.forEach(item => { if (item.itemType === "node") byId[item.id] = item; });
   incoming.forEach(item => { if (item.itemType === "node") byId[item.id] = item; });
   return sortFolderBrowseItems(Object.keys(byId).map(id => byId[id]!), order);
+}
+
+function dedupeLastById<T extends { id: string }>(items: readonly T[]): T[] {
+  const byId: Record<string, T> = {};
+  const order: string[] = [];
+  items.forEach(item => {
+    if (byId[item.id] === undefined) order.push(item.id);
+    byId[item.id] = item;
+  });
+  return order.map(id => byId[id]!);
 }
 
 function restoredFocusIndex(entry: BrowseStackEntry, items: BrowseItem[]): number {
@@ -477,7 +558,7 @@ function clearSessionState(
   mountedRequest: { current: AbortController | null },
   setBrowse: (value: BrowseState | ((current: BrowseState) => BrowseState)) => void,
   setStack: (value: BrowseStackEntry[]) => void,
-  setThumbnails: (value: Record<string, DirectThumbnailItem>) => void,
+  setThumbnails: (value: Record<string, ThumbnailState>) => void,
   setViewer: (value: null) => void
 ) {
   loadVersion.current += 1;
@@ -539,4 +620,33 @@ function ensureIndexVisible(index: number, columns: number, rowHeight: number, v
   const bottom = top + rowHeight;
   if (top < current) set(top);
   else if (bottom > current + viewport) set(Math.max(0, bottom - viewport));
+}
+
+function futureExpiryEpoch(value: string | undefined): number | null {
+  if (typeof value !== "string") return null;
+  const epoch = Date.parse(value);
+  return Number.isFinite(epoch) && new Date(epoch).toISOString() === value && epoch > Date.now() ? epoch : null;
+}
+
+function scheduleBoundedAt(expiresAtEpoch: number, callback: () => void): () => void {
+  const state = { cancelled: false, timer: 0 };
+  const schedule = () => {
+    if (state.cancelled) return;
+    const remaining = expiresAtEpoch - Date.now();
+    if (remaining <= 0) {
+      callback();
+      return;
+    }
+    state.timer = window.setTimeout(schedule, Math.min(remaining, 2_147_000_000));
+  };
+  schedule();
+  return () => {
+    state.cancelled = true;
+    window.clearTimeout(state.timer);
+  };
+}
+
+function clearScheduled(timers: Record<string, () => void>): void {
+  Object.keys(timers).forEach(key => timers[key]!());
+  Object.keys(timers).forEach(key => { delete timers[key]; });
 }

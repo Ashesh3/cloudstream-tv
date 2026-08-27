@@ -13,6 +13,7 @@ export interface ViewerUrlState {
   status: ViewerUrlStatus;
   requestId: number;
   url?: string;
+  expiresAtEpoch?: number;
   revision: string | null;
   refreshUsed: boolean;
   resumeSeconds: number;
@@ -56,8 +57,9 @@ export type ViewerAction =
   | { type: "video-playing"; nodeId: string }
   | { type: "video-paused"; nodeId: string }
   | { type: "media-error"; nodeId: string; kind: ViewerMediaErrorKind }
-  | { type: "url-ready"; nodeId: string; requestId: number; url: string; revision: string | null }
+  | { type: "url-ready"; nodeId: string; requestId: number; url: string; expiresAtEpoch: number; revision: string | null }
   | { type: "url-failed"; nodeId: string; requestId: number; kind: ViewerMediaErrorKind }
+  | { type: "url-expired"; nodeId: string; requestId: number; resumeSeconds: number }
   | { type: "authorization-expired"; nodeId: string; resumeSeconds: number }
   | { type: "manual-retry"; nodeId: string; resumeSeconds: number }
   | { type: "controls-timeout" }
@@ -151,11 +153,7 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
     case "url-ready": {
       const current = state.urls[action.nodeId];
       if (!current || current.requestId !== action.requestId || current.status !== "loading") return state;
-      const previousRetry = state.retryLedger[action.nodeId];
-      const revisionChanged = previousRetry?.revision !== action.revision;
-      const retry = revisionChanged
-        ? { revision: action.revision, used: false }
-        : previousRetry ?? { revision: action.revision, used: false };
+      const retry = { revision: action.revision, used: false };
       return {
         ...state,
         urls: {
@@ -164,6 +162,7 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
             ...current,
             status: "ready",
             url: action.url,
+            expiresAtEpoch: finiteNonNegative(action.expiresAtEpoch),
             revision: action.revision,
             refreshUsed: retry.used,
             errorKind: undefined
@@ -180,6 +179,29 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
         ...state,
         urls: { ...state.urls, [action.nodeId]: { ...current, status: "error", errorKind: action.kind } },
         slideshowActive: activeViewerItem(state).id === action.nodeId ? false : state.slideshowActive
+      };
+    }
+    case "url-expired": {
+      const current = state.urls[action.nodeId];
+      if (!current || current.requestId !== action.requestId || current.status !== "ready") return state;
+      return {
+        ...state,
+        urls: {
+          ...state.urls,
+          [action.nodeId]: {
+            status: "loading",
+            requestId: state.nextRequestId,
+            revision: current.revision,
+            refreshUsed: false,
+            resumeSeconds: finiteNonNegative(action.resumeSeconds)
+          }
+        },
+        retryLedger: {
+          ...state.retryLedger,
+          [action.nodeId]: { revision: current.revision, used: false }
+        },
+        nextRequestId: state.nextRequestId + 1,
+        mediaError: state.mediaError?.nodeId === action.nodeId ? null : state.mediaError
       };
     }
     case "authorization-expired":

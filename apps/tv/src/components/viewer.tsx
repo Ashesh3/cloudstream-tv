@@ -50,6 +50,7 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
   const lastVideoElements = useRef<Record<string, HTMLVideoElement>>({});
   const inflightUrls = useRef<Record<string, { requestId: number; controller: AbortController }>>({});
   const startedUrlRequests = useRef<Record<string, boolean>>({});
+  const urlExpiryTimers = useRef<Record<string, () => void>>({});
   const latestResumeOverrides = useRef<Record<string, number>>({});
   const latestVideoPositions = useRef<Record<string, number>>({});
   const lastSavedSnapshots = useRef<Record<string, string>>({});
@@ -65,29 +66,40 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
     startedUrlRequests.current = {};
   }, []);
 
+  const clearUrlExpiryTimers = useCallback(() => {
+    Object.keys(urlExpiryTimers.current).forEach(nodeId => urlExpiryTimers.current[nodeId]!());
+    urlExpiryTimers.current = {};
+  }, []);
+
+  const invalidateNavigation = useCallback((): boolean => {
+    if (navigationExpired.current) return true;
+    navigationExpired.current = true;
+    closed.current = true;
+    abortUrlRequests();
+    clearUrlExpiryTimers();
+    const element = videoElementFor(active.id);
+    if (element) element.pause();
+    onNavigationExpired();
+    return true;
+  }, [abortUrlRequests, active.id, clearUrlExpiryTimers, onNavigationExpired]);
+
   const propagateUnauthorized = useCallback((error: unknown): boolean => {
     if (!isDeviceUnauthorized(error)) return false;
     if (unauthorized.current) return true;
     unauthorized.current = true;
     closed.current = true;
     abortUrlRequests();
+    clearUrlExpiryTimers();
     const element = videoElementFor(active.id);
     if (element) element.pause();
     onUnauthorized();
     return true;
-  }, [abortUrlRequests, active.id, onUnauthorized]);
+  }, [abortUrlRequests, active.id, clearUrlExpiryTimers, onUnauthorized]);
 
   const propagateNavigationExpired = useCallback((error: unknown): boolean => {
     if (!isNavigationExpired(error)) return false;
-    if (navigationExpired.current) return true;
-    navigationExpired.current = true;
-    closed.current = true;
-    abortUrlRequests();
-    const element = videoElementFor(active.id);
-    if (element) element.pause();
-    onNavigationExpired();
-    return true;
-  }, [abortUrlRequests, active.id, onNavigationExpired]);
+    return invalidateNavigation();
+  }, [invalidateNavigation]);
 
   const saveElementHistory = useCallback((itemId: string, element: HTMLVideoElement | null) => {
     if (!element || unauthorized.current || !Number.isFinite(element.currentTime) || element.currentTime < 0 || !Number.isFinite(element.duration) || element.duration <= 0) return;
@@ -150,30 +162,61 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
         dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: "authorization" });
         return;
       }
-      void api.mediaUrl(handle, controller.signal).then(result => {
+      const expected = items.find(item => item.id === nodeId);
+      if (!expected || expected.kind === "folder") {
+        invalidateNavigation();
+        return;
+      }
+      void api.mediaUrl(handle, controller.signal, { itemId: expected.id, kind: expected.kind }).then(result => {
         if (!controller.signal.aborted && !unauthorized.current && mounted.current) {
           delete inflightUrls.current[nodeId];
-          const expected = items.find(item => item.id === nodeId);
-          if (!expected || result.itemId !== nodeId || result.kind !== expected.kind) {
-            dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: "authorization" });
-            return;
-          }
-          dispatch({ type: "url-ready", nodeId, requestId: entry.requestId, url: result.url, revision: result.revision });
+          dispatch({ type: "url-ready", nodeId, requestId: entry.requestId, url: result.url, expiresAtEpoch: Date.parse(result.expiresAt), revision: result.revision });
         }
       }).catch(error => {
         if (controller.signal.aborted || unauthorized.current || !mounted.current) return;
         delete inflightUrls.current[nodeId];
         if (propagateUnauthorized(error) || propagateNavigationExpired(error)) return;
+        if (isInvalidResponse(error)) {
+          invalidateNavigation();
+          return;
+        }
         if (isAuthorizationEvidence(error)) dispatch({ type: "authorization-expired", nodeId, resumeSeconds: entry.resumeSeconds });
         else dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: "generic" });
       });
     });
-  }, [api, itemHandles, items, propagateNavigationExpired, propagateUnauthorized, urlRequestKey]);
+  }, [api, invalidateNavigation, itemHandles, items, propagateNavigationExpired, propagateUnauthorized, urlRequestKey]);
+
+  useEffect(() => {
+    const wanted: Record<string, boolean> = {};
+    Object.keys(state.urls).forEach(nodeId => {
+      const entry = state.urls[nodeId]!;
+      if (entry.status !== "ready" || entry.expiresAtEpoch === undefined) return;
+      wanted[nodeId] = true;
+      if (urlExpiryTimers.current[nodeId] !== undefined) return;
+      urlExpiryTimers.current[nodeId] = scheduleAt(entry.expiresAtEpoch, () => {
+        delete urlExpiryTimers.current[nodeId];
+        if (unauthorized.current || navigationExpired.current || closed.current || !mounted.current) return;
+        const current = state.urls[nodeId];
+        if (!current || current.status !== "ready" || current.requestId !== entry.requestId || current.expiresAtEpoch !== entry.expiresAtEpoch) return;
+        const resumeSeconds = active.id === nodeId && active.kind === "video"
+          ? videoElementFor(nodeId)?.currentTime ?? latestVideoPositions.current[nodeId] ?? 0
+          : 0;
+        latestResumeOverrides.current[nodeId] = resumeSeconds;
+        dispatch({ type: "url-expired", nodeId, requestId: entry.requestId, resumeSeconds });
+      });
+    });
+    Object.keys(urlExpiryTimers.current).forEach(nodeId => {
+      if (wanted[nodeId]) return;
+      urlExpiryTimers.current[nodeId]!();
+      delete urlExpiryTimers.current[nodeId];
+    });
+  }, [active.id, active.kind, state.urls]);
 
   useEffect(() => () => {
     mounted.current = false;
     abortUrlRequests();
-  }, [abortUrlRequests]);
+    clearUrlExpiryTimers();
+  }, [abortUrlRequests, clearUrlExpiryTimers]);
 
   useEffect(() => {
     setCurrentSeconds(0);
@@ -212,9 +255,10 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
     if (active.kind === "video") saveElementHistory(active.id, videoElementFor(active.id));
     closed.current = true;
     abortUrlRequests();
+    clearUrlExpiryTimers();
     dispatch({ type: "back" });
     onClose(state.restorationItemId);
-  }, [abortUrlRequests, active.id, active.kind, onClose, saveElementHistory, state.restorationItemId]);
+  }, [abortUrlRequests, active.id, active.kind, clearUrlExpiryTimers, onClose, saveElementHistory, state.restorationItemId]);
 
   useEffect(() => {
     const onVisibility = () => {
@@ -375,9 +419,32 @@ function isNavigationExpired(error: unknown): boolean {
   return code === "NAVIGATION_EXPIRED" || code === "ITEM_NOT_FOUND";
 }
 
+function isInvalidResponse(error: unknown): boolean {
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code: unknown }).code) : "";
+  return code === "INVALID_RESPONSE";
+}
+
 function formatResume(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(safe / 60);
   const rest = safe % 60;
   return `${minutes}:${rest < 10 ? "0" : ""}${rest}`;
+}
+
+function scheduleAt(expiresAtEpoch: number, callback: () => void): () => void {
+  const state = { cancelled: false, timer: 0 };
+  const schedule = () => {
+    if (state.cancelled) return;
+    const remaining = expiresAtEpoch - Date.now();
+    if (remaining <= 0) {
+      callback();
+      return;
+    }
+    state.timer = window.setTimeout(schedule, Math.min(remaining, 2_147_000_000));
+  };
+  schedule();
+  return () => {
+    state.cancelled = true;
+    window.clearTimeout(state.timer);
+  };
 }
