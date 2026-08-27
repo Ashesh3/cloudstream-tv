@@ -59,7 +59,8 @@ export interface ControlAdminService {
   approveRequest(
     householdId: string,
     requestId: string,
-    input: ApproveDeviceRequestBody
+    input: ApproveDeviceRequestBody,
+    now?: Date
   ): Promise<{ device: DeviceDto }>;
   denyRequest(
     householdId: string,
@@ -343,9 +344,10 @@ export function createControlAdminService(
   async function approveRequest(
     householdId: string,
     requestId: string,
-    input: ApproveDeviceRequestBody
+    input: ApproveDeviceRequestBody,
+    requestedAt?: Date
   ): Promise<{ device: DeviceDto }> {
-    const approvedAt = now().toISOString();
+    const approvedAt = (requestedAt ?? now()).toISOString();
     const deviceId = createId("device");
     return mutate(householdId, "approve-device-request", (current) => {
       const device: ControlPlaneDevice = {

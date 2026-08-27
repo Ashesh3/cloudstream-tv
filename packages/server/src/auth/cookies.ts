@@ -6,12 +6,12 @@ const COOKIE_NAMES: Record<SessionCookieKind, string> = {
   request: "device_request"
 };
 
-function cookieAttributes(kind: SessionCookieKind): string[] {
+function cookieAttributes(): string[] {
   return [
     "Path=/",
     "HttpOnly",
     "Secure",
-    `SameSite=${kind === "admin" ? "Lax" : "Strict"}`
+    "SameSite=Lax"
   ];
 }
 
@@ -23,7 +23,7 @@ export function createSessionCookie(
   return [
     `${COOKIE_NAMES[kind]}=${encodeURIComponent(rawToken)}`,
     `Expires=${expiresAt.toUTCString()}`,
-    ...cookieAttributes(kind)
+    ...cookieAttributes()
   ].join("; ");
 }
 
@@ -32,6 +32,6 @@ export function clearSessionCookie(kind: SessionCookieKind): string {
     `${COOKIE_NAMES[kind]}=`,
     "Max-Age=0",
     "Expires=Thu, 01 Jan 1970 00:00:00 GMT",
-    ...cookieAttributes(kind)
+    ...cookieAttributes()
   ].join("; ");
 }

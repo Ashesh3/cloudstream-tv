@@ -55,7 +55,7 @@ describe("device enrollment policy", () => {
     const raw = cookieValue(response, "device_request");
     expect(raw).toBeTruthy();
     expect(setCookies(response).join("\n")).toMatch(
-      /device_request=.*HttpOnly; Secure; SameSite=Strict/
+      /device_request=.*HttpOnly; Secure; SameSite=Lax/
     );
     const requests = await repository.listDeviceRequests(householdId);
     expect(requests).toHaveLength(1);
