@@ -214,16 +214,25 @@ function hasDownloadCapability(url: URL): boolean {
   return false;
 }
 
+function hasExactSharePointDownloadHandler(pathname: string): boolean {
+  if (/%(?:2e|2f|5c)/iu.test(pathname)) return false;
+  const segments = pathname.split("/").slice(1);
+  if (segments.some((segment) => segment.length === 0)) return false;
+  if (segments.length < 3) return false;
+  const handler = segments.slice(-3).map((segment) => segment.toLowerCase());
+  return (
+    handler[0] === "_layouts" &&
+    handler[1] === "15" &&
+    handler[2] === "download.aspx"
+  );
+}
+
 function validOneDriveUrl(url: URL): boolean {
   if (url.pathname === "/" || url.pathname.length === 0) return false;
   if (!hasDownloadCapability(url)) return false;
   const hostname = url.hostname.toLowerCase();
   if (hostnameMatchesSubdomain(hostname, "sharepoint.com")) {
-    const pathname = url.pathname.toLowerCase();
-    return (
-      pathname === "/_layouts/15/download.aspx" ||
-      pathname.includes("/_layouts/15/download.aspx")
-    );
+    return hasExactSharePointDownloadHandler(url.pathname);
   }
   if (hostnameMatchesSubdomain(hostname, "files.1drv.com")) return true;
   if (hostname === "storage.live.com") return true;

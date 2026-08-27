@@ -211,6 +211,8 @@ describe("best-effort Runtime Cache rate limiting", () => {
     `${"x".repeat(16)} ${"x".repeat(16)}`,
     `${"x".repeat(16)}\t${"x".repeat(16)}`,
     `${"x".repeat(16)}\n${"x".repeat(16)}`,
+    `${"x".repeat(16)}\u0085${"x".repeat(16)}`,
+    `${"x".repeat(16)}\u2007${"x".repeat(16)}`,
   ])("rejects configured secrets containing internal whitespace", (configuredSecret) => {
     const cache = new RecordingCache();
 

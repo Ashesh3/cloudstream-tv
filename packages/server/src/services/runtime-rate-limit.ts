@@ -62,7 +62,7 @@ interface CachedWindow {
 function requireSecret(value: string): string {
   if (
     value.length === 0 ||
-    /\s/u.test(value) ||
+    /\p{White_Space}/u.test(value) ||
     Buffer.byteLength(value, "utf8") < 32
   ) {
     throw new RuntimeRateLimitConfigurationError("RATE_LIMIT_SECRET_INVALID");

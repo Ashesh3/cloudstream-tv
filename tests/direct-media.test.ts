@@ -561,6 +561,50 @@ describe("direct provider URL vending", () => {
     ).resolves.toMatchObject({ url });
   });
 
+  it.each([
+    "https://tenant.sharepoint.com/personal/user/_layouts/15/download.aspx.evil?token=capability",
+    "https://tenant.sharepoint.com/personal/user/_layouts/15/notdownload.aspx?token=capability",
+    "https://tenant.sharepoint.com/personal/user/_layouts/15/download.aspx/extra?token=capability",
+    "https://tenant.sharepoint.com/personal/user/_layouts/15/download%2Easpx%2Eevil?token=capability",
+    "https://tenant.sharepoint.com/personal/user/_layouts%2F15%2Fdownload.aspx?token=capability",
+    "https://tenant.sharepoint.com/personal/user/_layouts//15/download.aspx?token=capability",
+  ])("rejects an inexact SharePoint download handler %s", async (url) => {
+    const harness = createHarness();
+    harness.oneDrive.mediaResult = { url, expiresAt: harness.expiry };
+
+    await expect(
+      harness.media.media(
+        harness.auth(),
+        harness.handle(
+          "source-onedrive",
+          "root-onedrive",
+          "onedrive-video",
+          "video",
+        ),
+      ),
+    ).rejects.toEqual(new DirectMediaError("INVALID_PROVIDER_URL"));
+  });
+
+  it.each([
+    "https://tenant.sharepoint.com/personal/user/_layouts/15/download.aspx?token=capability",
+    "https://tenant.sharepoint.com/sites/team/_LAYOUTS/15/DOWNLOAD.ASPX?token=capability",
+  ])("accepts an exact case-insensitive SharePoint handler %s", async (url) => {
+    const harness = createHarness();
+    harness.oneDrive.mediaResult = { url, expiresAt: harness.expiry };
+
+    await expect(
+      harness.media.media(
+        harness.auth(),
+        harness.handle(
+          "source-onedrive",
+          "root-onedrive",
+          "onedrive-video",
+          "video",
+        ),
+      ),
+    ).resolves.toMatchObject({ url });
+  });
+
   it("returns unavailable for an authenticated Graph thumbnail URL", async () => {
     const harness = createHarness();
     harness.oneDrive.thumbnailResults.set("onedrive-image", {
