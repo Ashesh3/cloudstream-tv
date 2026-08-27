@@ -166,9 +166,6 @@ function providerHarness(): ProviderHarness {
     async listFolder() {
       throw new Error("unused");
     },
-    async getChanges() {
-      throw new Error("unused");
-    },
     async getThumbnailUrl() {
       throw new Error("unused");
     },

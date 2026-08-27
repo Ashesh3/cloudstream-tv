@@ -42,14 +42,14 @@ function jsonResponse(value: unknown, status = 200, headers?: HeadersInit): Resp
 interface ContractHarness {
   provider: ProviderKind;
   adapter: ProviderAdapter;
-  requests: URL[];
+  requests: Array<{ url: URL; init: RequestInit | undefined }>;
 }
 
 function createHarness(provider: ProviderKind): ContractHarness {
-  const requests: URL[] = [];
-  const fetch: typeof globalThis.fetch = async input => {
+  const requests: Array<{ url: URL; init: RequestInit | undefined }> = [];
+  const fetch: typeof globalThis.fetch = async (input, init) => {
     const url = inputUrl(input);
-    requests.push(url);
+    requests.push({ url, init });
 
     if (provider === "google") {
       if (url.pathname.endsWith("/files/root")) return jsonResponse({
@@ -64,7 +64,6 @@ function createHarness(provider: ProviderKind): ContractHarness {
         parents: ["g-root-actual"]
       });
       if (url.pathname.endsWith("/files")) return jsonResponse(fixture(provider, "folder-page"));
-      if (url.pathname.endsWith("/changes")) return jsonResponse(fixture(provider, "changes-page"));
       if (url.pathname.endsWith("/g-image-a")) {
         return jsonResponse({
           id: "g-image-a",
@@ -85,7 +84,6 @@ function createHarness(provider: ProviderKind): ContractHarness {
         folder: { childCount: 0 }
       });
       if (url.pathname.endsWith("/children")) return jsonResponse(fixture(provider, "folder-page"));
-      if (url.pathname.endsWith("/delta")) return jsonResponse(fixture(provider, "changes-page"));
       if (url.pathname.endsWith("/thumbnails/0/c720x720")) {
         return jsonResponse({ url: "https://synthetic.invalid/onedrive-thumb-720" });
       }
@@ -122,6 +120,21 @@ function createHarness(provider: ProviderKind): ContractHarness {
 }
 
 describe.each(["google", "onedrive"] as const)("%s provider adapter contract", provider => {
+  it("exposes only the live browse and direct URL operations", () => {
+    const { adapter } = createHarness(provider);
+
+    expect(Object.keys(adapter).sort()).toEqual([
+      "beginAuthorization",
+      "completeAuthorization",
+      "getMediaUrl",
+      "getNode",
+      "getRoot",
+      "getThumbnailUrl",
+      "listFolder",
+      "refreshCredentials"
+    ]);
+  });
+
   it("uses read-only authorization scopes and PKCE without embedding credentials", async () => {
     const { adapter } = createHarness(provider);
     const start = await adapter.beginAuthorization({
@@ -196,7 +209,7 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       kind: "folder",
       name: provider === "google" ? "My Drive" : "OneDrive"
     });
-    expect(requests.at(-1)?.pathname).toBe(
+    expect(requests.at(-1)?.url.pathname).toBe(
       provider === "google"
         ? "/drive/v3/files/root"
         : "/v1.0/me/drive/root"
@@ -216,36 +229,9 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       name: "Albums",
       kind: "folder"
     });
-    expect(requests.at(-1)?.pathname).toContain(
+    expect(requests.at(-1)?.url.pathname).toContain(
       provider === "google" ? "/drive/v3/files/g-folder-a" : "/v1.0/me/drive/items/o-folder-a"
     );
-  });
-
-  it("normalizes deletes and moves from change pages", async () => {
-    const { adapter } = createHarness(provider);
-    const page = await adapter.getChanges({
-      credentials,
-      cursor: provider === "google" ? "google-delta-previous" : null,
-      pageSize: 50
-    });
-
-    expect(page.changes).toHaveLength(2);
-    expect(page.changes[0]).toEqual({
-      providerNodeId: provider === "google" ? "g-deleted-a" : "o-deleted-a",
-      removed: true,
-      node: null
-    });
-    expect(page.changes[1]).toMatchObject({
-      removed: false,
-      node: {
-        name: "Moved.jpg",
-        kind: "image",
-        parentProviderId: provider === "google" ? "g-folder-b" : "o-folder-b"
-      }
-    });
-    expect(page.nextCursor).toBeNull();
-    expect(page.deltaCursor).toBeTruthy();
-    expect(JSON.stringify(page)).not.toContain("synthetic.invalid");
   });
 
   it("returns direct temporary thumbnail and media URLs without proxying bytes", async () => {
@@ -274,21 +260,18 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       expect(thumbnail?.url).toBe("https://synthetic.invalid/onedrive-thumb-720");
       expect(media.url).toBe("https://synthetic.invalid/onedrive-media");
     }
-    expect(requests.every(url => !url.pathname.includes("/api/"))).toBe(true);
+    expect(requests.every(request => !request.url.pathname.includes("/api/"))).toBe(true);
+    expect(requests.every(request => !request.url.searchParams.has("access_token"))).toBe(true);
+    expect(requests.every(request => new Headers(request.init?.headers).get("range") === null)).toBe(true);
   });
 
   if (provider === "google") {
-    it("adds Shared Drive flags to list, changes, thumbnail, and media requests", async () => {
+    it("uses the bounded live-list query and Shared Drive flags", async () => {
       const { adapter, requests } = createHarness(provider);
       await adapter.listFolder({
         credentials,
         folderId: "g-root",
         cursor: null,
-        pageSize: 50
-      });
-      await adapter.getChanges({
-        credentials,
-        cursor: "google-delta-previous",
         pageSize: 50
       });
       await adapter.getThumbnailUrl({
@@ -301,15 +284,45 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
         providerNodeId: "g-image-a"
       });
 
-      const list = requests.find(url => url.pathname.endsWith("/files"))!;
-      const changes = requests.find(url => url.pathname.endsWith("/changes"))!;
-      const thumbnail = requests.find(url => url.pathname.endsWith("/g-image-a"))!;
+      const list = requests.find(request => request.url.pathname.endsWith("/files"))!.url;
+      const thumbnail = requests.find(request => request.url.pathname.endsWith("/g-image-a"))!.url;
+      expect(list.searchParams.get("q")).toBe("'g-root' in parents and trashed=false");
+      expect(list.searchParams.get("pageSize")).toBe("50");
       expect(list.searchParams.get("supportsAllDrives")).toBe("true");
       expect(list.searchParams.get("includeItemsFromAllDrives")).toBe("true");
-      expect(changes.searchParams.get("supportsAllDrives")).toBe("true");
-      expect(changes.searchParams.get("includeItemsFromAllDrives")).toBe("true");
+      expect(list.searchParams.get("fields")).toContain("nextPageToken,files(");
       expect(thumbnail.searchParams.get("supportsAllDrives")).toBe("true");
       expect(new URL(media.url).searchParams.get("supportsAllDrives")).toBe("true");
+      expect(requests.some(request => request.url.searchParams.get("alt") === "media")).toBe(false);
+    });
+  } else {
+    it("uses only live metadata fields and a thumbnail expansion for folder pages", async () => {
+      const { adapter, requests } = createHarness(provider);
+
+      await adapter.listFolder({
+        credentials,
+        folderId: "o-root",
+        cursor: null,
+        pageSize: 50
+      });
+
+      const list = requests.at(-1)!.url;
+      expect(list.searchParams.get("$top")).toBe("50");
+      expect(list.searchParams.get("$expand")).toBe("thumbnails($select=large)");
+      expect(list.searchParams.get("$select")).toBe(
+        "id,name,parentReference,folder,file,image,video,size,createdDateTime,lastModifiedDateTime,photo,eTag"
+      );
+      expect(list.searchParams.get("$select")).not.toContain("downloadUrl");
+    });
+
+    it("requests only the preauthorized media URL metadata", async () => {
+      const { adapter, requests } = createHarness(provider);
+
+      await adapter.getMediaUrl({ credentials, providerNodeId: "o-image-a" });
+
+      const mediaMetadata = requests.at(-1)!;
+      expect(mediaMetadata.url.searchParams.get("$select")).toBe("@microsoft.graph.downloadUrl");
+      expect(new Headers(mediaMetadata.init?.headers).get("range")).toBeNull();
     });
   }
 });
@@ -542,5 +555,51 @@ describe("provider failure normalization", () => {
         maxDimension: 720
       })
     ).resolves.toBeNull();
+  });
+});
+
+describe("temporary provider URL expiry", () => {
+  it("bounds preauthorized URLs by provider lifetime rather than access-token lifetime", async () => {
+    const shortCredentials = {
+      ...credentials,
+      accessTokenExpiresAt: new Date(now.getTime() + 5 * 60 * 1000)
+    };
+    const google = createHarness("google").adapter;
+    const onedrive = createHarness("onedrive").adapter;
+
+    const googleThumbnail = await google.getThumbnailUrl({
+      credentials: shortCredentials,
+      providerNodeId: "g-image-a",
+      maxDimension: 720
+    });
+    const onedriveThumbnail = await onedrive.getThumbnailUrl({
+      credentials: shortCredentials,
+      providerNodeId: "o-image-a",
+      maxDimension: 720
+    });
+    const onedriveMedia = await onedrive.getMediaUrl({
+      credentials: shortCredentials,
+      providerNodeId: "o-image-a"
+    });
+
+    const providerExpiry = new Date(now.getTime() + 50 * 60 * 1000);
+    expect(googleThumbnail?.expiresAt).toEqual(providerExpiry);
+    expect(onedriveThumbnail?.expiresAt).toEqual(providerExpiry);
+    expect(onedriveMedia.expiresAt).toEqual(providerExpiry);
+  });
+
+  it("expires a constructed Google media URL with its access token", async () => {
+    const shortCredentials = {
+      ...credentials,
+      accessTokenExpiresAt: new Date(now.getTime() + 5 * 60 * 1000)
+    };
+    const google = createHarness("google").adapter;
+
+    const media = await google.getMediaUrl({
+      credentials: shortCredentials,
+      providerNodeId: "g-video-a"
+    });
+
+    expect(media.expiresAt).toEqual(shortCredentials.accessTokenExpiresAt);
   });
 });

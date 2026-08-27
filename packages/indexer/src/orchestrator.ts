@@ -3,7 +3,8 @@ import type { IndexCheckpoint, Source } from "@cloudframe/shared";
 import {
   filterDeltaPageToEnabledRoots,
   runIndexBatch,
-  type IndexBatchRepository
+  type IndexBatchRepository,
+  type LegacyChangesPage
 } from "./batch";
 import { runReconciliationBatch, type ReconciliationRepository } from "./reconcile";
 import type { SyncMode, SyncWorkflowRunner } from "./workflow";
@@ -125,7 +126,14 @@ export function createIndexOrchestrator(
         const credentials = await dependencies.getCredentials(sourceId, source.householdId);
         if (mode === "delta") {
           const cursor = source.crawlCheckpoint?.providerPageCursor ?? source.deltaCursor;
-          const page = await dependencies.providers.get(source.provider).getChanges({
+          const legacyAdapter = dependencies.providers.get(source.provider) as unknown as {
+            getChanges(input: {
+              credentials: typeof credentials;
+              cursor: string | null;
+              pageSize: number;
+            }): Promise<LegacyChangesPage>;
+          };
+          const page = await legacyAdapter.getChanges({
             credentials,
             cursor,
             pageSize

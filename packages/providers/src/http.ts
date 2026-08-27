@@ -117,9 +117,6 @@ export async function optionalJson<T>(response: Response): Promise<T | null> {
   return json<T>(response);
 }
 
-export function temporaryExpiry(now: Date, credentialsExpiry?: Date): Date {
-  const conservative = new Date(now.getTime() + 50 * 60 * 1000);
-  return credentialsExpiry && credentialsExpiry < conservative
-    ? credentialsExpiry
-    : conservative;
+export function temporaryExpiry(now: Date): Date {
+  return new Date(now.getTime() + 50 * 60 * 1000);
 }

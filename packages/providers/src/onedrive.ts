@@ -2,7 +2,6 @@ import { bearer, json, optionalJson, providerFetch, temporaryExpiry } from "./ht
 import { ProviderError } from "./types";
 import type {
   AuthorizationCallback,
-  ChangesPage,
   GetNodeInput,
   ListFolderInput,
   MediaUrlInput,
@@ -146,34 +145,6 @@ export function createOneDriveAdapter(
       };
     },
 
-    async getChanges(input) {
-      const url = input.cursor
-        ? requireGraphCursor(input.cursor)
-        : new URL(`${GRAPH_ENDPOINT}/me/drive/root/delta`);
-      if (!input.cursor) {
-        url.searchParams.set("$top", String(input.pageSize));
-        url.searchParams.set("$select", ONEDRIVE_SELECT);
-        url.searchParams.set("$expand", "thumbnails($select=large)");
-      }
-      const page = await graphJson<OneDrivePage>(fetch, url, input.credentials.accessToken, now);
-      const changes = page.value
-        .map(item => {
-          if (item.deleted) {
-            return { providerNodeId: item.id, removed: true, node: null };
-          }
-          const node = normalizeOneDriveItem(item);
-          return node
-            ? { providerNodeId: item.id, removed: false, node }
-            : null;
-        })
-        .filter(isDefined);
-      return {
-        changes,
-        nextCursor: page["@odata.nextLink"] ?? null,
-        deltaCursor: page["@odata.nextLink"] ? null : page["@odata.deltaLink"] ?? input.cursor
-      } satisfies ChangesPage;
-    },
-
     async getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null> {
       const size = Math.max(64, Math.min(4096, Math.round(input.maxDimension)));
       const response = await providerFetch(
@@ -186,7 +157,7 @@ export function createOneDriveAdapter(
       return value?.url
         ? {
             url: value.url,
-            expiresAt: temporaryExpiry(now(), input.credentials.accessTokenExpiresAt)
+            expiresAt: temporaryExpiry(now())
           }
         : null;
     },
@@ -194,7 +165,7 @@ export function createOneDriveAdapter(
     async getMediaUrl(input: MediaUrlInput): Promise<TemporaryUrl> {
       const item = await graphJson<OneDriveItem>(
         fetch,
-        `${GRAPH_ENDPOINT}/me/drive/items/${encodeURIComponent(input.providerNodeId)}?$select=id,@microsoft.graph.downloadUrl`,
+        `${GRAPH_ENDPOINT}/me/drive/items/${encodeURIComponent(input.providerNodeId)}?$select=@microsoft.graph.downloadUrl`,
         input.credentials.accessToken,
         now
       );
@@ -206,13 +177,13 @@ export function createOneDriveAdapter(
           { retryable: false }
         );
       }
-      return { url, expiresAt: temporaryExpiry(now(), input.credentials.accessTokenExpiresAt) };
+      return { url, expiresAt: temporaryExpiry(now()) };
     }
   };
 }
 
 const ONEDRIVE_SELECT =
-  "id,name,parentReference,folder,file,image,video,size,createdDateTime,lastModifiedDateTime,photo,eTag,deleted,@microsoft.graph.downloadUrl";
+  "id,name,parentReference,folder,file,image,video,size,createdDateTime,lastModifiedDateTime,photo,eTag";
 
 interface OneDriveItem {
   id: string;
@@ -228,14 +199,12 @@ interface OneDriveItem {
   photo?: { takenDateTime?: string };
   thumbnails?: Array<{ large?: { url?: string } }>;
   eTag?: string;
-  deleted?: unknown;
   "@microsoft.graph.downloadUrl"?: string;
 }
 
 interface OneDrivePage {
   value: OneDriveItem[];
   "@odata.nextLink"?: string;
-  "@odata.deltaLink"?: string;
 }
 
 interface MicrosoftTokenResponse {

@@ -102,7 +102,6 @@ class RefreshProvider {
     getRoot: async () => unexpected("getRoot"),
     getNode: async () => unexpected("getNode"),
     listFolder: async () => unexpected("listFolder"),
-    getChanges: async () => unexpected("getChanges"),
     getThumbnailUrl: async () => unexpected("getThumbnailUrl"),
     getMediaUrl: async () => unexpected("getMediaUrl"),
   };

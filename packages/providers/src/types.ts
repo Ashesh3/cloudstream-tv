@@ -71,24 +71,6 @@ export interface GetNodeInput {
   providerNodeId: string;
 }
 
-export interface ChangesInput {
-  credentials: ProviderCredentials;
-  cursor: string | null;
-  pageSize: number;
-}
-
-export interface ProviderChange {
-  providerNodeId: string;
-  removed: boolean;
-  node: ProviderNode | null;
-}
-
-export interface ChangesPage {
-  changes: ProviderChange[];
-  nextCursor: string | null;
-  deltaCursor: string | null;
-}
-
 export interface ThumbnailUrlInput {
   credentials: ProviderCredentials;
   providerNodeId: string;
@@ -112,7 +94,6 @@ export interface ProviderAdapter {
   getRoot(credentials: ProviderCredentials): Promise<ProviderNode>;
   getNode(input: GetNodeInput): Promise<ProviderNode>;
   listFolder(input: ListFolderInput): Promise<Page<ProviderNode>>;
-  getChanges(input: ChangesInput): Promise<ChangesPage>;
   getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null>;
   getMediaUrl(input: MediaUrlInput): Promise<TemporaryUrl>;
 }

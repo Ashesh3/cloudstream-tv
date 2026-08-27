@@ -6,10 +6,19 @@ import type {
   Source
 } from "@cloudframe/shared";
 import type {
-  ChangesPage,
   Page,
   ProviderNode
 } from "@cloudframe/providers";
+
+export interface LegacyChangesPage {
+  changes: Array<{
+    providerNodeId: string;
+    removed: boolean;
+    node: ProviderNode | null;
+  }>;
+  nextCursor: string | null;
+  deltaCursor: string | null;
+}
 
 export const MAX_INDEX_BATCH_SIZE = 200;
 
@@ -88,11 +97,11 @@ export function applyIndexRemovals(
 }
 
 export async function filterDeltaPageToEnabledRoots(
-  page: ChangesPage,
+  page: LegacyChangesPage,
   roots: Array<{ providerNodeId: string }>,
   repository: Pick<IndexBatchRepository, "getNodeByProviderId">,
   sourceId: string
-): Promise<ChangesPage> {
+): Promise<LegacyChangesPage> {
   const rootIds = new Set(roots.map(root => root.providerNodeId));
   const rootNodeIds = new Set(
     roots.map(root => deterministicNodeId(sourceId, root.providerNodeId))
@@ -143,7 +152,7 @@ export async function filterDeltaPageToEnabledRoots(
     return belongs;
   }
 
-  const filtered: ChangesPage["changes"] = [];
+  const filtered: LegacyChangesPage["changes"] = [];
   for (const change of page.changes) {
     const existing = await repository.getNodeByProviderId(sourceId, change.providerNodeId);
     if (change.removed) {
@@ -170,7 +179,7 @@ export function deterministicNodeId(
 
 export async function runIndexBatch(
   context: IndexBatchContext,
-  page: Page<ProviderNode> | ChangesPage
+  page: Page<ProviderNode> | LegacyChangesPage
 ): Promise<IndexBatchResult> {
   const source = await context.repository.getSource(context.sourceId);
   if (!source) throw new Error("Source not found");
@@ -319,8 +328,8 @@ async function convertProviderNode(
 }
 
 function isChangesPage(
-  page: Page<ProviderNode> | ChangesPage
-): page is ChangesPage {
+  page: Page<ProviderNode> | LegacyChangesPage
+): page is LegacyChangesPage {
   return "changes" in page;
 }
 

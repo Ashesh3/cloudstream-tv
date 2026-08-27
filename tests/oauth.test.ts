@@ -63,7 +63,6 @@ function adapter(provider: "google" | "onedrive" = "google"): ProviderAdapter {
     })),
     getNode: vi.fn(),
     listFolder: vi.fn(),
-    getChanges: vi.fn(),
     getThumbnailUrl: vi.fn(),
     getMediaUrl: vi.fn()
   };

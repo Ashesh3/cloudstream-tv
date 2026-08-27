@@ -7,6 +7,7 @@ import {
   createWorkflowApiLauncher,
   createWorkflowStep,
   deterministicNodeId,
+  type LegacyChangesPage,
   runIndexBatch,
   runReconciliationBatch
 } from "@cloudframe/indexer";
@@ -14,7 +15,6 @@ import { createIndexingService, MemoryRepository } from "@cloudframe/server";
 import { sourceIndexStateKind, type AssignedRoot, type Source } from "@cloudframe/shared";
 import {
   ProviderError,
-  type ChangesPage,
   type ProviderAdapter,
   type ProviderNode
 } from "@cloudframe/providers";
@@ -1132,7 +1132,7 @@ function change(value: ProviderNode) {
 
 function deltaOrchestrator(
   repository: MemoryRepository,
-  getChanges: () => Promise<ChangesPage>
+  getChanges: () => Promise<LegacyChangesPage>
 ) {
   return createIndexOrchestrator({
     repository,
