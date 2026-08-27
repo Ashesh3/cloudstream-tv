@@ -611,6 +611,9 @@ describe("direct provider URL vending", () => {
     "https://tenant.sharepoint.com/personal/%2E%2e/user/_layouts/15/download.aspx?token=capability",
     "https://tenant.sharepoint.com/personal/../user/_layouts/15/download.aspx?token=capability",
     "https://tenant.sharepoint.com/personal/%252e%252e/user/_layouts/15/download.aspx?token=capability",
+    String.raw`https://tenant.sharepoint.com/personal\..\user\_layouts\15\download.aspx?token=capability`,
+    String.raw`https://tenant.sharepoint.com\personal\user\_layouts\15\download.aspx?token=capability`,
+    String.raw`https://tenant.sharepoint.com/personal\user/_layouts\15/download.aspx?token=capability`,
   ])("rejects raw SharePoint traversal before URL normalization %s", async (url) => {
     const harness = createHarness();
     harness.oneDrive.mediaResult = { url, expiresAt: harness.expiry };
@@ -632,6 +635,24 @@ describe("direct provider URL vending", () => {
     const harness = createHarness();
     const url =
       "https://tenant.sharepoint.com/personal/user/_layouts/15/download.aspx?token=%252e%252e%252fopaque";
+    harness.oneDrive.mediaResult = { url, expiresAt: harness.expiry };
+
+    await expect(
+      harness.media.media(
+        harness.auth(),
+        harness.handle(
+          "source-onedrive",
+          "root-onedrive",
+          "onedrive-video",
+          "video",
+        ),
+      ),
+    ).resolves.toMatchObject({ url });
+  });
+
+  it("does not scan literal backslash-like sequences inside the query capability", async () => {
+    const harness = createHarness();
+    const url = String.raw`https://tenant.sharepoint.com/personal/user/_layouts/15/download.aspx?token=opaque\..\capability`;
     harness.oneDrive.mediaResult = { url, expiresAt: harness.expiry };
 
     await expect(

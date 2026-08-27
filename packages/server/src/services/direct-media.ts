@@ -230,7 +230,11 @@ function hasExactSharePointDownloadHandler(pathname: string): boolean {
 function rawPath(value: string): string | null {
   const authorityStart = value.indexOf("://");
   if (authorityStart < 0) return null;
-  const pathStart = value.indexOf("/", authorityStart + 3);
+  const pathDelimiters = [
+    value.indexOf("/", authorityStart + 3),
+    value.indexOf("\\", authorityStart + 3),
+  ].filter((index) => index >= 0);
+  const pathStart = pathDelimiters.length > 0 ? Math.min(...pathDelimiters) : -1;
   if (pathStart < 0) return "";
   const queryStart = value.indexOf("?", pathStart);
   const fragmentStart = value.indexOf("#", pathStart);
@@ -241,7 +245,9 @@ function rawPath(value: string): string | null {
 
 function validRawSharePointPath(value: string): boolean {
   const path = rawPath(value);
-  if (path === null || /%(?:25|2e|2f|5c)/iu.test(path)) return false;
+  if (path === null || path.includes("\\") || /%(?:25|2e|2f|5c)/iu.test(path)) {
+    return false;
+  }
   return !path.split("/").some((segment) => segment === "." || segment === "..");
 }
 
