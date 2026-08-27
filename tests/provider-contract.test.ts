@@ -94,12 +94,15 @@ function createHarness(provider: ProviderKind): ContractHarness {
       });
       if (url.pathname.endsWith("/children")) return jsonResponse(fixture(provider, "folder-page"));
       if (url.pathname.endsWith("/thumbnails/0/c720x720")) {
-        return jsonResponse({ url: "https://synthetic.invalid/onedrive-thumb-720" });
+        return jsonResponse({
+          url: "https://public.dm.files.1drv.com/y4m/thumbnail?authkey=synthetic-capability"
+        });
       }
       if (url.pathname.endsWith("/o-image-a")) {
         return jsonResponse({
           id: "o-image-a",
-          "@microsoft.graph.downloadUrl": "https://synthetic.invalid/onedrive-media"
+          "@microsoft.graph.downloadUrl":
+            "https://tenant.sharepoint.com/_layouts/15/download.aspx?UniqueId=synthetic-capability"
         });
       }
     }
@@ -254,11 +257,11 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     const media = await adapter.getMediaUrl({ credentials, providerNodeId });
 
     expect(thumbnail?.url).toContain(
-      provider === "google" ? "googleapis.com" : "synthetic.invalid"
+      provider === "google" ? "googleapis.com" : "files.1drv.com"
     );
     expect(thumbnail?.expiresAt.getTime()).toBeGreaterThan(now.getTime());
     expect(
-      media.url.includes("synthetic.invalid") || media.url.includes("googleapis.com")
+      media.url.includes("sharepoint.com") || media.url.includes("googleapis.com")
     ).toBe(true);
     expect(media.expiresAt.getTime()).toBeGreaterThan(now.getTime());
     if (provider === "google") {
@@ -271,8 +274,12 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       );
       expect(media.expiresAt).toEqual(accessExpiresAt);
     } else {
-      expect(thumbnail?.url).toBe("https://synthetic.invalid/onedrive-thumb-720");
-      expect(media.url).toBe("https://synthetic.invalid/onedrive-media");
+      expect(thumbnail?.url).toBe(
+        "https://public.dm.files.1drv.com/y4m/thumbnail?authkey=synthetic-capability"
+      );
+      expect(media.url).toBe(
+        "https://tenant.sharepoint.com/_layouts/15/download.aspx?UniqueId=synthetic-capability"
+      );
     }
     expect(requests.every(request => !request.url.pathname.includes("/api/"))).toBe(true);
     expect(requests.every(request => !request.url.searchParams.has("access_token"))).toBe(true);

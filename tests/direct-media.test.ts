@@ -368,29 +368,28 @@ describe("direct provider URL vending", () => {
       }) as TemporaryUrl,
     );
 
-    const error = await harness.media
-      .thumbnails(
-        harness.auth(),
-        [
-          harness.handle(
-            "source-onedrive",
-            "root-onedrive",
-            "onedrive-unstable",
-            "image",
-          ),
-        ],
-        720,
-      )
-      .catch((value) => value);
+    const result = await harness.media.thumbnails(
+      harness.auth(),
+      [
+        harness.handle(
+          "source-onedrive",
+          "root-onedrive",
+          "onedrive-unstable",
+          "image",
+        ),
+      ],
+      720,
+    );
 
-    expect(error).toEqual(new DirectMediaError("INVALID_PROVIDER_URL"));
-    expect(String(error)).not.toContain("private provider URL detail");
+    expect(result.items[0]).toMatchObject({ status: "unavailable" });
+    expect(JSON.stringify(result)).not.toContain("private provider URL detail");
   });
 
   it("returns the URL snapshot that was validated even if provider getters change", async () => {
     const harness = createHarness();
     let reads = 0;
-    const validated = "https://public.dm.files.1drv.com/y4m/preview";
+    const validated =
+      "https://public.dm.files.1drv.com/y4m/preview?authkey=capability";
     harness.oneDrive.thumbnailResults.set(
       "onedrive-changing",
       Object.defineProperties({}, {
@@ -456,6 +455,172 @@ describe("direct provider URL vending", () => {
     harness.google.mediaResult = {
       url: "https://tenant.sharepoint.com/google-confusion",
       expiresAt: harness.expiry,
+    };
+
+    await expect(
+      harness.media.media(
+        harness.auth(),
+        harness.handle(
+          "source-google",
+          "root-google",
+          "google-video",
+          "video",
+        ),
+      ),
+    ).rejects.toEqual(new DirectMediaError("INVALID_PROVIDER_URL"));
+  });
+
+  it.each([
+    [
+      "wrong item",
+      "https://www.googleapis.com/drive/v3/files/another-item?alt=media&access_token=initial-google-access&supportsAllDrives=true",
+    ],
+    [
+      "wrong token",
+      "https://www.googleapis.com/drive/v3/files/google-video?alt=media&access_token=attacker-token&supportsAllDrives=true",
+    ],
+    [
+      "missing alt",
+      "https://www.googleapis.com/drive/v3/files/google-video?access_token=initial-google-access&supportsAllDrives=true",
+    ],
+    [
+      "duplicate token",
+      "https://www.googleapis.com/drive/v3/files/google-video?alt=media&access_token=initial-google-access&access_token=attacker-token&supportsAllDrives=true",
+    ],
+    [
+      "extra query",
+      "https://www.googleapis.com/drive/v3/files/google-video?alt=media&access_token=initial-google-access&supportsAllDrives=true&fields=id",
+    ],
+    [
+      "wrong purpose",
+      "https://www.googleapis.com/drive/v3/files/google-video?alt=metadata&access_token=initial-google-access&supportsAllDrives=true",
+    ],
+  ])("rejects a Google media URL with %s", async (_label, url) => {
+    const harness = createHarness();
+    harness.google.rewriteGoogleMediaToken = false;
+    harness.google.mediaResult = { url, expiresAt: harness.expiry };
+
+    await expect(
+      harness.media.media(
+        harness.auth(),
+        harness.handle(
+          "source-google",
+          "root-google",
+          "google-video",
+          "video",
+        ),
+      ),
+    ).rejects.toEqual(new DirectMediaError("INVALID_PROVIDER_URL"));
+  });
+
+  it.each([
+    "https://microsoft.com/download?token=capability",
+    "https://storage.live.com/?token=capability",
+    "https://login.microsoftonline.com/path?token=capability",
+    "https://graph.microsoft.com/v1.0/content?token=capability",
+    "https://tenant.sharepoint.com/sites/photos?token=capability",
+    "https://tenant.sharepoint.com/_layouts/15/download.aspx",
+    "https://files.1drv.com/path?token=capability",
+  ])("rejects attacker-shaped OneDrive media URL %s", async (url) => {
+    const harness = createHarness();
+    harness.oneDrive.mediaResult = { url, expiresAt: harness.expiry };
+
+    await expect(
+      harness.media.media(
+        harness.auth(),
+        harness.handle(
+          "source-onedrive",
+          "root-onedrive",
+          "onedrive-video",
+          "video",
+        ),
+      ),
+    ).rejects.toEqual(new DirectMediaError("INVALID_PROVIDER_URL"));
+  });
+
+  it.each([
+    "https://tenant.sharepoint.com/_layouts/15/download.aspx?UniqueId=capability",
+    "https://tenant.sharepoint.com/sites/photos/_layouts/15/download.aspx?share=capability",
+    "https://public.dm.files.1drv.com/y4m/file?authkey=capability",
+    "https://storage.live.com/items/file?authkey=capability",
+    "https://res.cdn.microsoftusercontent.com/download/file?token=capability",
+  ])("accepts realistic OneDrive preauthorized media URL %s", async (url) => {
+    const harness = createHarness();
+    harness.oneDrive.mediaResult = { url, expiresAt: harness.expiry };
+
+    await expect(
+      harness.media.media(
+        harness.auth(),
+        harness.handle(
+          "source-onedrive",
+          "root-onedrive",
+          "onedrive-video",
+          "video",
+        ),
+      ),
+    ).resolves.toMatchObject({ url });
+  });
+
+  it("returns unavailable for an authenticated Graph thumbnail URL", async () => {
+    const harness = createHarness();
+    harness.oneDrive.thumbnailResults.set("onedrive-image", {
+      url: "https://graph.microsoft.com/v1.0/me/drive/items/item/content?token=capability",
+      expiresAt: harness.expiry,
+    });
+
+    const result = await harness.media.thumbnails(
+      harness.auth(),
+      [
+        harness.handle(
+          "source-onedrive",
+          "root-onedrive",
+          "onedrive-image",
+          "image",
+        ),
+      ],
+      720,
+    );
+
+    expect(result.items).toEqual([
+      {
+        itemId: harness.itemId("source-onedrive", "onedrive-image"),
+        status: "unavailable",
+      },
+    ]);
+  });
+
+  it("uses intrinsic Date state instead of an overridden getTime method", async () => {
+    const harness = createHarness();
+    class TrickyDate extends Date {
+      override getTime(): number {
+        return Number.NaN;
+      }
+    }
+    const expiresAt = new TrickyDate(harness.expiry);
+    harness.google.mediaResult = {
+      url: "https://www.googleapis.com/drive/v3/files/google-video?alt=media&access_token=initial-google-access&supportsAllDrives=true",
+      expiresAt,
+    };
+
+    await expect(
+      harness.media.media(
+        harness.auth(),
+        harness.handle(
+          "source-google",
+          "root-google",
+          "google-video",
+          "video",
+        ),
+      ),
+    ).resolves.toMatchObject({ expiresAt: harness.expiry.toISOString() });
+  });
+
+  it("rejects an object inheriting from Date without valid internal Date state", async () => {
+    const harness = createHarness();
+    const fakeDate = Object.create(Date.prototype) as Date;
+    harness.google.mediaResult = {
+      url: "https://www.googleapis.com/drive/v3/files/google-video?alt=media&access_token=initial-google-access&supportsAllDrives=true",
+      expiresAt: fakeDate,
     };
 
     await expect(
@@ -678,6 +843,7 @@ class MediaProviderHarness {
   readonly thumbnailErrors = new Map<string, unknown>();
   readonly mediaFailures: unknown[] = [];
   mediaResult: TemporaryUrl;
+  rewriteGoogleMediaToken = true;
 
   readonly adapter: ProviderAdapter;
 
@@ -719,7 +885,7 @@ class MediaProviderHarness {
         this.mediaTokens.push(input.credentials.accessToken);
         const failure = this.mediaFailures.shift();
         if (failure !== undefined) throw failure;
-        if (this.provider === "google") {
+        if (this.provider === "google" && this.rewriteGoogleMediaToken) {
           return {
             ...this.mediaResult,
             url: this.mediaResult.url.replace(

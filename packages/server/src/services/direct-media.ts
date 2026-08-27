@@ -32,16 +32,6 @@ const RESPONSE_HEADERS = {
   "referrer-policy": "no-referrer",
 } as const;
 
-const ONEDRIVE_HOST_SUFFIXES = [
-  "1drv.com",
-  "live.com",
-  "microsoft.com",
-  "microsoftusercontent.com",
-  "onedrive.com",
-  "sharepoint.com",
-  "sharepoint-df.com",
-] as const;
-
 export interface DirectThumbnailResponse {
   items: DirectThumbnailItem[];
   responseHeaders: typeof RESPONSE_HEADERS;
@@ -176,32 +166,87 @@ function providerAdapter(
   }
 }
 
-function hostnameMatches(hostname: string, suffix: string): boolean {
-  return hostname === suffix || hostname.endsWith(`.${suffix}`);
+function queryKeys(url: URL): string[] {
+  return [...url.searchParams.keys()];
 }
 
-function allowedHost(provider: ProviderKind, hostname: string): boolean {
-  if (provider === "google") return hostname === "www.googleapis.com";
-  return ONEDRIVE_HOST_SUFFIXES.some((suffix) =>
-    hostnameMatches(hostname, suffix),
+function exactlyOneQueryValue(
+  url: URL,
+  key: string,
+  expected: string,
+): boolean {
+  const values = url.searchParams.getAll(key);
+  return values.length === 1 && values[0] === expected;
+}
+
+function validGoogleUrl(
+  url: URL,
+  item: AuthorizedBrowseItem,
+  credentials: ProviderCredentials,
+): boolean {
+  const allowedQueryKeys = new Set([
+    "access_token",
+    "alt",
+    "supportsAllDrives",
+  ]);
+  const keys = queryKeys(url);
+  return (
+    url.origin === "https://www.googleapis.com" &&
+    url.pathname ===
+      `/drive/v3/files/${encodeURIComponent(item.claims.providerNodeId)}` &&
+    keys.length === 3 &&
+    new Set(keys).size === 3 &&
+    keys.every((key) => allowedQueryKeys.has(key)) &&
+    exactlyOneQueryValue(url, "alt", "media") &&
+    exactlyOneQueryValue(url, "access_token", credentials.accessToken) &&
+    exactlyOneQueryValue(url, "supportsAllDrives", "true")
   );
+}
+
+function hostnameMatchesSubdomain(hostname: string, suffix: string): boolean {
+  return hostname.endsWith(`.${suffix}`);
+}
+
+function hasDownloadCapability(url: URL): boolean {
+  for (const [key, value] of url.searchParams) {
+    if (key.length > 0 && value.length > 0) return true;
+  }
+  return false;
+}
+
+function validOneDriveUrl(url: URL): boolean {
+  if (url.pathname === "/" || url.pathname.length === 0) return false;
+  if (!hasDownloadCapability(url)) return false;
+  const hostname = url.hostname.toLowerCase();
+  if (hostnameMatchesSubdomain(hostname, "sharepoint.com")) {
+    const pathname = url.pathname.toLowerCase();
+    return (
+      pathname === "/_layouts/15/download.aspx" ||
+      pathname.includes("/_layouts/15/download.aspx")
+    );
+  }
+  if (hostnameMatchesSubdomain(hostname, "files.1drv.com")) return true;
+  if (hostname === "storage.live.com") return true;
+  return hostnameMatchesSubdomain(hostname, "microsoftusercontent.com");
 }
 
 function validTemporaryUrl(
   value: TemporaryUrl,
-  provider: ProviderKind,
+  item: AuthorizedBrowseItem,
+  credentials: ProviderCredentials,
   now: Date,
 ): TemporaryUrl {
   try {
     const rawUrl = value?.url;
     const rawExpiry = value?.expiresAt;
+    const expiryEpoch = Date.prototype.getTime.call(rawExpiry);
     if (
       !value ||
       typeof value !== "object" ||
       typeof rawUrl !== "string" ||
       !(rawExpiry instanceof Date) ||
-      !Number.isFinite(rawExpiry.getTime()) ||
-      rawExpiry <= now
+      !Number.isFinite(expiryEpoch) ||
+      expiryEpoch <= now.getTime()
     ) {
       throw directMediaError("INVALID_PROVIDER_URL");
     }
@@ -212,14 +257,35 @@ function validTemporaryUrl(
       url.username !== "" ||
       url.password !== "" ||
       url.hash !== "" ||
-      !allowedHost(provider, url.hostname.toLowerCase())
+      (item.source.provider === "google"
+        ? !validGoogleUrl(url, item, credentials)
+        : !validOneDriveUrl(url))
     ) {
       throw directMediaError("INVALID_PROVIDER_URL");
     }
-    return { url: rawUrl, expiresAt: new Date(rawExpiry) };
+    return { url: rawUrl, expiresAt: new Date(expiryEpoch) };
   } catch (error) {
     if (error instanceof DirectMediaError) throw error;
     throw directMediaError("INVALID_PROVIDER_URL");
+  }
+}
+
+function validThumbnailUrl(
+  value: TemporaryUrl,
+  item: AuthorizedBrowseItem,
+  credentials: ProviderCredentials,
+  now: Date,
+): TemporaryUrl | null {
+  try {
+    return validTemporaryUrl(value, item, credentials, now);
+  } catch (error) {
+    if (
+      error instanceof DirectMediaError &&
+      item.source.provider === "onedrive"
+    ) {
+      return null;
+    }
+    throw error;
   }
 }
 
@@ -290,11 +356,11 @@ export function createDirectMediaService(
             providerNodeId: entry.item.claims.providerNodeId,
             maxDimension,
           });
-          items[entry.index] = temporary
-            ? readyThumbnail(
-                entry.item,
-                validTemporaryUrl(temporary, provider, now()),
-              )
+          const safe = temporary
+            ? validThumbnailUrl(temporary, entry.item, credentials!, now())
+            : null;
+          items[entry.index] = safe
+            ? readyThumbnail(entry.item, safe)
             : unavailable(entry.item);
         } catch (error) {
           if (
@@ -370,7 +436,8 @@ export function createDirectMediaService(
 
     const safe = validTemporaryUrl(
       temporary!,
-      item.source.provider,
+      item,
+      credentials!,
       now(),
     );
     return {

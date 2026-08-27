@@ -131,10 +131,10 @@ describe("best-effort Runtime Cache rate limiting", () => {
     });
   });
 
-  it("clamps bucket and policy values to documented safe bounds", async () => {
+  it("preserves a canonical bucket while clamping policy values", async () => {
     const harness = createHarness();
     const result = await harness.limiter.consume(
-      `  ${"a".repeat(200)}!*  `,
+      "url-vending",
       "device-1",
       now,
       { limit: Number.POSITIVE_INFINITY, windowSeconds: -5 },
@@ -143,9 +143,57 @@ describe("best-effort Runtime Cache rate limiting", () => {
     expect(result.allowed).toBe(true);
     expect(result.remaining).toBe(9_999);
     const [key] = harness.cache.keys;
-    const bucket = key!.split(":")[1]!;
-    expect(bucket).toMatch(/^[a-z0-9_-]{1,64}$/);
+    expect(key!.split(":")[1]).toBe("url-vending");
     expect(harness.cache.sets[0]?.options.ttl).toBe(2);
+  });
+
+  it.each([
+    "",
+    "url vending",
+    "url@vending",
+    "URL-vending",
+    "a".repeat(65),
+  ])("rejects invalid bucket %j before cache access", async (bucket) => {
+    const harness = createHarness();
+
+    const error = await harness.limiter
+      .consume(bucket, "raw-subject", now, policy)
+      .catch((value) => value);
+
+    expect(error).toMatchObject({ code: "RATE_LIMIT_BUCKET_INVALID" });
+    if (bucket) expect(String(error)).not.toContain(bucket);
+    expect(String(error)).not.toContain("raw-subject");
+    expect(harness.cache.keys).toHaveLength(0);
+  });
+
+  it("keeps distinct valid buckets distinct without lossy normalization", async () => {
+    const harness = createHarness();
+
+    await harness.limiter.consume("url-vending", "device-1", now, policy);
+    await harness.limiter.consume("url_vending", "device-1", now, policy);
+
+    expect(harness.cache.keys[0]).not.toBe(harness.cache.keys[1]);
+    expect(harness.cache.keys.map((key) => key.split(":")[1])).toEqual([
+      "url-vending",
+      "url_vending",
+    ]);
+  });
+
+  it("treats an impossible cached count as malformed and rewrites count one", async () => {
+    const harness = createHarness();
+    const windowStart = Math.floor(now.getTime() / 60_000) * 60_000;
+    harness.cache.nextGet = {
+      count: 10_001,
+      expiresAt: windowStart + 60_000,
+    };
+
+    await expect(
+      harness.limiter.consume("url-vending", "device-1", now, policy),
+    ).resolves.toMatchObject({ allowed: true, remaining: 1 });
+    expect(harness.cache.sets[0]?.value).toEqual({
+      count: 1,
+      expiresAt: windowStart + 60_000,
+    });
   });
 
   it.each(["", "short", ` ${"x".repeat(32)}`, `${"x".repeat(32)} `])(
@@ -158,6 +206,26 @@ describe("best-effort Runtime Cache rate limiting", () => {
       expect(cache.keys).toHaveLength(0);
     },
   );
+
+  it.each([
+    `${"x".repeat(16)} ${"x".repeat(16)}`,
+    `${"x".repeat(16)}\t${"x".repeat(16)}`,
+    `${"x".repeat(16)}\n${"x".repeat(16)}`,
+  ])("rejects configured secrets containing internal whitespace", (configuredSecret) => {
+    const cache = new RecordingCache();
+
+    const error = (() => {
+      try {
+        createRuntimeRateLimiter({ cache, secret: configuredSecret });
+      } catch (value) {
+        return value;
+      }
+    })();
+
+    expect(error).toMatchObject({ code: "RATE_LIMIT_SECRET_INVALID" });
+    expect(String(error)).not.toContain(configuredSecret);
+    expect(cache.keys).toHaveLength(0);
+  });
 
   it("never includes the raw subject in cache failure errors", async () => {
     const cache: RateLimitRuntimeCache = {

@@ -44,7 +44,8 @@ export interface CreateRuntimeRateLimiterOptions {
 }
 
 export type RuntimeRateLimitConfigurationErrorCode =
-  "RATE_LIMIT_SECRET_INVALID";
+  | "RATE_LIMIT_BUCKET_INVALID"
+  | "RATE_LIMIT_SECRET_INVALID";
 
 export class RuntimeRateLimitConfigurationError extends Error {
   constructor(readonly code: RuntimeRateLimitConfigurationErrorCode) {
@@ -61,7 +62,7 @@ interface CachedWindow {
 function requireSecret(value: string): string {
   if (
     value.length === 0 ||
-    value !== value.trim() ||
+    /\s/u.test(value) ||
     Buffer.byteLength(value, "utf8") < 32
   ) {
     throw new RuntimeRateLimitConfigurationError("RATE_LIMIT_SECRET_INVALID");
@@ -79,14 +80,11 @@ function clampInteger(
   return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
 }
 
-function safeBucket(value: string): string {
-  const bucket = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "")
-    .slice(0, RUNTIME_RATE_LIMIT_BOUNDS.bucketLength);
-  return bucket || "default";
+function requireBucket(value: string): string {
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(value)) {
+    throw new RuntimeRateLimitConfigurationError("RATE_LIMIT_BUCKET_INVALID");
+  }
+  return value;
 }
 
 function safePolicy(policy: RuntimeRateLimitPolicy): RuntimeRateLimitPolicy {
@@ -112,6 +110,7 @@ function cachedWindow(value: unknown, expectedExpiry: number): CachedWindow | nu
       Object.keys(value).length !== 2 ||
       !Number.isSafeInteger(candidate.count) ||
       (candidate.count as number) < 0 ||
+      (candidate.count as number) > RUNTIME_RATE_LIMIT_BOUNDS.limit.max ||
       candidate.expiresAt !== expectedExpiry
     ) {
       return null;
@@ -143,6 +142,7 @@ export function createRuntimeRateLimiter(
     requestedPolicy: RuntimeRateLimitPolicy,
   ): Promise<RuntimeRateLimitResult> {
     const policy = safePolicy(requestedPolicy);
+    const bucket = requireBucket(requestedBucket);
     const nowMs = Number.isFinite(requestedNow.getTime())
       ? requestedNow.getTime()
       : Date.now();
@@ -153,7 +153,7 @@ export function createRuntimeRateLimiter(
     const hmacSubject = createHmac("sha256", secret)
       .update(subject)
       .digest("base64url");
-    const key = `rate:${safeBucket(requestedBucket)}:${hmacSubject}:${windowStart}`;
+    const key = `rate:${bucket}:${hmacSubject}:${windowStart}`;
 
     let value: unknown;
     try {
