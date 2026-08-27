@@ -1,4 +1,4 @@
-import { bearer, json, providerFetch, temporaryExpiry } from "./http";
+import { bearer, json, providerFetch } from "./http";
 import { ProviderError } from "./types";
 import type {
   AuthorizationCallback,
@@ -142,25 +142,22 @@ export function createGoogleDriveAdapter(
     async getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null> {
       const file = await googleJson<GoogleFile>(
         fetch,
-        `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}?fields=id,thumbnailLink,version&supportsAllDrives=true`,
+        `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}?fields=mimeType&supportsAllDrives=true`,
         input.credentials.accessToken,
         now
       );
-      if (!file.thumbnailLink) return null;
+      if (!file.mimeType?.startsWith("image/")) return null;
       return {
-        url: resizeGoogleThumbnail(file.thumbnailLink, input.maxDimension),
-        expiresAt: temporaryExpiry(now())
+        url: googleMediaUrl(input.providerNodeId, input.credentials.accessToken),
+        expiresAt: input.credentials.accessTokenExpiresAt
       };
     },
 
     async getMediaUrl(input: MediaUrlInput): Promise<TemporaryUrl> {
-      const url = new URL(
-        `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}`
-      );
-      url.searchParams.set("alt", "media");
-      url.searchParams.set("access_token", input.credentials.accessToken);
-      url.searchParams.set("supportsAllDrives", "true");
-      return { url: url.toString(), expiresAt: input.credentials.accessTokenExpiresAt };
+      return {
+        url: googleMediaUrl(input.providerNodeId, input.credentials.accessToken),
+        expiresAt: input.credentials.accessTokenExpiresAt
+      };
     }
   };
 }
@@ -266,11 +263,12 @@ async function googleJson<T>(
   }));
 }
 
-function resizeGoogleThumbnail(url: string, size: number): string {
-  const normalized = Math.max(64, Math.min(4096, Math.round(size)));
-  return /=[^/?#]+$/.test(url)
-    ? url.replace(/=[^/?#]+$/, `=s${normalized}`)
-    : `${url}=s${normalized}`;
+function googleMediaUrl(providerNodeId: string, accessToken: string): string {
+  const url = new URL(`${DRIVE_ENDPOINT}/files/${encodeURIComponent(providerNodeId)}`);
+  url.searchParams.set("alt", "media");
+  url.searchParams.set("access_token", accessToken);
+  url.searchParams.set("supportsAllDrives", "true");
+  return url.toString();
 }
 
 function requireString(value: string | undefined): string {

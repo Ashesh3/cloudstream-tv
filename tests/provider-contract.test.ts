@@ -67,8 +67,17 @@ function createHarness(provider: ProviderKind): ContractHarness {
       if (url.pathname.endsWith("/g-image-a")) {
         return jsonResponse({
           id: "g-image-a",
+          mimeType: "image/jpeg",
           thumbnailLink: "https://synthetic.invalid/google-thumb=s220",
           version: "12"
+        });
+      }
+      if (url.pathname.endsWith("/g-video-a")) {
+        return jsonResponse({
+          id: "g-video-a",
+          mimeType: "video/mp4",
+          thumbnailLink: "https://synthetic.invalid/google-video-thumb=s220",
+          version: "13"
         });
       }
     } else {
@@ -244,14 +253,19 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     });
     const media = await adapter.getMediaUrl({ credentials, providerNodeId });
 
-    expect(thumbnail?.url).toContain("synthetic.invalid");
+    expect(thumbnail?.url).toContain(
+      provider === "google" ? "googleapis.com" : "synthetic.invalid"
+    );
     expect(thumbnail?.expiresAt.getTime()).toBeGreaterThan(now.getTime());
     expect(
       media.url.includes("synthetic.invalid") || media.url.includes("googleapis.com")
     ).toBe(true);
     expect(media.expiresAt.getTime()).toBeGreaterThan(now.getTime());
     if (provider === "google") {
-      expect(thumbnail?.url.endsWith("=s720")).toBe(true);
+      expect(thumbnail?.url).toBe(
+        "https://www.googleapis.com/drive/v3/files/g-image-a?alt=media&access_token=synthetic-access-token&supportsAllDrives=true"
+      );
+      expect(thumbnail?.expiresAt).toEqual(accessExpiresAt);
       expect(media.url).toBe(
         "https://www.googleapis.com/drive/v3/files/g-image-a?alt=media&access_token=synthetic-access-token&supportsAllDrives=true"
       );
@@ -294,6 +308,21 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       expect(thumbnail.searchParams.get("supportsAllDrives")).toBe("true");
       expect(new URL(media.url).searchParams.get("supportsAllDrives")).toBe("true");
       expect(requests.some(request => request.url.searchParams.get("alt") === "media")).toBe(false);
+    });
+
+    it("returns no Google thumbnail URL for video metadata", async () => {
+      const { adapter, requests } = createHarness(provider);
+
+      await expect(adapter.getThumbnailUrl({
+        credentials,
+        providerNodeId: "g-video-a",
+        maxDimension: 720
+      })).resolves.toBeNull();
+
+      expect(requests).toHaveLength(1);
+      expect(requests[0].url.searchParams.get("fields")).toBe("mimeType");
+      expect(requests[0].url.searchParams.get("alt")).toBeNull();
+      expect(new Headers(requests[0].init?.headers).get("range")).toBeNull();
     });
   } else {
     it("uses only live metadata fields and a thumbnail expansion for folder pages", async () => {
@@ -538,6 +567,58 @@ describe("provider failure normalization", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("accepts an exact OneDrive continuation projection when Graph repeats it", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => jsonResponse({ value: [] }));
+    const adapter = createOneDriveAdapter({
+      clientId: "synthetic-client",
+      clientSecret: "synthetic-secret",
+      tenant: "common",
+      fetch,
+      now: () => now
+    });
+    const select = "id,name,parentReference,folder,file,image,video,size,createdDateTime,lastModifiedDateTime,photo,eTag";
+
+    await adapter.listFolder({
+      credentials,
+      folderId: "o-root",
+      cursor: `https://graph.microsoft.com/v1.0/me/drive/items/o-root/children?$skiptoken=private&$top=10&$select=${encodeURIComponent(select)}&$expand=${encodeURIComponent("thumbnails($select=large)")}`,
+      pageSize: 10
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["credentials", "https://user:pass@graph.microsoft.com/v1.0/me/drive/items/o-root/children?$skiptoken=private"],
+    ["fragment", "https://graph.microsoft.com/v1.0/me/drive/items/o-root/children?$skiptoken=private#secret"],
+    ["missing skip token", "https://graph.microsoft.com/v1.0/me/drive/items/o-root/children?$top=10"],
+    ["empty skip token", "https://graph.microsoft.com/v1.0/me/drive/items/o-root/children?$skiptoken="],
+    ["blank skip token", "https://graph.microsoft.com/v1.0/me/drive/items/o-root/children?$skiptoken=%20"],
+    ["duplicate skip token", "https://graph.microsoft.com/v1.0/me/drive/items/o-root/children?$skiptoken=a&$skiptoken=b"],
+    ["unknown query key", "https://graph.microsoft.com/v1.0/me/drive/items/o-root/children?$skiptoken=private&$filter=deleted%20eq%20null"],
+    ["duplicate projection key", "https://graph.microsoft.com/v1.0/me/drive/items/o-root/children?$skiptoken=private&$top=10&$top=10"],
+    ["broader top", "https://graph.microsoft.com/v1.0/me/drive/items/o-root/children?$skiptoken=private&$top=200"],
+    ["broader select", "https://graph.microsoft.com/v1.0/me/drive/items/o-root/children?$skiptoken=private&$select=id,@microsoft.graph.downloadUrl"],
+    ["broader expansion", "https://graph.microsoft.com/v1.0/me/drive/items/o-root/children?$skiptoken=private&$expand=children"]
+  ])("rejects a OneDrive continuation URL with %s", async (_label, cursor) => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    const adapter = createOneDriveAdapter({
+      clientId: "synthetic-client",
+      clientSecret: "synthetic-secret",
+      tenant: "common",
+      fetch,
+      now: () => now
+    });
+
+    await expect(adapter.listFolder({
+      credentials,
+      folderId: "o-root",
+      cursor,
+      pageSize: 10
+    })).rejects.toMatchObject({ code: "PROVIDER_BAD_RESPONSE" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("returns null when OneDrive reports that no thumbnail exists", async () => {
     const fetch: typeof globalThis.fetch = async () => jsonResponse({}, 404);
     const adapter = createOneDriveAdapter({
@@ -583,7 +664,7 @@ describe("temporary provider URL expiry", () => {
     });
 
     const providerExpiry = new Date(now.getTime() + 50 * 60 * 1000);
-    expect(googleThumbnail?.expiresAt).toEqual(providerExpiry);
+    expect(googleThumbnail?.expiresAt).toEqual(shortCredentials.accessTokenExpiresAt);
     expect(onedriveThumbnail?.expiresAt).toEqual(providerExpiry);
     expect(onedriveMedia.expiresAt).toEqual(providerExpiry);
   });

@@ -14,6 +14,7 @@ import {
 import { createIndexingService, MemoryRepository } from "@cloudframe/server";
 import { sourceIndexStateKind, type AssignedRoot, type Source } from "@cloudframe/shared";
 import {
+  createGoogleDriveAdapter,
   ProviderError,
   type ProviderAdapter,
   type ProviderNode
@@ -204,7 +205,7 @@ describe("bounded resumable indexing", () => {
         reconciliationCursor: "node-4"
       }
     }],
-    ["delta", { status: "error" as const, deltaCursor: "delta-1", crawlCheckpoint: null }]
+    ["initial", { status: "error" as const, deltaCursor: "delta-1", crawlCheckpoint: null }]
   ])("manual Sync now selects %s from persisted source state", async (expectedMode, patch) => {
     const repository = await seededRepository();
     const current = (await repository.getSource("s1"))!;
@@ -241,7 +242,7 @@ describe("bounded resumable indexing", () => {
         reconciliationCursor: "node-4"
       }
     }],
-    ["delta", { status: "error" as const, deltaCursor: "delta-1", crawlCheckpoint: null }]
+    ["initial", { status: "error" as const, deltaCursor: "delta-1", crawlCheckpoint: null }]
   ])("due-source launch selects %s from persisted source state", async (expectedMode, patch) => {
     const repository = await seededRepository();
     const current = (await repository.getSource("s1"))!;
@@ -690,6 +691,48 @@ describe("bounded resumable indexing", () => {
     await expect(orchestrator.runNext("s1", "delta", "owner")).resolves.toEqual({ complete: true });
     expect(getChanges).not.toHaveBeenCalled();
     expect(getCredentials).not.toHaveBeenCalled();
+  });
+
+  it("falls back from a queued delta run to a fresh initial scan with a live-only adapter", async () => {
+    const repository = await seededRepository();
+    const current = (await repository.getSource("s1"))!;
+    await repository.putSource({ ...current, deltaCursor: "delta-1" });
+    const fetch = vi.fn<typeof globalThis.fetch>(async input => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/files")) {
+        return new Response(JSON.stringify({ files: [] }), {
+          headers: { "content-type": "application/json" }
+        });
+      }
+      return new Response(null, { status: 500 });
+    });
+    const adapter = createGoogleDriveAdapter({
+      clientId: "client",
+      clientSecret: "secret",
+      fetch,
+      now: () => now
+    });
+    const orchestrator = createIndexOrchestrator({
+      repository,
+      providers: { get: () => adapter },
+      getCredentials: async () => ({
+        accessToken: "access",
+        refreshToken: null,
+        accessTokenExpiresAt: later()
+      }),
+      now: () => now,
+      createGeneration: () => "generation-fallback"
+    });
+    await repository.acquireSyncLease({ sourceId: "s1", owner: "owner", now, expiresAt: later() });
+
+    await expect(orchestrator.runNext("s1", "delta", "owner")).resolves.toEqual({ complete: false });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(await repository.getSource("s1")).toMatchObject({
+      crawlCheckpoint: {
+        mode: "reconcile",
+        generation: "generation-fallback"
+      }
+    });
   });
 
   it("drops delta nodes outside every enabled root", async () => {

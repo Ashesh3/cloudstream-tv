@@ -95,8 +95,7 @@ export function chooseSyncMode(
 ): SyncMode {
   if (enabledRootCount === 0) return "initial";
   if (source.crawlCheckpoint?.mode === "reconcile") return "reconcile";
-  if (!source.deltaCursor || source.crawlCheckpoint?.mode === "initial") return "initial";
-  return "delta";
+  return "initial";
 }
 
 function verifyCronSecret(value: string | null, secret: string): void {

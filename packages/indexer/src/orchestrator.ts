@@ -1,4 +1,4 @@
-import { ProviderError, type ProviderRegistry } from "@cloudframe/providers";
+import { ProviderError, type ProviderAdapter, type ProviderRegistry } from "@cloudframe/providers";
 import type { IndexCheckpoint, Source } from "@cloudframe/shared";
 import {
   filterDeltaPageToEnabledRoots,
@@ -70,7 +70,9 @@ export function createIndexOrchestrator(
       const source = await dependencies.repository.getSource(sourceId);
       if (!source) throw new Error("Source not found");
       try {
-        const mode = source.crawlCheckpoint?.mode ?? requestedMode;
+        let mode = source.crawlCheckpoint?.mode ?? requestedMode;
+        const adapter = dependencies.providers.get(source.provider);
+        if (mode === "delta" && !hasLegacyChanges(adapter)) mode = "initial";
         const enabledRoots = (await dependencies.repository.listRootsForSource(sourceId))
           .filter(root => root.enabled);
         const roots = enabledRoots
@@ -125,15 +127,15 @@ export function createIndexOrchestrator(
 
         const credentials = await dependencies.getCredentials(sourceId, source.householdId);
         if (mode === "delta") {
+          if (!hasLegacyChanges(adapter)) {
+            throw new ProviderError(
+              "PROVIDER_BAD_RESPONSE",
+              "Provider does not support legacy change tracking.",
+              { retryable: false }
+            );
+          }
           const cursor = source.crawlCheckpoint?.providerPageCursor ?? source.deltaCursor;
-          const legacyAdapter = dependencies.providers.get(source.provider) as unknown as {
-            getChanges(input: {
-              credentials: typeof credentials;
-              cursor: string | null;
-              pageSize: number;
-            }): Promise<LegacyChangesPage>;
-          };
-          const page = await legacyAdapter.getChanges({
+          const page = await adapter.getChanges({
             credentials,
             cursor,
             pageSize
@@ -182,7 +184,7 @@ export function createIndexOrchestrator(
           );
           return { complete: false };
         }
-        const providerPage = await dependencies.providers.get(source.provider).listFolder({
+        const providerPage = await adapter.listFolder({
           credentials,
           folderId: currentFolder,
           cursor: checkpoint.providerPageCursor,
@@ -243,6 +245,20 @@ export function createIndexOrchestrator(
       }
     }
   };
+}
+
+function hasLegacyChanges(adapter: ProviderAdapter): adapter is ProviderAdapter & {
+  getChanges(input: {
+    credentials: {
+      accessToken: string;
+      refreshToken: string | null;
+      accessTokenExpiresAt: Date;
+    };
+    cursor: string | null;
+    pageSize: number;
+  }): Promise<LegacyChangesPage>;
+} {
+  return "getChanges" in adapter && typeof adapter.getChanges === "function";
 }
 
 async function transitionToReconcile(
