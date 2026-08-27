@@ -2,9 +2,28 @@ import { describe, expect, it } from "vitest";
 import {
   CONTROL_PLANE_LIMITS,
   type AdminSnapshotResponse,
-  type ControlPlaneDocumentV2,
-  type TvBrowseItemDto
+  type TvBootstrapResponse,
+  type TvBrowseItemDto,
+  type TvRootDto
 } from "@cloudframe/shared";
+
+// @ts-expect-error Admin snapshots must not expose index health.
+void (null as unknown as AdminSnapshotResponse["indexHealth"]);
+// @ts-expect-error Admin snapshots must not expose synchronization progress.
+void (null as unknown as AdminSnapshotResponse["indexProgress"]);
+// @ts-expect-error Admin snapshots must not expose sync timestamps.
+void (null as unknown as AdminSnapshotResponse["lastSyncCompletedAt"]);
+
+// @ts-expect-error TV browse DTOs must not expose provider node ids.
+void (null as unknown as TvBrowseItemDto["providerNodeId"]);
+// @ts-expect-error TV browse DTOs must not expose provider credentials.
+void (null as unknown as TvBrowseItemDto["encryptedRefreshToken"]);
+// @ts-expect-error TV browse DTOs must not expose access tokens.
+void (null as unknown as TvBrowseItemDto["accessToken"]);
+// @ts-expect-error TV root DTOs must not expose provider root ids.
+void (null as unknown as TvRootDto["providerRootId"]);
+// @ts-expect-error TV bootstrap DTOs must not expose refresh tokens.
+void (null as unknown as TvBootstrapResponse["refreshToken"]);
 
 describe("v2 control-plane contracts", () => {
   it("sets the approved single-household ceilings", () => {
@@ -18,7 +37,7 @@ describe("v2 control-plane contracts", () => {
     });
   });
 
-  it("keeps provider ids and credentials out of TV DTOs", () => {
+  it("keeps provider ids and credentials out of TV DTO runtime values", () => {
     const item: TvBrowseItemDto = {
       id: "item_public_id",
       handle: "sealed-item",
@@ -38,10 +57,4 @@ describe("v2 control-plane contracts", () => {
     expect(JSON.stringify(item)).not.toMatch(/providerNodeId|accessToken|refreshToken/);
   });
 
-  it("does not expose indexing health in the admin snapshot", () => {
-    const keys: Array<keyof AdminSnapshotResponse> = [
-      "revision", "household", "pendingRequests", "devices", "sources", "roots", "recoveryCopy"
-    ];
-    expect(keys).not.toContain("indexHealth" as keyof AdminSnapshotResponse);
-  });
 });
