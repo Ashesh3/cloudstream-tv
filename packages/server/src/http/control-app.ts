@@ -77,8 +77,6 @@ export interface ControlApiLoggerEvent {
   status: number;
   durationMs: number;
   errorCode?: string;
-  sourceId?: string;
-  deviceId?: string;
   errorName?: string;
   causeName?: string;
   causeCode?: string;
@@ -143,13 +141,20 @@ export function createControlApiApp(input: ControlApiDependencies) {
     const requestId =
       safeRequestId(request.headers.get("x-request-id")) ?? crypto.randomUUID();
     const startedAt = Date.now();
+    const routeTemplate = classifyRoute(request);
     try {
       const response = await dependencies.requestContext.runRequest(() =>
         routeRequest(request, dependencies)
       );
       secureResponse(response, requestId);
       dependencies.logger.info(
-        requestEvent(request, requestId, response.status, Date.now() - startedAt)
+        requestEvent(
+          request,
+          routeTemplate,
+          requestId,
+          response.status,
+          Date.now() - startedAt
+        )
       );
       return response;
     } catch (error) {
@@ -163,6 +168,7 @@ export function createControlApiApp(input: ControlApiDependencies) {
       dependencies.logger.error({
         ...requestEvent(
           request,
+          routeTemplate,
           requestId,
           safe.status,
           Date.now() - startedAt,
@@ -181,35 +187,42 @@ async function routeRequest(
   dependencies: ActiveDependencies
 ): Promise<Response> {
   const url = new URL(request.url);
-  const path = url.pathname.replace(/\/+$/, "") || "/";
+  const path = url.pathname;
   const now = dependencies.now();
 
   if (path === "/api/bootstrap") {
     requireMethod(request, "GET");
+    assertQueryKeys(url, []);
     return bootstrap(request, dependencies, now);
   }
   if (path === "/api/admin/login") {
     requireMethod(request, "POST");
+    assertQueryKeys(url, []);
     return adminLogin(request, dependencies, now);
   }
   if (path === "/api/admin/logout") {
     requireMethod(request, "POST");
+    assertQueryKeys(url, []);
     return adminLogout(request, dependencies, now);
   }
   if (path === "/api/admin/snapshot") {
     requireMethod(request, "GET");
+    assertQueryKeys(url, []);
     return adminSnapshot(request, dependencies, now);
   }
   if (path === "/api/admin/settings") {
     requireMethod(request, "PATCH");
+    assertQueryKeys(url, []);
     return adminSettings(request, dependencies, now);
   }
   if (path === "/api/admin/passphrase") {
     requireMethod(request, "POST");
+    assertQueryKeys(url, []);
     return adminPassphrase(request, dependencies, now);
   }
   if (path === "/api/admin/requests") {
     requireMethod(request, "GET");
+    assertQueryKeys(url, []);
     return adminRequests(request, dependencies, now);
   }
   const requestAction = /^\/api\/admin\/requests\/([^/]+)\/(approve|deny)$/.exec(
@@ -217,6 +230,7 @@ async function routeRequest(
   );
   if (requestAction) {
     requireMethod(request, "POST");
+    assertQueryKeys(url, []);
     const requestId = decodePathId(requestAction[1]!);
     return resolveDeviceRequest(
       request,
@@ -228,11 +242,13 @@ async function routeRequest(
   }
   if (path === "/api/admin/devices") {
     requireMethod(request, "GET");
+    assertQueryKeys(url, []);
     return adminDevices(request, dependencies, now);
   }
   const deviceMatch = /^\/api\/admin\/devices\/([^/]+)$/.exec(path);
   if (deviceMatch) {
     requireOneMethod(request, ["GET", "PATCH", "DELETE"]);
+    assertQueryKeys(url, []);
     const deviceId = decodePathId(deviceMatch[1]!);
     return adminDevice(
       request,
@@ -243,12 +259,14 @@ async function routeRequest(
   }
   if (path === "/api/admin/sources") {
     requireMethod(request, "GET");
+    assertQueryKeys(url, []);
     return adminSources(request, dependencies, now);
   }
   const authorizeMatch =
     /^\/api\/admin\/sources\/(google|onedrive)\/authorize$/.exec(path);
   if (authorizeMatch) {
     requireMethod(request, "POST");
+    assertQueryKeys(url, []);
     return oauthAuthorize(
       request,
       dependencies,
@@ -271,6 +289,7 @@ async function routeRequest(
     /^\/api\/admin\/sources\/([^/]+)\/impact$/.exec(path);
   if (sourceImpactMatch) {
     requireMethod(request, "GET");
+    assertQueryKeys(url, []);
     const sourceId = decodePathId(sourceImpactMatch[1]!);
     return sourceImpact(
       request,
@@ -296,6 +315,7 @@ async function routeRequest(
   );
   if (sourceRootsMatch) {
     requireMethod(request, "POST");
+    assertQueryKeys(url, []);
     const sourceId = decodePathId(sourceRootsMatch[1]!);
     return createRoot(
       request,
@@ -307,6 +327,7 @@ async function routeRequest(
   const sourceMatch = /^\/api\/admin\/sources\/([^/]+)$/.exec(path);
   if (sourceMatch) {
     requireMethod(request, "DELETE");
+    assertQueryKeys(url, []);
     const sourceId = decodePathId(sourceMatch[1]!);
     return removeSource(
       request,
@@ -318,6 +339,7 @@ async function routeRequest(
   const rootImpactMatch = /^\/api\/admin\/roots\/([^/]+)\/impact$/.exec(path);
   if (rootImpactMatch) {
     requireMethod(request, "GET");
+    assertQueryKeys(url, []);
     const rootId = decodePathId(rootImpactMatch[1]!);
     return rootImpact(
       request,
@@ -329,6 +351,7 @@ async function routeRequest(
   const rootMatch = /^\/api\/admin\/roots\/([^/]+)$/.exec(path);
   if (rootMatch) {
     requireMethod(request, "DELETE");
+    assertQueryKeys(url, []);
     const rootId = decodePathId(rootMatch[1]!);
     return removeRoot(
       request,
@@ -339,14 +362,17 @@ async function routeRequest(
   }
   if (path === "/api/device-requests") {
     requireMethod(request, "POST");
+    assertQueryKeys(url, []);
     return createDeviceRequest(request, dependencies, now);
   }
   if (path === "/api/device-requests/status") {
     requireMethod(request, "GET");
+    assertQueryKeys(url, []);
     return deviceRequestStatus(request, dependencies, now);
   }
   if (path === "/api/tv/home") {
     requireMethod(request, "GET");
+    assertQueryKeys(url, []);
     return tvHome(request, dependencies, now);
   }
   const folderMatch = /^\/api\/tv\/folders\/([^/]+)$/.exec(path);
@@ -362,10 +388,12 @@ async function routeRequest(
   }
   if (path === "/api/tv/thumbnail-urls") {
     requireMethod(request, "POST");
+    assertQueryKeys(url, []);
     return thumbnailUrls(request, dependencies, now);
   }
   if (path === "/api/tv/media-url") {
     requireMethod(request, "POST");
+    assertQueryKeys(url, []);
     return mediaUrl(request, dependencies, now);
   }
 
@@ -635,7 +663,12 @@ async function adminDevice(
           dependencies.config.householdId,
           deviceId
         );
-  return ok(result, { headers: csrfHeaders(admin) });
+  return ok(
+    "device" in result
+      ? { device: legacyDeviceToControl(result.device) }
+      : result,
+    { headers: csrfHeaders(admin) }
+  );
 }
 
 async function adminSources(
@@ -688,66 +721,106 @@ async function oauthCallback(
   provider: ProviderKind
 ): Promise<Response> {
   const clearOAuthCookie = clearOAuthStateCookie();
-  let stateCookie: string | null;
   try {
-    stateCookie = readUniqueCookie(request, "oauth_state");
-  } catch {
-    return oauthRedirect("invalid", clearOAuthCookie);
-  }
-  if (!stateCookie) return oauthRedirect("invalid", clearOAuthCookie);
-
-  const url = new URL(request.url);
-  const state = uniqueQuery(url, "state", 1024);
-  const code = safeOptionalUniqueQuery(url, "code", 4096);
-  const providerError = safeOptionalUniqueQuery(url, "error", 128);
-  if (
-    !state ||
-    code === undefined ||
-    providerError === undefined ||
-    (code === null && providerError === null) ||
-    (code !== null && providerError !== null)
-  ) {
-    return oauthRedirect("invalid", clearOAuthCookie);
-  }
-
-  let protectedResult: Awaited<ReturnType<typeof protectedAdmin>>;
-  try {
-    protectedResult = await protectedAdmin(request, dependencies, now);
-  } catch (error) {
-    if (error instanceof ControlAuthError) {
-      const headers = new Headers();
-      if (error.clearCookie) headers.append("set-cookie", error.clearCookie);
-      headers.append("set-cookie", clearOAuthCookie);
-      return oauthRedirect("invalid", headers);
+    let stateCookie: string | null;
+    try {
+      stateCookie = readUniqueCookie(request, "oauth_state");
+    } catch {
+      return oauthRedirect("invalid", clearOAuthCookie);
     }
-    throw error;
-  }
-  try {
+    if (!stateCookie) return oauthRedirect("invalid", clearOAuthCookie);
+
+    const callback = parseOAuthCallbackQuery(new URL(request.url), provider);
+    const protectedResult = await protectedAdmin(request, dependencies, now);
     await dependencies.oauth.completeAuthorization({
       admin: protectedResult.admin,
       context: protectedResult.context,
       provider,
-      state,
+      state: callback.state,
       stateCookie,
-      ...(code === null ? {} : { code }),
-      ...(providerError === null ? {} : { providerError })
+      ...(callback.code === null ? {} : { code: callback.code }),
+      ...(callback.providerError === null
+        ? {}
+        : { providerError: callback.providerError })
     });
     return oauthRedirect("connected", clearOAuthCookie);
   } catch (error) {
-    if (error instanceof ControlOAuthServiceError || error instanceof ProviderError) {
-      return oauthRedirect(
-        error instanceof ControlOAuthServiceError &&
-          error.code === "OAUTH_CANCELLED"
-          ? "cancelled"
-          : error instanceof ControlOAuthServiceError &&
-              error.code === "OAUTH_STATE_INVALID"
-            ? "invalid"
-            : "failed",
-        clearOAuthCookie
-      );
+    const headers = new Headers();
+    headers.append("set-cookie", clearOAuthCookie);
+    const normalized = normalizeHttpError(error);
+    for (const cookie of new Headers(normalized.responseHeaders).getSetCookie()) {
+      headers.append("set-cookie", cookie);
     }
-    throw error;
+    return oauthRedirect(oauthFailureStatus(error), headers);
   }
+}
+
+function parseOAuthCallbackQuery(
+  url: URL,
+  provider: ProviderKind
+): { state: string; code: string | null; providerError: string | null } {
+  const limits: Record<string, number> =
+    provider === "google"
+      ? {
+          state: 1024,
+          code: 4096,
+          error: 128,
+          scope: 4096,
+          authuser: 128,
+          prompt: 128,
+          error_description: 2048,
+          error_uri: 2048
+        }
+      : {
+          state: 1024,
+          code: 4096,
+          error: 128,
+          session_state: 1024,
+          error_description: 2048,
+          error_codes: 1024,
+          error_uri: 2048,
+          trace_id: 256,
+          correlation_id: 256,
+          timestamp: 128
+        };
+  const allowed = new Set(Object.keys(limits));
+  if ([...url.searchParams.keys()].some((key) => !allowed.has(key))) {
+    throw new ControlOAuthServiceError("OAUTH_STATE_INVALID");
+  }
+  for (const [key, maxLength] of Object.entries(limits)) {
+    const values = url.searchParams.getAll(key);
+    if (
+      values.length > 1 ||
+      (values.length === 1 &&
+        (values[0]!.length < 1 || values[0]!.length > maxLength))
+    ) {
+      throw new ControlOAuthServiceError("OAUTH_STATE_INVALID");
+    }
+  }
+  const state = url.searchParams.get("state");
+  const code = url.searchParams.get("code");
+  const providerError = url.searchParams.get("error");
+  if (!state || (code === null) === (providerError === null)) {
+    throw new ControlOAuthServiceError("OAUTH_STATE_INVALID");
+  }
+  return { state, code, providerError };
+}
+
+function oauthFailureStatus(
+  error: unknown
+): "failed" | "invalid" | "cancelled" {
+  if (error instanceof ControlOAuthServiceError) {
+    if (error.code === "OAUTH_CANCELLED") return "cancelled";
+    if (error.code === "OAUTH_STATE_INVALID") return "invalid";
+  }
+  if (
+    error instanceof ControlAuthError ||
+    (error instanceof HttpError &&
+      (error.code === "ADMIN_UNAUTHORIZED" || error.code === "INVALID_QUERY"))
+  ) {
+    return "invalid";
+  }
+  return "failed";
 }
 
 async function sourceImpact(
@@ -772,11 +845,12 @@ async function removeSource(
   assertConfirmation(body);
   const { admin } = await protectedAdmin(request, dependencies, now);
   await authorizeAdminMutation(request, dependencies, admin, now);
-  return ok(
-    await dependencies.admin.removeSource(
+  const removed = await dependencies.admin.removeSource(
       dependencies.config.householdId,
       sourceId
-    ),
+    );
+  return ok(
+    safeImpactMutation(removed),
     { headers: csrfHeaders(admin) }
   );
 }
@@ -859,8 +933,12 @@ async function removeRoot(
   assertConfirmation(body);
   const { admin } = await protectedAdmin(request, dependencies, now);
   await authorizeAdminMutation(request, dependencies, admin, now);
+  const removed = await dependencies.admin.removeRoot(
+    dependencies.config.householdId,
+    rootId
+  );
   return ok(
-    await dependencies.admin.removeRoot(dependencies.config.householdId, rootId),
+    safeImpactMutation(removed),
     { headers: csrfHeaders(admin) }
   );
 }
@@ -960,7 +1038,12 @@ async function thumbnailUrls(
 ): Promise<Response> {
   const body = await readBoundedJsonObject(request);
   assertOnlyKeys(body, ["handles", "maxDimension"], "INVALID_THUMBNAIL_REQUEST");
-  if (!Array.isArray(body.handles) || typeof body.maxDimension !== "number") {
+  if (
+    !Array.isArray(body.handles) ||
+    !Number.isInteger(body.maxDimension) ||
+    (body.maxDimension as number) < 64 ||
+    (body.maxDimension as number) > 4096
+  ) {
     throw new HttpError(
       400,
       "INVALID_THUMBNAIL_REQUEST",
@@ -984,7 +1067,7 @@ async function thumbnailUrls(
   const result = await dependencies.directMedia.thumbnails(
     device,
     handles,
-    body.maxDimension
+    body.maxDimension as number
   );
   return ok({ items: result.items }, { headers: result.responseHeaders });
 }
@@ -1182,6 +1265,43 @@ function controlDeviceDtoFromDocument(
     createdAt: device.createdAt,
     approvedAt: device.approvedAt,
     revokedAt: device.revokedAt
+  };
+}
+
+function legacyDeviceToControl(
+  device: ControlDeviceDto & { lastSeenAt?: string }
+): ControlDeviceDto {
+  return {
+    id: device.id,
+    name: device.name,
+    enabled: device.enabled,
+    assignedRootIds: [...device.assignedRootIds],
+    mediaOrder: device.mediaOrder,
+    slideshowSeconds: device.slideshowSeconds,
+    createdAt: device.createdAt,
+    approvedAt: device.approvedAt,
+    revokedAt: device.revokedAt
+  };
+}
+
+function safeImpactMutation(value: {
+  removed: true;
+  roots: Array<ControlRootDto & {
+    providerNodeId?: string;
+    ancestryProviderIds?: string[];
+  }>;
+  devices: Array<ControlDeviceDto & { lastSeenAt?: string }>;
+}) {
+  return {
+    removed: true as const,
+    roots: value.roots.map((root) => ({
+      id: root.id,
+      sourceId: root.sourceId,
+      displayName: root.displayName,
+      enabled: root.enabled,
+      createdAt: root.createdAt
+    })),
+    devices: value.devices.map(legacyDeviceToControl)
   };
 }
 
@@ -1386,14 +1506,49 @@ async function readBoundedJsonObject(
   ) {
     throw new HttpError(413, "BODY_TOO_LARGE", "Request body is too large.");
   }
-  let text: string;
-  try {
-    text = await request.text();
-  } catch {
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  const reader = request.body?.getReader();
+  if (!reader) {
     throw new HttpError(400, "INVALID_JSON", "The request body is not valid JSON.");
   }
-  if (Buffer.byteLength(text, "utf8") > MAX_JSON_BODY_BYTES) {
-    throw new HttpError(413, "BODY_TOO_LARGE", "Request body is too large.");
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > MAX_JSON_BODY_BYTES) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The size boundary is already enforced even when cancellation fails.
+        }
+        throw new HttpError(413, "BODY_TOO_LARGE", "Request body is too large.");
+      }
+      chunks.push(value);
+    }
+  } catch {
+    try {
+      await reader.cancel();
+    } catch {
+      // A stream failure remains a safe invalid-JSON response.
+    }
+    if (totalBytes > MAX_JSON_BODY_BYTES) {
+      throw new HttpError(413, "BODY_TOO_LARGE", "Request body is too large.");
+    }
+    throw new HttpError(400, "INVALID_JSON", "The request body is not valid JSON.");
+  }
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new HttpError(400, "INVALID_JSON", "The request body is not valid JSON.");
   }
   try {
     const value: unknown = JSON.parse(text);
@@ -1451,14 +1606,6 @@ function pageSizeQuery(url: URL, maximum: number): number {
   return value;
 }
 
-function uniqueQuery(url: URL, name: string, maxLength: number): string | null {
-  const values = url.searchParams.getAll(name);
-  if (values.length !== 1 || values[0]!.length < 1 || values[0]!.length > maxLength) {
-    return null;
-  }
-  return values[0]!;
-}
-
 function optionalUniqueQuery(
   url: URL,
   name: string,
@@ -1470,18 +1617,6 @@ function optionalUniqueQuery(
     throw new HttpError(400, "INVALID_QUERY", "Request query is invalid.");
   }
   return values[0]!;
-}
-
-function safeOptionalUniqueQuery(
-  url: URL,
-  name: string,
-  maxLength: number
-): string | null | undefined {
-  try {
-    return optionalUniqueQuery(url, name, maxLength);
-  } catch {
-    return undefined;
-  }
 }
 
 function assertQueryKeys(url: URL, expected: readonly string[]): void {
@@ -1591,12 +1726,12 @@ function safeRequestId(value: string | null): string | null {
 
 function requestEvent(
   request: Request,
+  path: string,
   requestId: string,
   status: number,
   durationMs: number,
   errorCode?: string
 ): ControlApiLoggerEvent {
-  const path = new URL(request.url).pathname;
   return {
     level: status >= 500 ? "error" : "info",
     event: "api_request",
@@ -1605,30 +1740,64 @@ function requestEvent(
     path,
     status,
     durationMs,
-    ...(errorCode ? { errorCode } : {}),
-    ...safeRouteIdentifiers(path)
+    ...(errorCode ? { errorCode } : {})
   };
 }
 
-function safeRouteIdentifiers(
-  path: string
-): Pick<ControlApiLoggerEvent, "sourceId" | "deviceId"> {
-  const source = /^\/api\/admin\/sources\/([^/]+)/.exec(path)?.[1];
-  const device = /^\/api\/admin\/devices\/([^/]+)/.exec(path)?.[1];
-  return {
-    ...(source ? { sourceId: safeRouteId(source) } : {}),
-    ...(device ? { deviceId: safeRouteId(device) } : {})
-  };
-}
-
-function safeRouteId(value: string): string {
-  try {
-    return decodeURIComponent(value)
-      .replace(/[^A-Za-z0-9._:-]/g, "_")
-      .slice(0, 128);
-  } catch {
-    return "invalid";
+function classifyRoute(request: Request): string {
+  const path = new URL(request.url).pathname;
+  if (
+    path === "/api/bootstrap" ||
+    path === "/api/admin/login" ||
+    path === "/api/admin/logout" ||
+    path === "/api/admin/snapshot" ||
+    path === "/api/admin/settings" ||
+    path === "/api/admin/passphrase" ||
+    path === "/api/admin/requests" ||
+    path === "/api/admin/devices" ||
+    path === "/api/admin/sources" ||
+    path === "/api/device-requests" ||
+    path === "/api/device-requests/status" ||
+    path === "/api/tv/home" ||
+    path === "/api/tv/thumbnail-urls" ||
+    path === "/api/tv/media-url"
+  ) {
+    return path;
   }
+  if (/^\/api\/admin\/requests\/[^/]+\/(approve|deny)$/.test(path)) {
+    return "/api/admin/requests/:id/:action";
+  }
+  if (/^\/api\/admin\/devices\/[^/]+$/.test(path)) {
+    return "/api/admin/devices/:id";
+  }
+  if (/^\/api\/admin\/sources\/(google|onedrive)\/authorize$/.test(path)) {
+    return "/api/admin/sources/:provider/authorize";
+  }
+  if (/^\/api\/admin\/sources\/(google|onedrive)\/callback$/.test(path)) {
+    return "/api/admin/sources/:provider/callback";
+  }
+  if (/^\/api\/admin\/sources\/[^/]+\/impact$/.test(path)) {
+    return "/api/admin/sources/:id/impact";
+  }
+  if (/^\/api\/admin\/sources\/[^/]+\/provider-folders$/.test(path)) {
+    return "/api/admin/sources/:id/provider-folders";
+  }
+  if (/^\/api\/admin\/sources\/[^/]+\/roots$/.test(path)) {
+    return "/api/admin/sources/:id/roots";
+  }
+  if (/^\/api\/admin\/sources\/[^/]+$/.test(path)) {
+    return "/api/admin/sources/:id";
+  }
+  if (/^\/api\/admin\/roots\/[^/]+\/impact$/.test(path)) {
+    return "/api/admin/roots/:id/impact";
+  }
+  if (/^\/api\/admin\/roots\/[^/]+$/.test(path)) {
+    return "/api/admin/roots/:id";
+  }
+  if (/^\/api\/tv\/folders\/[^/]+$/.test(path)) {
+    return "/api/tv/folders/:handle";
+  }
+  return "/api/:unmatched";
 }
 
 function safeErrorIdentity(

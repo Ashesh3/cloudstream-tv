@@ -1,6 +1,24 @@
 import { expect, it } from "vitest";
 
 import { createControlApiHarness } from "./helpers/api";
+import { jsonRequest } from "./helpers/api";
+
+it("writes exactly one Firestore recovery backup for one real control mutation", async () => {
+  const harness = await createControlApiHarness();
+  const response = await harness.app(
+    jsonRequest(
+      "/api/admin/settings",
+      "PATCH",
+      { allowNewDeviceRequests: false },
+      harness.adminMutationHeaders()
+    )
+  );
+  await harness.deferred.flush();
+
+  expect(response.status).toBe(200);
+  expect(harness.firestore.readCount).toBe(0);
+  expect(harness.firestore.writeCount).toBe(1);
+});
 
 it("performs zero Firestore reads across 10,000 browse and media requests", async () => {
   const harness = await createControlApiHarness();

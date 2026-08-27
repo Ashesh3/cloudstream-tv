@@ -16,23 +16,29 @@ import {
   createControlAuth,
   createControlEnrollmentService,
   createControlOAuthService,
+  createControlPlaneStore,
   createControlRequestContextScope,
+  createCredentialBroker,
   createDirectMediaService,
+  createFirestoreRecoveryMirror,
   createLiveBrowseService,
   createLiveProviderFolderService,
   createSealedSessionCodec,
+  encryptControlPlaneDocument,
+  encryptProviderToken,
   hashOpaqueToken,
   hashPassphrase,
-  type BrokeredProviderCredentials,
   type ControlApiLogger,
+  type ControlApiLoggerEvent,
   type ControlMutationReducer,
   type ControlPlaneStore,
+  MemoryControlDurableStore,
+  MemoryControlHotCache,
+  MemoryDeferredTasks,
   type ApiAppDependencies,
-  type RateLimitRuntimeCache,
   type RateLimitPolicy
 } from "@cloudframe/server";
 
-import { controlStoreHarness } from "../../packages/server/src/control-plane/memory";
 import {
   TEST_NOW,
   testAeadKeyring,
@@ -78,18 +84,26 @@ export interface ControlApiHarness {
     writeAttempts: number;
   };
   cache: { readCount: number };
-  mirror: { writeCount: number };
+  deferred: { flush(): Promise<void> };
   firestore: { readCount: number; writeCount: number };
   provider: {
     listFolderCalls: number;
     mediaUrlCalls: number;
     thumbnailUrlCalls: number;
   };
+  rateLimiter: { consumeCount: number };
+  events: ControlApiLoggerEvent[];
   adminHeaders(extra?: HeadersInit): HeadersInit;
   adminMutationHeaders(extra?: HeadersInit): HeadersInit;
   deviceHeaders(extra?: HeadersInit): HeadersInit;
   folderRequest(): Request;
   mediaRequest(): Request;
+  oauthCallbackRequest(provider: "google" | "onedrive"): Promise<{
+    path: string;
+    oauthCookie: string;
+  }>;
+  failNextControlLoad(): void;
+  failOAuthComplete(error: unknown): void;
 }
 
 export async function createTestApi(
@@ -171,23 +185,66 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
   document.pendingDeviceRequests["request-1"]!.requestSecretHash = hashOpaqueToken(
     "request-secret"
   );
-  const memory = controlStoreHarness(document);
+  const providerTokenKeyring = {
+    currentVersion: "provider-v1",
+    keys: { "provider-v1": Buffer.alloc(32, 9) }
+  };
+  document.sources["source-1"]!.encryptedRefreshToken = encryptProviderToken(
+    "refresh-token",
+    providerTokenKeyring
+  );
+  document.sources["source-1"]!.encryptedBootstrapAccessToken =
+    encryptProviderToken("access-token", providerTokenKeyring);
+  document.sources["source-1"]!.bootstrapAccessTokenExpiresAt = new Date(
+    now.getTime() + 60 * 60_000
+  ).toISOString();
+  const controlKeyring = testAeadKeyring();
+  const initial = {
+    envelope: encryptControlPlaneDocument(document, controlKeyring),
+    etag: "etag-1"
+  };
+  const durable = new MemoryControlDurableStore(
+    initial,
+    0,
+    controlKeyring.keys
+  );
+  const cache = new MemoryControlHotCache();
+  cache.replaceOutOfBand(initial);
+  const deferred = new MemoryDeferredTasks();
+  const firestore = new FirestoreSentinel(document.householdId);
+  const mirror = createFirestoreRecoveryMirror(
+    firestore.client,
+    document.householdId
+  );
+  const rawStore = createControlPlaneStore({
+    durable,
+    cache,
+    mirror,
+    deferred,
+    keyring: controlKeyring,
+    now: () => new Date(now)
+  });
   let loadCount = 0;
   let mutateCount = 0;
+  let failNextLoad = false;
   const store: ControlPlaneStore = {
     async load() {
       loadCount += 1;
-      return memory.store.load();
+      if (failNextLoad) {
+        failNextLoad = false;
+        throw new Error("injected control load failure");
+      }
+      return rawStore.load();
     },
     async mutate<T>(name: string, reducer: ControlMutationReducer<T>) {
       mutateCount += 1;
-      return memory.store.mutate(name, reducer);
+      return rawStore.mutate(name, reducer);
     }
   };
 
   let cacheReadCount = 0;
-  const originalCacheGet = memory.cache.get.bind(memory.cache);
-  memory.cache.get = async () => {
+  const originalCacheGet = cache.get.bind(cache);
+  cache.get = async () => {
     cacheReadCount += 1;
     return originalCacheGet();
   };
@@ -201,21 +258,22 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
     () => now
   );
   const activeContext = () => {
-    const active = memory.durable.currentDocument!;
+    const active = durable.currentDocument!;
     return { document: active, revision: active.revision };
   };
   const requestContext = createControlRequestContextScope();
-  const broker = {
-    async get(): Promise<BrokeredProviderCredentials> {
-      return provider.credentials;
-    },
-    async refresh(): Promise<BrokeredProviderCredentials> {
-      return provider.credentials;
-    }
-  };
+  const credentialCache = new MemoryRuntimeCache();
+  const broker = createCredentialBroker({
+    controlStore: store,
+    controlState: () => requestContext.current(),
+    providers,
+    providerTokenKeyring,
+    cache: credentialCache,
+    now: () => new Date(now)
+  });
   const admin = createControlAdminService({
     store,
-    cache: memory.cache,
+    cache,
     passphrasePepper: "test-passphrase-pepper",
     now: () => new Date(now),
     createId: () => "device-created"
@@ -242,14 +300,11 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
       hash: hashOpaqueToken("created-request-secret")
     })
   });
-  const oauth = createControlOAuthService({
+  const realOAuth = createControlOAuthService({
     store,
     codec: sessionCodec,
     providers,
-    keyring: {
-      currentVersion: "provider-v1",
-      keys: { "provider-v1": Buffer.alloc(32, 9) }
-    },
+    keyring: providerTokenKeyring,
     redirectUris: {
       google: `${origin}/api/admin/sources/google/callback`,
       onedrive: `${origin}/api/admin/sources/onedrive/callback`
@@ -259,6 +314,16 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
     createId: () => "source-created",
     randomBytes: (size) => Buffer.alloc(size, 8)
   });
+  let oauthCompleteFailure: unknown;
+  const oauth = {
+    beginAuthorization: realOAuth.beginAuthorization,
+    async completeAuthorization(
+      input: Parameters<typeof realOAuth.completeAuthorization>[0]
+    ) {
+      if (oauthCompleteFailure !== undefined) throw oauthCompleteFailure;
+      return realOAuth.completeAuthorization(input);
+    }
+  };
   const providerFolders = createLiveProviderFolderService({
     controlStore: store,
     controlState: () => requestContext.current(),
@@ -279,7 +344,18 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
     providers,
     now: () => new Date(now)
   });
-  const logger: ControlApiLogger = { info: () => undefined, error: () => undefined };
+  const events: ControlApiLoggerEvent[] = [];
+  const logger: ControlApiLogger = {
+    info: (event) => events.push(event),
+    error: (event) => events.push(event)
+  };
+  let rateLimitConsumeCount = 0;
+  const rateLimiter = {
+    async consume() {
+      rateLimitConsumeCount += 1;
+      return { allowed: true, remaining: 1, retryAfterSeconds: 1 };
+    }
+  };
   const app = createControlApiApp({
     controlStore: store,
     requestContext,
@@ -290,7 +366,7 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
     providerFolders,
     browse,
     directMedia,
-    rateLimiter: { consume: async () => ({ allowed: true, remaining: 1, retryAfterSeconds: 1 }) },
+    rateLimiter,
     config: { householdId: document.householdId, allowedOrigin: origin },
     now: () => new Date(now),
     requestSubject: () => "203.0.113.7",
@@ -388,13 +464,15 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
     },
     durable: {
       get readCount() {
-        return memory.durable.readCount;
+        return durable.readCount;
       },
       get conditionalReadCount() {
-        return memory.durable.ifNoneMatches.filter(value => value !== undefined).length;
+        return durable.ifNoneMatches.filter(
+          (value: string | undefined) => value !== undefined
+        ).length;
       },
       get writeAttempts() {
-        return memory.durable.writeAttempts;
+        return durable.writeAttempts;
       }
     },
     cache: {
@@ -402,9 +480,15 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
         return cacheReadCount;
       }
     },
-    mirror: memory.mirror,
-    firestore: { readCount: 0, writeCount: 0 },
+    deferred,
+    firestore,
     provider,
+    rateLimiter: {
+      get consumeCount() {
+        return rateLimitConsumeCount;
+      }
+    },
+    events,
     adminHeaders(extra = {}) {
       return mergeHeaders(
         { cookie: cookieHeader(["admin_session", adminCookie]) },
@@ -442,11 +526,44 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
         { handle: mediaHandle },
         { cookie: cookieHeader(["device_session", deviceCookie]) }
       );
+    },
+    async oauthCallbackRequest(providerKind) {
+      const response = await app(
+        jsonRequest(
+          `/api/admin/sources/${providerKind}/authorize`,
+          "POST",
+          {},
+          {
+            cookie: cookieHeader(["admin_session", adminCookie]),
+            origin,
+            "x-csrf-token": adminCsrf
+          }
+        )
+      );
+      const payload = (await response.json()) as {
+        ok: true;
+        data: { authorizationUrl: string };
+      };
+      const oauthCookie = cookieValue(response, "oauth_state")!;
+      const state = new URL(payload.data.authorizationUrl).searchParams.get(
+        "state"
+      )!;
+      events.length = 0;
+      return {
+        path: `/api/admin/sources/${providerKind}/callback?state=${encodeURIComponent(state)}&code=provider-code`,
+        oauthCookie
+      };
+    },
+    failNextControlLoad() {
+      failNextLoad = true;
+    },
+    failOAuthComplete(error) {
+      oauthCompleteFailure = error;
     }
   };
 }
 
-class MemoryRuntimeCache implements RateLimitRuntimeCache {
+class MemoryRuntimeCache {
   private readonly values = new Map<string, unknown>();
 
   async get(key: string): Promise<unknown | null> {
@@ -456,21 +573,28 @@ class MemoryRuntimeCache implements RateLimitRuntimeCache {
   async set(key: string, value: unknown): Promise<void> {
     this.values.set(key, structuredClone(value));
   }
+
+  async delete(key: string): Promise<void> {
+    this.values.delete(key);
+  }
 }
 
 class ControlProviderHarness {
   listFolderCalls = 0;
   mediaUrlCalls = 0;
   thumbnailUrlCalls = 0;
-  readonly credentials: BrokeredProviderCredentials;
+  readonly credentials: {
+    accessToken: string;
+    refreshToken: string | null;
+    accessTokenExpiresAt: Date;
+  };
   readonly adapter: ProviderAdapter;
 
   constructor(private readonly now: Date) {
     this.credentials = {
       accessToken: "access-token",
       refreshToken: null,
-      accessTokenExpiresAt: new Date(now.getTime() + 60 * 60_000),
-      credentialVersion: 1
+      accessTokenExpiresAt: new Date(now.getTime() + 60 * 60_000)
     };
     const root = providerNode("provider-root", "My Drive", null, "folder");
     const trips = providerNode("provider-trips", "Trips", "provider-root", "folder");
@@ -482,7 +606,7 @@ class ControlProviderHarness {
       completeAuthorization: async () => ({
         accountId: "account-created",
         accountLabel: "created@example.test",
-        credentials: this.credentials
+        credentials: { ...this.credentials, refreshToken: "new-refresh-token" }
       }),
       refreshCredentials: async () => this.credentials,
       getRoot: async () => root,
@@ -507,6 +631,53 @@ class ControlProviderHarness {
         };
       }
     };
+  }
+}
+
+class FirestoreSentinel {
+  readCount = 0;
+  writeCount = 0;
+  readonly client: Parameters<typeof createFirestoreRecoveryMirror>[0];
+
+  constructor(private readonly householdId: string) {
+    const read = async () => {
+      this.readCount += 1;
+      throw new Error("Firestore reads are forbidden");
+    };
+    const document = {
+      set: async (value: ControlPlaneDocumentV2) => {
+        if (value.householdId !== this.householdId) {
+          throw new Error("Unexpected Firestore backup household");
+        }
+        this.writeCount += 1;
+      },
+      get: read,
+      create: read,
+      update: read,
+      delete: read,
+      listCollections: read
+    };
+    const collection = {
+      doc: (id: string) => {
+        if (id !== this.householdId) {
+          throw new Error("Unexpected Firestore backup document");
+        }
+        return document;
+      },
+      get: read,
+      where: read,
+      orderBy: read,
+      limit: read,
+      listDocuments: read
+    };
+    this.client = {
+      collection: (name: string) => {
+        if (name !== "controlPlaneBackups") {
+          throw new Error("Unexpected Firestore backup collection");
+        }
+        return collection;
+      }
+    } as unknown as Parameters<typeof createFirestoreRecoveryMirror>[0];
   }
 }
 
