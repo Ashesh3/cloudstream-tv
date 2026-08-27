@@ -460,6 +460,67 @@ describe("unified TV viewer", () => {
     expect(renewed.currentTime).toBe(37);
   });
 
+  it("renews an active video when its URL crosses expiry before the expiry effect installs", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const api = viewerApi();
+    const acceptedAt = Date.now();
+    let videoCalls = 0;
+    let resolveInitialVideo!: (value: DirectMediaUrlResponse) => void;
+    vi.mocked(api.mediaUrl).mockImplementation(handle => {
+      const result = mediaResponse(handle);
+      if (result.kind !== "video") return Promise.resolve({ ...result, expiresAt: new Date(acceptedAt + 60_000).toISOString() });
+      videoCalls += 1;
+      if (videoCalls === 1) return new Promise<DirectMediaUrlResponse>(resolve => { resolveInitialVideo = resolve; });
+      return Promise.resolve({
+        ...result,
+        url: `https://provider.example/due-video-${videoCalls}`,
+        expiresAt: new Date(acceptedAt + 60_000).toISOString()
+      });
+    });
+    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const crossedNow = vi.spyOn(Date, "now").mockReturnValue(acceptedAt + 2);
+    await act(async () => {
+      resolveInitialVideo({ ...mediaResponse("sealed-item_video_1"), url: "https://provider.example/due-video-1", expiresAt: new Date(acceptedAt + 1).toISOString() });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    crossedNow.mockRestore();
+    const first = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(first, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(first, "currentTime", { configurable: true, value: 37 });
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); await Promise.resolve(); });
+    const renewed = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(renewed, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(renewed, "currentTime", { configurable: true, writable: true, value: 0 });
+    fireEvent.loadedMetadata(renewed);
+
+    expect(renewed.src).toBe("https://provider.example/due-video-2");
+    expect(renewed.currentTime).toBe(37);
+  });
+
+  it("cancels an already-due renewal when the viewer closes before the zero-delay tick", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => ({
+      ...mediaResponse(handle),
+      expiresAt: new Date(Date.now() + (handle === "sealed-item_image_1" ? -1 : 60_000)).toISOString()
+    }));
+    const closed = vi.fn();
+    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    const callsBeforeClose = vi.mocked(api.mediaUrl).mock.calls.length;
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); await Promise.resolve(); });
+
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(api.mediaUrl).toHaveBeenCalledTimes(callsBeforeClose);
+  });
+
   it("samples a prefetched video at fire time after it becomes active", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));

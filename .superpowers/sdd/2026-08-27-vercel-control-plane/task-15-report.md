@@ -420,3 +420,72 @@ node F:\Projects\tv-video-ui\.agents\skills\impeccable\scripts\detect.mjs --json
 ### Fix-round concern
 
 None blocking. Extremely long provider filenames above 1024 code units are rejected at the TV response boundary as ruled.
+
+## Fix Round 3
+
+Closed the already-due timer installation race in both live media URL renewal and visible thumbnail renewal.
+
+### Timer installation ordering
+
+`scheduleAt` and `scheduleBoundedAt` no longer invoke their callbacks synchronously when the target timestamp is already due. They install a zero-delay `window.setTimeout`, return its cancellation closure, and re-check cancellation before callback execution. This lets the caller publish the timer identity before the existing identity guard runs. Bounded long-delay chunking and all request/handle/expiry identity checks remain unchanged.
+
+Viewer coverage crosses expiry after the first video response is accepted but before the expiry effect installs its timer. The asynchronous due callback renews the active video and resumes from its exact sampled `37` second position. Closing the viewer before that zero-delay tick cancels renewal.
+
+Thumbnail coverage crosses expiry after `futureExpiryEpoch` accepts the response but before the thumbnail timer effect installs. The asynchronous due callback deletes the raced entry and re-requests the visible thumbnail on the next tick. Unmounting before that tick cancels the re-request.
+
+### RED evidence
+
+```text
+npx vitest run --config vitest.core.config.ts apps/tv/src/components/viewer.test.tsx apps/tv/src/app.test.tsx
+Test Files 2 failed (2)
+Tests 2 failed | 96 passed (98)
+```
+
+Before the fix, the viewer retained `due-video-1` instead of renewing to `due-video-2`, and the thumbnail never settled on the fresh URL. In each case the synchronous callback ran before the caller stored the timer identity, so the identity guard returned permanently.
+
+### GREEN verification
+
+```text
+npx vitest run --config vitest.core.config.ts apps/tv/src/app.test.tsx apps/tv/src/components/viewer.test.tsx apps/tv/src/components/source-drawer.test.tsx apps/tv/src/components/virtual-grid.test.tsx tests/tv-focus.test.ts tests/viewer-state.test.ts
+Test Files 6 passed (6)
+Tests 147 passed (147)
+
+npm run typecheck
+Exit code 0
+
+npx eslint apps/tv/src packages/tv-core/src tests/viewer-state.test.ts
+Exit code 0
+
+npm run build -w @cloudframe/tv
+39 modules transformed
+Built successfully
+
+node scripts/check-tv-bundle.mjs
+TV bundle compatibility and budget check passed (46403 B JS, 5711 B CSS compressed).
+
+npm run check:chromium68
+Pinned Chromium 555668 executed required TV APIs successfully.
+
+git diff --check
+Exit code 0
+```
+
+Required single detector pass:
+
+```text
+node F:\Projects\tv-video-ui\.agents\skills\impeccable\scripts\detect.mjs --json apps/tv/src/app.tsx apps/tv/src/components/viewer.tsx
+[]
+```
+
+### Fix-round self-review
+
+- Already-due callbacks are always asynchronous, so timer identity publication precedes callback identity verification.
+- Returned cancellation closures clear the zero-delay timer and the callback also checks the cancellation flag.
+- Viewer renewal still samples the exact active video element at fire time and preserves the active item association.
+- Thumbnail renewal still verifies item ID, requested handle, and expiry identity before deletion and re-request.
+- Existing bounded scheduling for delays above the browser timeout ceiling remains intact and covered by fake-timer tests.
+- Close/unmount prevents both media renewal and thumbnail re-request before an already-due callback can fire.
+
+### Fix-round concern
+
+None blocking. The implementation deliberately adds one event-loop turn only for timestamps that are already due when scheduling begins.

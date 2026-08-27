@@ -480,6 +480,67 @@ describe("TV enrollment and browse states", () => {
     expect(document.body.innerHTML).not.toContain("https://provider.example/raced");
   });
 
+  it("re-requests a thumbnail that becomes due between state acceptance and timer installation", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [rootCards[0]!] });
+    vi.mocked(client.folder).mockResolvedValue({ parent: node("root-1", "folder", "Parent"), children: [browseItem("item_photo", "sealed-photo", "Photo", "image")], nextCursor: null });
+    type ThumbnailResponse = Awaited<ReturnType<TvApi["thumbnailUrls"]>>;
+    let resolveInitial!: (value: ThumbnailResponse) => void;
+    vi.mocked(client.thumbnailUrls)
+      .mockReturnValueOnce(new Promise<ThumbnailResponse>(resolve => { resolveInitial = resolve; }))
+      .mockResolvedValueOnce({ items: [{ itemId: "item_photo", status: "ready", url: "https://provider.example/fresh", expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: null }] });
+
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await findButtonWithFakeTimers(/Family/));
+    await flushFakeTimersUntil(() => vi.mocked(client.thumbnailUrls).mock.calls.length === 1);
+    const acceptedAt = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValueOnce(acceptedAt).mockReturnValue(acceptedAt + 2);
+    await act(async () => {
+      resolveInitial({ items: [{ itemId: "item_photo", status: "ready", url: "https://provider.example/raced", expiresAt: new Date(acceptedAt + 1).toISOString(), revision: null }] });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    now.mockRestore();
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); await Promise.resolve(); });
+
+    await flushFakeTimersUntil(() => document.querySelector<HTMLImageElement>(".media-preview img")?.src === "https://provider.example/fresh");
+    expect(client.thumbnailUrls).toHaveBeenCalledTimes(2);
+    expect(document.body.innerHTML).not.toContain("https://provider.example/raced");
+  });
+
+  it("cancels an already-due thumbnail re-request when the app unmounts before the zero-delay tick", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-28T00:00:00.000Z"));
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [rootCards[0]!] });
+    vi.mocked(client.folder).mockResolvedValue({ parent: node("root-1", "folder", "Parent"), children: [browseItem("item_photo", "sealed-photo", "Photo", "image")], nextCursor: null });
+    type ThumbnailResponse = Awaited<ReturnType<TvApi["thumbnailUrls"]>>;
+    let resolveInitial!: (value: ThumbnailResponse) => void;
+    vi.mocked(client.thumbnailUrls).mockReturnValueOnce(new Promise<ThumbnailResponse>(resolve => { resolveInitial = resolve; }));
+
+    const view = render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await findButtonWithFakeTimers(/Family/));
+    await flushFakeTimersUntil(() => vi.mocked(client.thumbnailUrls).mock.calls.length === 1);
+    const acceptedAt = Date.now();
+    const now = vi.spyOn(Date, "now").mockReturnValueOnce(acceptedAt).mockReturnValue(acceptedAt + 2);
+    await act(async () => {
+      resolveInitial({ items: [{ itemId: "item_photo", status: "ready", url: "https://provider.example/raced", expiresAt: new Date(acceptedAt + 1).toISOString(), revision: null }] });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    now.mockRestore();
+
+    view.unmount();
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); await Promise.resolve(); });
+
+    expect(client.thumbnailUrls).toHaveBeenCalledTimes(1);
+  });
+
   it("deduplicates initial roots and children with the final DTO winning", async () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });

@@ -448,7 +448,9 @@ function scheduleAt(expiresAtEpoch: number, callback: () => void): () => void {
     if (state.cancelled) return;
     const remaining = expiresAtEpoch - Date.now();
     if (remaining <= 0) {
-      callback();
+      state.timer = window.setTimeout(() => {
+        if (!state.cancelled) callback();
+      }, 0);
       return;
     }
     state.timer = window.setTimeout(schedule, Math.min(remaining, 2_147_000_000));
