@@ -1,6 +1,7 @@
 export * from "./auth/cookies";
 export * from "./auth/csrf";
 export * from "./auth/browse-handles";
+export * from "./auth/media-handles";
 export * from "./auth/passphrase";
 export * from "./auth/sealed-sessions";
 export * from "./auth/tokens";

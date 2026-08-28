@@ -133,7 +133,8 @@ const DEFAULT_RATE_LIMITS: Record<string, RuntimeRateLimitPolicy> = {
   "admin-mutation": { limit: 120, windowSeconds: 60 },
   "device-request-create": { limit: 6, windowSeconds: 60 * 60 },
   "device-request-status": { limit: 120, windowSeconds: 10 * 60 },
-  "url-vending": { limit: 120, windowSeconds: 60 }
+  "url-vending": { limit: 120, windowSeconds: 60 },
+  "media-stream": { limit: 3_600, windowSeconds: 60 }
 };
 
 const consoleControlApiLogger: ControlApiLogger = {
@@ -1198,7 +1199,7 @@ async function googleMedia(
   const { device } = await protectedDevice(request, dependencies, now);
   await enforceRateLimit(
     dependencies,
-    "url-vending",
+    "media-stream",
     device.deviceId,
     now,
   );
@@ -1206,6 +1207,7 @@ async function googleMedia(
     method: request.method as "GET" | "HEAD",
     range: request.headers.get("range"),
     ifRange: request.headers.get("if-range"),
+    signal: request.signal,
   });
 }
 

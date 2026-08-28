@@ -109,6 +109,27 @@ describe("final control HTTP API", () => {
     expect(await response.text()).toBe("x");
   });
 
+  it("uses a dedicated high-volume limiter for Google range streaming", async () => {
+    const harness = await createControlApiHarness({
+      providerFetch: async () => new Response("x")
+    });
+    const media = await harness.app(harness.mediaRequest());
+    const payload = await media.json() as { ok: true; data: { url: string } };
+
+    const response = await harness.app(
+      new Request(`${harness.origin}${payload.data.url}`, {
+        headers: harness.deviceHeaders({ range: "bytes=0-0" })
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(harness.rateLimiter.calls.map((call) => call.bucket)).toEqual([
+      "url-vending",
+      "media-stream"
+    ]);
+    expect(harness.rateLimiter.calls[1]?.policy.limit).toBeGreaterThanOrEqual(3_600);
+  });
+
   it("rejects invalid Google media ranges before provider traffic", async () => {
     let providerCalls = 0;
     const harness = await createControlApiHarness({
@@ -128,6 +149,34 @@ describe("final control HTTP API", () => {
 
     expect(response.status).toBe(404);
     expect(providerCalls).toBe(0);
+  });
+
+  it("passes the downstream request signal to Google media streaming", async () => {
+    const controller = new AbortController();
+    let upstreamSignal: AbortSignal | null | undefined;
+    let abortObserved = false;
+    const harness = await createControlApiHarness({
+      providerFetch: async (_input, init) => {
+        upstreamSignal = init?.signal;
+        upstreamSignal?.addEventListener("abort", () => {
+          abortObserved = true;
+        });
+        return new Response("x");
+      }
+    });
+    const media = await harness.app(harness.mediaRequest());
+    const payload = await media.json() as { ok: true; data: { url: string } };
+
+    await harness.app(
+      new Request(`${harness.origin}${payload.data.url}`, {
+        signal: controller.signal,
+        headers: harness.deviceHeaders()
+      })
+    );
+
+    expect(upstreamSignal).toBeDefined();
+    controller.abort();
+    expect(abortObserved).toBe(true);
   });
 
   it("supports HEAD for Google media without returning a body", async () => {

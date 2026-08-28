@@ -147,7 +147,13 @@ export function createGoogleDriveAdapter(
         input.credentials.accessToken,
         now
       );
-      if (!file.mimeType?.startsWith("image/") || !file.thumbnailLink) return null;
+      if (
+        (!file.mimeType?.startsWith("image/") &&
+          !file.mimeType?.startsWith("video/")) ||
+        !file.thumbnailLink
+      ) {
+        return null;
+      }
       return {
         url: googleThumbnailUrl(file.thumbnailLink, input.maxDimension),
         expiresAt: input.credentials.accessTokenExpiresAt
@@ -274,19 +280,25 @@ function googleMediaUrl(providerNodeId: string): string {
 
 function googleThumbnailUrl(value: string, maxDimension: number): string {
   const url = new URL(value);
+  const hostname = url.hostname.toLowerCase();
   if (
     url.protocol !== "https:" ||
     url.port !== "" ||
     url.username !== "" ||
     url.password !== "" ||
     url.hash !== "" ||
-    url.hostname !== "lh3.googleusercontent.com" ||
-    url.search !== ""
+    !validGoogleThumbnailHost(hostname) ||
+    url.search !== "" ||
+    !/=s\d+$/u.test(url.pathname)
   ) {
     throw badResponse();
   }
   url.pathname = url.pathname.replace(/=s\d+$/u, `=s${maxDimension}`);
   return url.toString();
+}
+
+function validGoogleThumbnailHost(hostname: string): boolean {
+  return /^lh\d+\.googleusercontent\.com$/u.test(hostname);
 }
 
 function requireString(value: string | undefined): string {

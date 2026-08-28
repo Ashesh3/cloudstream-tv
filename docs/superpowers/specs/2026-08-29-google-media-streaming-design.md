@@ -13,7 +13,7 @@ Google thumbnails also used the forbidden query-token URL. A provider error for 
 ## Architecture
 
 - `POST /api/tv/media-url` keeps its existing contract. OneDrive still returns its provider-signed direct URL. Google returns a short-lived, same-origin URL containing only the sealed browse handle.
-- `GET /api/tv/google-media/:handle` authenticates the TV cookie, revalidates the handle against the current assigned root and source, obtains current credentials, and requests Google Drive with `Authorization: Bearer`.
+- `POST /api/tv/media-url` exchanges the 30-minute browse handle for a dedicated 12-hour media handle. `GET /api/tv/google-media/:handle` authenticates the TV cookie, revalidates that media handle against the current assigned root and source, obtains current credentials, and requests Google Drive with `Authorization: Bearer`.
 - The route forwards only a single valid `Range` header and safe conditional media headers. It streams Google's response body without buffering, storage, or transcoding.
 - Google thumbnail vending uses Drive's `thumbnailLink`, normalized to the requested bounded size. The access token is never placed in a URL.
 - Thumbnail item failures are isolated. Missing or rejected thumbnails become `unavailable`; authentication/navigation failures still fail closed for the whole request.
@@ -21,7 +21,7 @@ Google thumbnails also used the forbidden query-token URL. A provider error for 
 ## Security boundaries
 
 - No access token, refresh token, provider ID, provider URL, or response body is logged or returned in JSON.
-- The Google media URL is same-origin, short-lived through the sealed handle, device-bound, source-bound, root-bound, and credential-version-bound.
+- The Google media URL is same-origin, sealed for a 12-hour playback window, device-bound, source-bound, root-bound, and credential-version-bound.
 - Every range request repeats application authorization. Revocation or root removal blocks the next request.
 - Only GET and HEAD are accepted. Request bodies are rejected by method routing.
 - Upstream headers are allowlisted. Hop-by-hop, cookie, authorization, and Google diagnostic headers are never reflected.
@@ -32,6 +32,7 @@ Google thumbnails also used the forbidden query-token URL. A provider error for 
 - Native `<img>` and `<video>` elements continue receiving ordinary same-origin HTTPS URLs, so Chromium 68 needs no custom header API.
 - OneDrive's working direct playback path remains unchanged.
 - Google media bytes now transit the Vercel function and count toward transfer/runtime limits. This is the unavoidable compatibility cost of Google's header-only download contract.
+- Streaming uses a dedicated high-volume per-device limiter instead of the URL-vending budget. The Vercel function still has a 300-second maximum duration, so live webOS acceptance must verify that long playback continues through browser range re-requests.
 
 ## Verification
 

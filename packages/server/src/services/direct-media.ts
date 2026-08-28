@@ -14,6 +14,12 @@ import type {
 
 import type { AuthenticatedControlDevice } from "./control-auth";
 import {
+  MEDIA_HANDLE_LIFETIME_MS,
+  type MediaHandleClaims,
+  type MediaHandleCodec,
+} from "../auth/media-handles";
+import { SealedValueError } from "../crypto/aead";
+import {
   CredentialBrokerError,
   type BrokeredProviderCredentials,
   type CredentialBroker,
@@ -63,10 +69,12 @@ export interface GoogleMediaRequest {
   method: "GET" | "HEAD";
   range: string | null;
   ifRange: string | null;
+  signal?: AbortSignal;
 }
 
 export interface CreateDirectMediaServiceOptions {
-  browse: Pick<LiveBrowseService, "authorizeHandle">;
+  browse: Pick<LiveBrowseService, "authorizeHandle" | "authorizeClaims">;
+  mediaHandles: MediaHandleCodec;
   credentialBroker: CredentialBroker;
   providers: ProviderRegistry;
   fetch?: typeof globalThis.fetch;
@@ -217,10 +225,15 @@ function validGoogleRequest(
 }
 
 function validGoogleThumbnailUrl(url: URL): boolean {
+  const hostname = url.hostname.toLowerCase();
   return (
-    url.origin === "https://lh3.googleusercontent.com" &&
-    url.pathname.length > 1 &&
-    url.search === ""
+    /^lh\d+\.googleusercontent\.com$/u.test(hostname) &&
+    /=s\d+$/u.test(url.pathname) &&
+    url.search === "" &&
+    url.hash === "" &&
+    url.port === "" &&
+    url.username === "" &&
+    url.password === ""
   );
 }
 
@@ -402,6 +415,7 @@ export function createDirectMediaService(
       const provider = group.item.source.provider;
       let credentials: BrokeredProviderCredentials;
       let adapter: ProviderAdapter;
+      let refreshedCredentials = false;
       try {
         credentials = compatibleCredentials(
           group.item,
@@ -417,11 +431,35 @@ export function createDirectMediaService(
 
       for (const entry of vendable) {
         try {
-          const temporary = await adapter!.getThumbnailUrl({
-            credentials: credentials!,
-            providerNodeId: entry.item.claims.providerNodeId,
-            maxDimension,
-          });
+          const operation = (activeCredentials: ProviderCredentials) =>
+            adapter!.getThumbnailUrl({
+              credentials: activeCredentials,
+              providerNodeId: entry.item.claims.providerNodeId,
+              maxDimension,
+            });
+          let temporary: TemporaryUrl | null;
+          try {
+            temporary = await operation(credentials!);
+          } catch (error) {
+            if (
+              error instanceof ProviderError &&
+              error.code === "PROVIDER_REAUTH_REQUIRED" &&
+              error.reauthReason !== "invalid_grant" &&
+              !refreshedCredentials
+            ) {
+              credentials = compatibleCredentials(
+                entry.item,
+                await options.credentialBroker.refresh(
+                  entry.item.source.id,
+                  entry.item.claims.householdId,
+                ),
+              );
+              refreshedCredentials = true;
+              temporary = await operation(credentials);
+            } else {
+              throw error;
+            }
+          }
           const safe = temporary
             ? validThumbnailUrl(temporary, entry.item, credentials!, now())
             : null;
@@ -431,12 +469,9 @@ export function createDirectMediaService(
         } catch (error) {
           if (
             error instanceof ProviderError &&
-            error.code === "PROVIDER_NOT_FOUND"
+            (error.code === "PROVIDER_NOT_FOUND" ||
+              error.code === "PROVIDER_BAD_RESPONSE")
           ) {
-            items[entry.index] = unavailable(entry.item);
-            continue;
-          }
-          if (error instanceof ProviderError) {
             items[entry.index] = unavailable(entry.item);
             continue;
           }
@@ -511,13 +546,28 @@ export function createDirectMediaService(
       now(),
     );
     if (item.source.provider === "google") {
+      const issuedAt = now().getTime();
+      const mediaHandle = options.mediaHandles.seal({
+        version: 1,
+        householdId: item.claims.householdId,
+        deviceId: item.claims.deviceId,
+        sourceId: item.claims.sourceId,
+        rootId: item.claims.rootId,
+        rootProviderNodeId: item.claims.rootProviderNodeId,
+        providerNodeId: item.claims.providerNodeId,
+        parentProviderNodeId: item.claims.parentProviderNodeId,
+        kind: item.claims.kind,
+        name: item.claims.name,
+        mimeType: item.claims.mimeType!,
+        credentialVersion: item.claims.credentialVersion,
+        issuedAt,
+        expiresAt: issuedAt + MEDIA_HANDLE_LIFETIME_MS,
+      });
       return {
         itemId: item.id,
         kind: item.claims.kind,
-        url: `/api/tv/google-media/${encodeURIComponent(sealedHandle)}`,
-        expiresAt: new Date(
-          Math.min(safe.expiresAt.getTime(), item.claims.expiresAt),
-        ).toISOString(),
+        url: `/api/tv/google-media/${encodeURIComponent(mediaHandle)}`,
+        expiresAt: new Date(issuedAt + MEDIA_HANDLE_LIFETIME_MS).toISOString(),
         revision: null,
         responseHeaders: RESPONSE_HEADERS,
       };
@@ -537,7 +587,17 @@ export function createDirectMediaService(
     sealedHandle: string,
     request: GoogleMediaRequest,
   ): Promise<Response> {
-    const item = options.browse.authorizeHandle(auth, sealedHandle);
+    let claims: MediaHandleClaims;
+    try {
+      claims = options.mediaHandles.open(sealedHandle);
+    } catch (error) {
+      if (error instanceof SealedValueError) throw navigationExpired();
+      throw error;
+    }
+    const item = options.browse.authorizeClaims(auth, {
+      ...claims,
+      version: 2,
+    });
     if (item.source.provider !== "google" || item.claims.kind === "folder") {
       throw directMediaError("ITEM_NOT_FOUND");
     }
@@ -561,9 +621,14 @@ export function createDirectMediaService(
       const safe = validTemporaryUrl(upstream, item, active, now());
       if (!("headers" in safe)) throw directMediaError("INVALID_PROVIDER_URL");
       const headers = new Headers(safe.headers);
+      headers.set("accept-encoding", "identity");
       if (request.range !== null) headers.set("range", request.range);
       if (request.ifRange !== null) headers.set("if-range", request.ifRange);
-      return providerFetch(safe.url, { method: request.method, headers });
+      return providerFetch(safe.url, {
+        method: request.method,
+        headers,
+        signal: request.signal,
+      });
     };
 
     let upstream: Response;
@@ -573,6 +638,7 @@ export function createDirectMediaService(
       normalizeDependencyError(error);
     }
     if (upstream.status === 401) {
+      cancelBodyBestEffort(upstream);
       try {
         credentials = compatibleCredentials(
           item,
@@ -585,6 +651,15 @@ export function createDirectMediaService(
       } catch (error) {
         normalizeDependencyError(error);
       }
+    }
+    if (upstream.status === 416) {
+      cancelBodyBestEffort(upstream);
+      return googleRangeNotSatisfiableResponse(upstream);
+    }
+    if (!upstream.ok) {
+      const error = providerResponseError(upstream, now());
+      cancelBodyBestEffort(upstream);
+      throw error;
     }
     return googleMediaResponse(upstream, request.method);
   }
@@ -604,7 +679,19 @@ async function brokerGet(
 }
 
 function validRange(value: string): boolean {
-  return /^bytes=\d*-\d*(?:,\d*-\d*)*$/u.test(value) && value.length <= 256;
+  if (value.length > 128) return false;
+  const match = /^bytes=(\d*)-(\d*)$/u.exec(value);
+  if (!match) return false;
+  const start = match[1]!;
+  const end = match[2]!;
+  if (start.length === 0 && end.length === 0) return false;
+  if (start.length === 0) return end !== "0";
+  if (end.length === 0) return true;
+  try {
+    return BigInt(start) <= BigInt(end);
+  } catch {
+    return false;
+  }
 }
 
 function validIfRange(value: string): boolean {
@@ -628,4 +715,63 @@ function googleMediaResponse(upstream: Response, method: "GET" | "HEAD"): Respon
     status: upstream.status,
     headers,
   });
+}
+
+function googleRangeNotSatisfiableResponse(upstream: Response): Response {
+  const headers = new Headers(RESPONSE_HEADERS);
+  const contentRange = upstream.headers.get("content-range");
+  if (contentRange !== null) headers.set("content-range", contentRange);
+  return new Response(null, { status: 416, headers });
+}
+
+function providerResponseError(upstream: Response, now: Date): ProviderError {
+  const retryAfterSeconds = parseRetryAfter(
+    upstream.headers.get("retry-after"),
+    now,
+  );
+  if (upstream.status === 429) {
+    return new ProviderError("PROVIDER_THROTTLED", "Provider request failed.", {
+      retryable: true,
+      retryAfterSeconds,
+    });
+  }
+  if (upstream.status >= 500) {
+    return new ProviderError("PROVIDER_UNAVAILABLE", "Provider request failed.", {
+      retryable: true,
+      retryAfterSeconds,
+    });
+  }
+  if (upstream.status === 404) {
+    return new ProviderError("PROVIDER_NOT_FOUND", "Provider request failed.", {
+      retryable: false,
+    });
+  }
+  if (upstream.status === 401) {
+    return new ProviderError(
+      "PROVIDER_REAUTH_REQUIRED",
+      "Provider request failed.",
+      { retryable: false },
+    );
+  }
+  return new ProviderError("PROVIDER_BAD_RESPONSE", "Provider request failed.", {
+    retryable: false,
+  });
+}
+
+function parseRetryAfter(value: string | null, now: Date): number | null {
+  if (!value) return null;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds);
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return Math.max(0, Math.ceil((date.getTime() - now.getTime()) / 1_000));
+}
+
+function cancelBodyBestEffort(response: Response): void {
+  try {
+    const cancellation = response.body?.cancel();
+    if (cancellation) void cancellation.catch(() => undefined);
+  } catch {
+    // Cleanup is advisory and never changes the client-visible error.
+  }
 }

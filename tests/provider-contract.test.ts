@@ -76,8 +76,17 @@ function createHarness(provider: ProviderKind): ContractHarness {
         return jsonResponse({
           id: "g-video-a",
           mimeType: "video/mp4",
-          thumbnailLink: "https://synthetic.invalid/google-video-thumb=s220",
+          thumbnailLink:
+            "https://lh3.googleusercontent.com/u/0/d/synthetic-video-thumb=s220",
           version: "13"
+        });
+      }
+      if (url.pathname.endsWith("/g-image-bad-thumbnail")) {
+        return jsonResponse({
+          id: "g-image-bad-thumbnail",
+          mimeType: "image/jpeg",
+          thumbnailLink: "https://lh3.googleusercontent.com/synthetic-google-thumb",
+          version: "14"
         });
       }
     } else {
@@ -321,19 +330,32 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       expect(requests.some(request => request.url.searchParams.get("alt") === "media")).toBe(false);
     });
 
-    it("returns no Google thumbnail URL for video metadata", async () => {
+    it("returns a resized Google CDN thumbnail URL for video metadata", async () => {
       const { adapter, requests } = createHarness(provider);
 
       await expect(adapter.getThumbnailUrl({
         credentials,
         providerNodeId: "g-video-a",
         maxDimension: 720
-      })).resolves.toBeNull();
+      })).resolves.toMatchObject({
+        url: "https://lh3.googleusercontent.com/u/0/d/synthetic-video-thumb=s720",
+        expiresAt: accessExpiresAt
+      });
 
       expect(requests).toHaveLength(1);
       expect(requests[0].url.searchParams.get("fields")).toBe("mimeType,thumbnailLink");
       expect(requests[0].url.searchParams.get("alt")).toBeNull();
       expect(new Headers(requests[0].init?.headers).get("range")).toBeNull();
+    });
+
+    it("rejects a Google thumbnail link without a terminal size directive", async () => {
+      const { adapter } = createHarness(provider);
+
+      await expect(adapter.getThumbnailUrl({
+        credentials,
+        providerNodeId: "g-image-bad-thumbnail",
+        maxDimension: 720
+      })).rejects.toMatchObject({ code: "PROVIDER_BAD_RESPONSE" });
     });
   } else {
     it("uses only live metadata fields and a thumbnail expansion for folder pages", async () => {
