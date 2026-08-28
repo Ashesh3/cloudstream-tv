@@ -24,8 +24,13 @@ describe("browser acceptance harness", () => {
       ? process.env.npm_execpath ?? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
       : "npm";
     await exec(process.platform === "win32" ? process.execPath : npmCli, process.platform === "win32"
-      ? [npmCli, "run", "build:vercel"]
-      : ["run", "build:vercel"], { cwd: process.cwd(), env: { ...process.env, CLOUDFRAME_E2E_BUILD: "" }, maxBuffer: 20 * 1024 * 1024 });
+      ? [npmCli, "run", "build:e2e"]
+      : ["run", "build:e2e"], { cwd: process.cwd(), env: process.env, maxBuffer: 20 * 1024 * 1024 });
+    expect((await filesUnder("apps/tv/dist")).some(path => path.endsWith(".map"))).toBe(true);
+
+    await exec(process.execPath, ["scripts/build-vercel.mjs"], {
+      cwd: process.cwd(), env: { ...process.env, CLOUDFRAME_E2E_BUILD: "1" }, maxBuffer: 20 * 1024 * 1024
+    });
 
     for (const root of ["apps/tv/dist", "apps/admin/dist", ".vercel/output/static"]) {
       const files = await filesUnder(root);

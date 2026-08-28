@@ -24,7 +24,7 @@ test("admin approves, edits, and revokes a TV without mutating TV cookies", asyn
   await page.getByRole("button", { name: /approve device/i }).click();
   await expect(page.getByText(/was approved/i)).toBeVisible();
   const cookies = await page.context().cookies();
-  expect(cookies.some(cookie => cookie.name === "cf_device" || cookie.name === "cf_device_request")).toBe(false);
+  expect(cookies.some(cookie => ["device_session", "device_request", "cf_device", "cf_device_request"].includes(cookie.name))).toBe(false);
   await page.getByRole("button", { name: /devices/i }).click();
   await page.getByRole("button", { name: /edit/i }).click();
   await page.getByLabel(/device name/i).fill("Den TV");

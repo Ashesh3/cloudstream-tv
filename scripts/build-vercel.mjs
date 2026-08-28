@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile, access } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -15,7 +15,7 @@ const nativePackages = [
   { name: "@node-rs/argon2-linux-arm64-gnu", version: "2.1.0" }
 ];
 
-await ensureStaticBuild();
+await buildProductionStatic();
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 await cp(join(root, "dist"), join(output, "static"), { recursive: true });
@@ -25,22 +25,17 @@ await writeFile(
   JSON.stringify({ version: 3, routes: contract.routes }, null, 2)
 );
 
-async function ensureStaticBuild() {
-  try {
-    await Promise.all([
-      access(join(root, "dist", "index.html")),
-      access(join(root, "dist", "admin", "index.html"))
-    ]);
-  } catch {
-    const npmCli = process.platform === "win32"
-      ? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
-      : "npm";
-    const command = process.platform === "win32" ? process.execPath : npmCli;
-    const args = process.platform === "win32"
-      ? [npmCli, "run", "build"]
-      : ["run", "build"];
-    await exec(command, args, { cwd: root, windowsHide: true, maxBuffer: 20 * 1024 * 1024 });
-  }
+async function buildProductionStatic() {
+  const npmCli = process.platform === "win32"
+    ? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
+    : "npm";
+  const command = process.platform === "win32" ? process.execPath : npmCli;
+  const args = process.platform === "win32"
+    ? [npmCli, "run", "build"]
+    : ["run", "build"];
+  const environment = { ...process.env };
+  delete environment.CLOUDFRAME_E2E_BUILD;
+  await exec(command, args, { cwd: root, windowsHide: true, env: environment, maxBuffer: 20 * 1024 * 1024 });
 }
 
 async function buildApiFunction() {
