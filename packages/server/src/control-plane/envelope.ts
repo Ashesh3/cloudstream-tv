@@ -1,8 +1,8 @@
 import { z } from "zod";
 
-import type { ControlPlaneDocumentV2 } from "@cloudframe/shared";
-import { openJson, sealJson, type VersionedAeadKeyring } from "../crypto/aead";
-import { parseControlPlaneDocument } from "./schema";
+import type { ControlPlaneDocumentV2 } from "../../../shared/src/control-plane.ts";
+import { openJson, sealJson, type VersionedAeadKeyring } from "../crypto/aead.ts";
+import { parseControlPlaneDocument } from "./schema.ts";
 
 const CONTROL_PLANE_PURPOSE = "cloudframe/control-plane/v2";
 

@@ -5,7 +5,7 @@ import { z } from "zod";
 import type {
   ControlHotCache,
   StoredControlEnvelope
-} from "./store";
+} from "./store.ts";
 
 const CONTROL_CACHE_TTL_SECONDS = 300;
 

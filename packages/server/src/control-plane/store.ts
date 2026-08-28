@@ -1,11 +1,11 @@
-import type { ControlPlaneDocumentV2 } from "@cloudframe/shared";
-import type { VersionedAeadKeyring } from "../crypto/aead";
+import type { ControlPlaneDocumentV2 } from "../../../shared/src/control-plane.ts";
+import type { VersionedAeadKeyring } from "../crypto/aead.ts";
 import {
   decryptControlPlaneEnvelope,
   encryptControlPlaneDocument,
   type ControlPlaneEnvelopeV1
-} from "./envelope";
-import { cloneControlPlaneDocument, parseControlPlaneDocument } from "./schema";
+} from "./envelope.ts";
+import { cloneControlPlaneDocument, parseControlPlaneDocument } from "./schema.ts";
 
 const CONTROL_CACHE_TTL_SECONDS = 300;
 const MAX_CAS_ATTEMPTS = 3;
@@ -64,9 +64,12 @@ export type ControlPlaneStoreErrorCode =
   | "CONTROL_PLANE_UNAVAILABLE";
 
 export class ControlPlaneStoreError extends Error {
-  constructor(readonly code: ControlPlaneStoreErrorCode) {
+  readonly code: ControlPlaneStoreErrorCode;
+
+  constructor(code: ControlPlaneStoreErrorCode) {
     super(code);
     this.name = "ControlPlaneStoreError";
+    this.code = code;
   }
 }
 

@@ -6,11 +6,11 @@ import {
   type PutCommandOptions
 } from "@vercel/blob";
 
-import type { ControlPlaneEnvelopeV1 } from "./envelope";
+import type { ControlPlaneEnvelopeV1 } from "./envelope.ts";
 import {
   ControlPlaneStoreError,
   type ControlDurableStore
-} from "./store";
+} from "./store.ts";
 
 export interface VercelBlobControlStoreOptions {
   environment: string;

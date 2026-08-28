@@ -3,16 +3,19 @@ import { z } from "zod";
 import {
   CONTROL_PLANE_LIMITS,
   type ControlPlaneDocumentV2
-} from "@cloudframe/shared";
+} from "../../../shared/src/control-plane.ts";
 
 export type ControlPlaneDocumentErrorCode =
   | "CONTROL_PLANE_INVALID"
   | "CONTROL_PLANE_LIMIT_EXCEEDED";
 
 export class ControlPlaneDocumentError extends Error {
-  constructor(readonly code: ControlPlaneDocumentErrorCode) {
+  readonly code: ControlPlaneDocumentErrorCode;
+
+  constructor(code: ControlPlaneDocumentErrorCode) {
     super(code);
     this.name = "ControlPlaneDocumentError";
+    this.code = code;
   }
 }
 

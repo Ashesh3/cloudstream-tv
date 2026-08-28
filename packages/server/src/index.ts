@@ -13,6 +13,7 @@ export * from "./control-plane/runtime-cache";
 export * from "./control-plane/firestore-mirror";
 export * from "./control-plane/memory";
 export * from "./control-plane/mutations";
+export * from "./control-plane/legacy-session-exchange";
 export * from "./firestore/memory-repository";
 export * from "./firestore/decode";
 export * from "./firestore/repository";
