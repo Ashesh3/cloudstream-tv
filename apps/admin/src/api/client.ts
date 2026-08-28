@@ -61,9 +61,8 @@ export interface AdminApi {
 
 type Fetcher = typeof fetch;
 type Decoder<T> = (value: unknown) => T;
-const responseText = Response.prototype.text;
 const parseJson = JSON.parse;
-const MAX_ADMIN_RESPONSE_TEXT_LENGTH = 4 * 1024 * 1024;
+const MAX_ADMIN_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
   let csrfToken: string | null = null;
@@ -133,11 +132,41 @@ export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
 }
 
 async function safeJson(response: Response): Promise<unknown> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null;
   try {
-    const text = await responseText.call(response);
-    if (text.length < 1 || text.length > MAX_ADMIN_RESPONSE_TEXT_LENGTH) return null;
+    reader = response.body?.getReader() ?? null;
+  } catch { return null; }
+  if (!reader) return null;
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      let read: ReadableStreamReadResult<Uint8Array>;
+      try { read = await reader.read(); }
+      catch { cancelReaderBestEffort(reader); return null; }
+      if (read.done) break;
+      totalBytes += read.value.byteLength;
+      if (totalBytes > MAX_ADMIN_RESPONSE_BYTES) { cancelReaderBestEffort(reader); return null; }
+      chunks.push(read.value);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* Lock release is cleanup only. */ }
+  }
+  if (totalBytes < 1) return null;
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     return parseJson(text) as unknown;
   } catch { return null; }
+}
+
+function cancelReaderBestEffort(reader: ReadableStreamDefaultReader<Uint8Array>): void {
+  try {
+    const cancellation = reader.cancel();
+    if (cancellation && typeof (cancellation as PromiseLike<unknown>).then === "function") void Promise.resolve(cancellation).catch(() => undefined);
+  } catch { /* Cancellation is advisory cleanup only. */ }
 }
 
 function decodeSuccessEnvelope(value: unknown, status: number): unknown {

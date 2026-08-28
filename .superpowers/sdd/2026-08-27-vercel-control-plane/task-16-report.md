@@ -225,7 +225,7 @@ node F:\Projects\tv-video-ui\.agents\skills\impeccable\scripts\detect.mjs --json
 ### Findings addressed
 
 - Committed approval, device-edit, and revocation dialogs now close and clear their mutation pending state immediately after the focused server operation resolves. The single snapshot refresh starts in the background, so a never-settling refresh cannot retain a dialog or spinner. Refresh rejection and 401 handling remain on the existing recovery path.
-- Admin HTTP decoding no longer invokes `Response.json()`. It reads the actual response body through the captured intrinsic `Response.prototype.text`, bounds text to 4 MiB, and parses it with captured intrinsic `JSON.parse` before structural validation. Exotic objects and transparent proxies cannot enter from an overridden JSON method or execute traps during decoding.
+- Admin HTTP decoding no longer invokes `Response.json()`. It incrementally reads and bounds the native response byte stream before fatal UTF-8 decoding and captured intrinsic `JSON.parse`. Exotic objects and transparent proxies cannot enter from an overridden JSON method or execute traps during decoding.
 - Scoped reduced-motion CSS now also disables runtime `animate-spin` and `animate-pulse` classes under the admin/login surfaces while preserving visible status text.
 - Microsoft tenant validation now allows only `common`, `organizations`, `consumers`, canonical GUIDs, or bounded DNS-style names with nonempty labels, alphanumeric boundaries, and internal hyphens. Trailing dots, consecutive dots, underscores, tildes, percent encodings, separators, and dot segments are rejected by the shared client/server boundary.
 
@@ -259,7 +259,7 @@ The final full-suite/build/lint/typecheck evidence for this round follows in the
 ### Findings addressed
 
 - Focused mutation completion no longer waits for the snapshot refresh. Approval, device edit, and revocation apply local truth and resolve their close callbacks immediately, then start the single refresh in the background. Never-settling refresh regressions prove dialogs and spinners do not remain open.
-- Admin response decoding now ignores overridden `Response.json()` methods. It reads response bytes through captured intrinsic `Response.prototype.text`, rejects empty or greater-than-4-MiB bodies, and parses with captured intrinsic `JSON.parse` before validating the inert graph. A transparent side-effecting proxy supplied by a mocked `json()` override is never called or observed.
+- Admin response decoding ignores overridden `Response.json()` methods and incrementally bounds the native response stream at 4 MiB before decoding/parsing. A transparent side-effecting proxy supplied by a mocked `json()` override is never called or observed.
 - Reduced-motion CSS now stops continuous `animate-spin` and `animate-pulse` runtime classes in the admin, login, and portaled dialog contexts while retaining visible loading labels and avoiding a global selector.
 - Microsoft tenant validation now permits only the three documented aliases, canonical GUIDs, and bounded DNS-style tenant/domain names. Tests reject trailing/consecutive dots, underscores, tildes, percent encodings, separators, dot segments, and invalid label boundaries in both client and server paths.
 
@@ -307,3 +307,25 @@ Ran once after final CSS changes:
 node F:\Projects\tv-video-ui\.agents\skills\impeccable\scripts\detect.mjs --json apps/admin/src/app.tsx apps/admin/src/styles/app.css
 []
 ```
+
+## Review fix round 3
+
+### Finding addressed
+
+The 4 MiB admin response limit is now enforced while reading raw response bytes instead of after `Response.text()` fully buffers the body. The client obtains a stream reader, counts each `Uint8Array.byteLength`, stops and cancels immediately once the total exceeds 4 MiB, joins only a complete bounded body, decodes UTF-8 with `fatal: true`, and then parses with the captured intrinsic JSON parser.
+
+Null bodies, stream read failures, synchronous/asynchronous cancellation failures, malformed UTF-8, malformed JSON, and downstream decoder failures all retain the existing safe response-error behavior.
+
+### RED evidence
+
+Before the fix, the streaming regression pulled all eight 1 MiB producer chunks instead of stopping after the fifth and did not cancel the producer. The prior report claim that the 4 MiB bound applied at the byte boundary was therefore incorrect; it applied only after full text buffering.
+
+### Focused GREEN evidence
+
+```text
+npx vitest run --config apps/admin/vitest.config.ts src/api/client.test.ts
+Test Files  1 passed (1)
+Tests       16 passed (16)
+```
+
+Coverage includes early oversize cancellation, raw multibyte UTF-8 byte counting, null and failing streams, sync/async cancellation failures, malformed UTF-8/JSON, and the existing decoder/security cases.

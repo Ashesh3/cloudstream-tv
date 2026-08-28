@@ -143,6 +143,59 @@ describe("admin API browser boundary", () => {
     expect(trapReads).toBe(0);
   });
 
+  it("stops pulling and cancels an oversized streamed response at the 4 MiB byte boundary", async () => {
+    const chunk = new Uint8Array(1024 * 1024);
+    let pulls = 0;
+    let cancelled = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        controller.enqueue(chunk);
+        if (pulls === 8) controller.close();
+      },
+      cancel() { cancelled += 1; }
+    }, { highWaterMark: 0 });
+    const response = new Response(stream, { status: 200, headers: { "content-type": "application/json" } });
+
+    await expect(createAdminApi(vi.fn().mockResolvedValue(response)).snapshot()).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    expect(pulls).toBe(5);
+    expect(cancelled).toBe(1);
+  });
+
+  it("counts multibyte UTF-8 response bytes rather than decoded string length", async () => {
+    const fourByteCharacter = "😀";
+    const body = `{"ok":true,"data":"${fourByteCharacter.repeat(1024 * 1024)}"}`;
+    expect(body.length).toBeLessThan(4 * 1024 * 1024);
+
+    await expect(createAdminApi(vi.fn().mockResolvedValue(new Response(body))).snapshot()).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+  });
+
+  it("normalizes null, failed, malformed, and cancellation-failing streams", async () => {
+    const cases: Response[] = [
+      new Response(null, { status: 200 }),
+      new Response(new ReadableStream<Uint8Array>({ pull(controller) { controller.error(new Error("stream detail")); } })),
+      new Response(new Uint8Array([0xff, 0xfe, 0xfd])),
+      new Response("{not-json")
+    ];
+    for (const response of cases) {
+      await expect(createAdminApi(vi.fn().mockResolvedValue(response)).snapshot()).rejects.toMatchObject({ code: "INVALID_RESPONSE", message: "The server returned an unexpected response." });
+    }
+
+    for (const cancel of [
+      () => { throw new Error("sync cancel detail"); },
+      () => Promise.reject(new Error("async cancel detail"))
+    ]) {
+      let pulls = 0;
+      const response = new Response(new ReadableStream<Uint8Array>({
+        pull(controller) { pulls += 1; controller.enqueue(new Uint8Array(1024 * 1024)); },
+        cancel
+      }, { highWaterMark: 0 }));
+      await expect(createAdminApi(vi.fn().mockResolvedValue(response)).snapshot()).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+      expect(pulls).toBe(5);
+      await Promise.resolve();
+    }
+  });
+
   it("accepts null-prototype data records", async () => {
     const data = Object.assign(Object.create(null), snapshot);
     const payload = Object.assign(Object.create(null), { ok: true, data });
