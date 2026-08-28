@@ -7,6 +7,7 @@ import {
   type FirestoreClientSettings,
   versionedAeadKeyringFromEnv
 } from "@cloudframe/server";
+import { createProductionApi } from "../deploy/api-entry";
 
 describe("production control-plane composition", () => {
   it("builds separate request-bound Firestore writer and optional legacy reader identities", async () => {
@@ -16,6 +17,7 @@ describe("production control-plane composition", () => {
     expect(source).toContain('ENABLE_LEGACY_SESSION_EXCHANGE !== "1"');
     expect(source).toContain("requestOidcTokenSupplier(request)");
     expect(source).toContain("createFirestoreRecoveryMirror(writer, householdId)");
+    expect(source).not.toContain("input.controlStore.load()");
     expect(source).not.toMatch(/FirestoreRepository|createApiApp|createIndexingService/);
   });
 
@@ -99,33 +101,116 @@ describe("production control-plane composition", () => {
     expect(dependencies).toContain("legacySessionExchange?: LegacySessionExchange");
   });
 
-  it("loads exact-case current and historical key versions", () => {
+  it("maps documented uppercase env suffixes to canonical lowercase versions", () => {
     const first = Buffer.alloc(32, 1).toString("base64url");
     const second = Buffer.alloc(32, 2).toString("base64url");
     expect(versionedAeadKeyringFromEnv({
-      SESSION_KEY_VERSION: "MiXeD",
-      SESSION_KEY_MiXeD: first,
-      SESSION_KEY_old: second
+      SESSION_KEY_VERSION: "v1",
+      SESSION_KEY_V1: first,
+      SESSION_KEY_OLD: second
     }, "SESSION_KEY")).toMatchObject({
-      currentVersion: "MiXeD",
-      keys: { MiXeD: expect.any(Uint8Array), old: expect.any(Uint8Array) }
+      currentVersion: "v1",
+      keys: { v1: expect.any(Uint8Array), old: expect.any(Uint8Array) }
     });
     expect(providerTokenKeyringFromEnv({
       PROVIDER_TOKEN_KEY_VERSION: "v1",
-      PROVIDER_TOKEN_KEY_v1: first
+      PROVIDER_TOKEN_KEY_V1: first
     }).currentVersion).toBe("v1");
   });
 
   it("rejects missing current aliases and case-colliding versions", () => {
     const key = Buffer.alloc(32, 1).toString("base64url");
     expect(() => versionedAeadKeyringFromEnv({
-      CONTROL_PLANE_KEY_VERSION: "v1",
-      CONTROL_PLANE_KEY_V1: key
+      CONTROL_PLANE_KEY_VERSION: "MiXeD",
+      CONTROL_PLANE_KEY_MIXED: key
     }, "CONTROL_PLANE_KEY")).toThrow("CONTROL_PLANE_KEY_INVALID");
     expect(() => providerTokenKeyringFromEnv({
       PROVIDER_TOKEN_KEY_VERSION: "V1",
       PROVIDER_TOKEN_KEY_V1: key,
       PROVIDER_TOKEN_KEY_v1: key
     })).toThrow("PROVIDER_TOKEN_KEY_INVALID");
+    expect(() => versionedAeadKeyringFromEnv({
+      SESSION_KEY_VERSION: "v1",
+      SESSION_KEY_V1: key,
+      SESSION_KEY_old: key
+    }, "SESSION_KEY")).toThrow("SESSION_KEY_INVALID");
+  });
+
+  it.each([
+    ["disabled", "0", 1],
+    ["enabled", "1", 2]
+  ])("constructs the documented production environment with legacy mode %s", (_name, flag, expectedClients) => {
+    const calls: Array<{ config: import("@cloudframe/server").FirestoreClientConfig; client: Record<string, unknown> }> = [];
+    const request = new Request("https://app.test/api/bootstrap", {
+      headers: { "x-vercel-oidc-token": "request-oidc" }
+    });
+    const app = createProductionApi(request, documentedEnvironment(flag), {
+      createFirestoreClient(config) {
+        const client = firestoreClient();
+        calls.push({ config, client });
+        return client as never;
+      },
+      waitUntil: () => undefined,
+      fetch: vi.fn() as never
+    });
+
+    expect(app).toBeTypeOf("function");
+    expect(calls).toHaveLength(expectedClients);
+    expect(calls[0]!.config.serviceAccountEmail).toBe("writer@cloudframe-prod.iam.gserviceaccount.com");
+    if (flag === "1") {
+      expect(calls[1]!.config.serviceAccountEmail).toBe("reader@cloudframe-prod.iam.gserviceaccount.com");
+      expect(calls[1]!.client).not.toBe(calls[0]!.client);
+    }
+    for (const call of calls) {
+      expect(call.config.oidcTokenSupplier).toBeTypeOf("function");
+      expect(call.config.oidcTokenSupplier!()).resolves.toBe("request-oidc");
+    }
   });
 });
+
+function documentedEnvironment(flag: string): NodeJS.ProcessEnv {
+  const key = Buffer.alloc(32, 7).toString("base64url");
+  return {
+    VERCEL_ENV: "production",
+    APP_ORIGIN: "https://app.test",
+    HOUSEHOLD_ID: "h1",
+    CONTROL_PLANE_ENV: "production",
+    BLOB_STORE_ID: "store-1",
+    FIRESTORE_PROJECT_ID: "cloudframe-prod",
+    FIRESTORE_DATABASE_ID: "(default)",
+    GCP_WORKLOAD_IDENTITY_PROVIDER: "projects/1/locations/global/workloadIdentityPools/vercel/providers/vercel",
+    GCP_SERVICE_ACCOUNT_EMAIL: "writer@cloudframe-prod.iam.gserviceaccount.com",
+    GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL: "reader@cloudframe-prod.iam.gserviceaccount.com",
+    ENABLE_LEGACY_SESSION_EXCHANGE: flag,
+    GOOGLE_CLIENT_ID: "google-client",
+    GOOGLE_CLIENT_SECRET: "google-secret",
+    ONEDRIVE_CLIENT_ID: "onedrive-client",
+    ONEDRIVE_CLIENT_SECRET: "onedrive-secret",
+    ONEDRIVE_TENANT: "common",
+    ADMIN_PASSPHRASE_PEPPER: "p".repeat(32),
+    CSRF_SECRET: "c".repeat(32),
+    BROWSE_ID_SECRET: "b".repeat(32),
+    ROOT_ID_SECRET: "r".repeat(32),
+    RATE_LIMIT_SECRET: "l".repeat(32),
+    CONTROL_PLANE_KEY_VERSION: "v1",
+    CONTROL_PLANE_KEY_V1: key,
+    SESSION_KEY_VERSION: "v1",
+    SESSION_KEY_V1: key,
+    BROWSE_HANDLE_KEY_VERSION: "v1",
+    BROWSE_HANDLE_KEY_V1: key,
+    PROVIDER_TOKEN_KEY_VERSION: "v1",
+    PROVIDER_TOKEN_KEY_V1: key
+  };
+}
+
+function firestoreClient() {
+  const get = async () => ({ docs: [] });
+  return {
+    collection() {
+      return {
+        doc: () => ({ set: async () => undefined, get: async () => ({ exists: false, id: "missing", data: () => undefined }) }),
+        where: () => ({ limit: () => ({ get }) })
+      };
+    }
+  };
+}

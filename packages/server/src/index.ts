@@ -9,6 +9,7 @@ export * from "./crypto/provider-tokens";
 export * from "./control-plane/schema";
 export * from "./control-plane/envelope";
 export * from "./control-plane/store";
+export * from "./control-plane/telemetry";
 export * from "./control-plane/vercel-blob";
 export * from "./control-plane/runtime-cache";
 export * from "./control-plane/firestore-mirror";

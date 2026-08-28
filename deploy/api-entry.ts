@@ -28,6 +28,7 @@ import {
   type FirestoreClientConfig,
   type FirestoreClientDependencies,
   type LegacySessionExchange,
+  type ControlPlaneTelemetryObserver,
 } from "@cloudframe/server";
 import {
   createGoogleDriveAdapter,
@@ -43,6 +44,7 @@ export interface ProductionApiCompositionDependencies {
   now?: () => Date;
   fetch?: typeof globalThis.fetch;
   waitUntil?: (promise: Promise<unknown>) => void;
+  telemetryObserver?: ControlPlaneTelemetryObserver;
 }
 
 export function createProductionApi(
@@ -57,6 +59,16 @@ export function createProductionApi(
   const providerFetch = dependencies.fetch ?? fetch;
   const firestoreFactory = dependencies.createFirestoreClient ?? createFirestoreClient;
   const deferred = dependencies.waitUntil ?? ((promise) => { waitUntil(promise); });
+  const telemetryObserver = dependencies.telemetryObserver ?? {
+    emit(event: import("@cloudframe/server").ControlPlaneTelemetryEvent) {
+      try {
+        const output = event.level === "error" ? console.error : console.info;
+        output(JSON.stringify(event));
+      } catch {
+        // Runtime telemetry must never alter request state.
+      }
+    }
+  };
   const firestoreConfig = {
     environment: environment.VERCEL_ENV === "production" ? "production" as const : "staging" as const,
     projectId: required(environment, "FIRESTORE_PROJECT_ID"),
@@ -80,13 +92,15 @@ export function createProductionApi(
     householdId,
     environment: controlEnvironment
   });
+  const requestContext = createControlRequestContextScope();
   const controlStore = createControlPlaneStore({
     durable,
     cache,
     mirror,
     deferred: { run: deferred },
     keyring: versionedAeadKeyringFromEnv(environment, "CONTROL_PLANE_KEY"),
-    now
+    now,
+    householdId
   });
   const providers = createProviderRegistry({
     google: createGoogleDriveAdapter({
@@ -112,7 +126,6 @@ export function createProductionApi(
     requiredSecret(environment, "BROWSE_ID_SECRET"),
     now
   );
-  const requestContext = createControlRequestContextScope();
   const providerTokenKeyring = providerTokenKeyringFromEnv(environment);
   const credentialBroker = createCredentialBroker({
     controlStore,
@@ -178,9 +191,7 @@ export function createProductionApi(
     firestoreConfig,
     firestoreFactory,
     householdId,
-    sessionCodec,
-    controlStore,
-    now
+    sessionCodec
   });
 
   return createControlApiApp({
@@ -197,6 +208,7 @@ export function createProductionApi(
       secret: requiredSecret(environment, "RATE_LIMIT_SECRET")
     }),
     ...(legacySessionExchange ? { legacySessionExchange } : {}),
+    telemetryObserver,
     config: { householdId, allowedOrigin: appOrigin },
     now
   });
@@ -222,8 +234,6 @@ interface LegacyComposition {
   firestoreFactory: NonNullable<ProductionApiCompositionDependencies["createFirestoreClient"]>;
   householdId: string;
   sessionCodec: ReturnType<typeof createSealedSessionCodec>;
-  controlStore: ReturnType<typeof createControlPlaneStore>;
-  now: () => Date;
 }
 
 function createOptionalLegacyExchange(
@@ -241,7 +251,7 @@ function createOptionalLegacyExchange(
     reader: createFirestoreLegacySessionReader(readerClient),
     codec: input.sessionCodec,
     householdId: input.householdId,
-    loadControlDocument: async () => (await input.controlStore.load()).document,
+    loadControlDocument: async () => { throw new Error("LEGACY_EXCHANGE_CONTEXT_REQUIRED"); },
     sessionLifetimeMs: CONTROL_SESSION_LIFETIME_MS
   });
 }

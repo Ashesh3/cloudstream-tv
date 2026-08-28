@@ -196,6 +196,8 @@ describe("final control HTTP API", () => {
       const v2Cookie = cookieValue(upgraded, cookieName);
       expect(v2Cookie).toBe(kind === "admin" ? harness.adminCookie : harness.deviceCookie);
       expect(exchanges).toEqual([`${kind}:${legacyToken}`]);
+      expect(harness.controlStore.loadCount).toBe(1);
+      expect(harness.durable.conditionalReadCount).toBe(1);
 
       const followUp = await harness.app(
         jsonRequest(path, "GET", undefined, {
@@ -268,6 +270,102 @@ describe("final control HTTP API", () => {
     expect(response.headers.getSetCookie().join("\n")).toMatch(
       /oauth_state=;.*Max-Age=0/
     );
+  });
+
+  it.each(["admin", "device"] as const)(
+    "preserves an upgraded legacy %s cookie when downstream route work fails",
+    async (kind) => {
+      const exchanges: string[] = [];
+      const harness = await createControlApiHarness({
+        legacySessionExchange: {
+          async exchangeAdmin(rawToken) {
+            exchanges.push(`admin:${rawToken}`);
+            return { sealedCookie: harness.adminCookie, expiresAt: new Date(harness.now.getTime() + 60_000) };
+          },
+          async exchangeDevice(rawToken) {
+            exchanges.push(`device:${rawToken}`);
+            return { sealedCookie: harness.deviceCookie, expiresAt: new Date(harness.now.getTime() + 60_000) };
+          }
+        }
+      });
+      const cookieName = kind === "admin" ? "admin_session" : "device_session";
+      const legacyToken = kind === "admin" ? "A".repeat(43) : "B".repeat(43);
+      const response = kind === "admin"
+        ? await harness.app(jsonRequest("/api/admin/settings", "PATCH", { allowNewDeviceRequests: false }, {
+            cookie: cookieHeader([cookieName, legacyToken]), origin: harness.origin, "x-csrf-token": "wrong"
+          }))
+        : await harness.app(jsonRequest("/api/tv/media-url", "POST", { handle: "expired-handle" }, {
+            cookie: cookieHeader([cookieName, legacyToken])
+          }));
+
+      expect(exchanges, `status=${response.status}; body=${await response.clone().text()}`).toEqual([
+        `${kind}:${legacyToken}`
+      ]);
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      const upgraded = response.headers.getSetCookie()
+        .map(cookie => new RegExp(`^${cookieName}=([^;]+)`).exec(cookie)?.[1] ?? null)
+        .filter((value): value is string => value !== null && value !== "")
+        .map(decodeURIComponent)
+        .at(-1) ?? null;
+      if (!upgraded) {
+        throw new Error(`missing upgraded cookie: ${JSON.stringify(response.headers.getSetCookie())}`);
+      }
+      expect(upgraded).toBe(
+        kind === "admin" ? harness.adminCookie : harness.deviceCookie
+      );
+
+      const followUp = await harness.app(jsonRequest(
+        kind === "admin" ? "/api/admin/snapshot" : "/api/tv/home",
+        "GET",
+        undefined,
+        { cookie: cookieHeader([cookieName, upgraded!]) }
+      ));
+      expect(followUp.status).toBe(200);
+      expect(exchanges).toEqual([`${kind}:${legacyToken}`]);
+    }
+  );
+
+  it("rejects noncanonical legacy cookies before invoking the exchange hook", async () => {
+    let attempts = 0;
+    const harness = await createControlApiHarness({
+      legacySessionExchange: {
+        async exchangeAdmin() { attempts += 1; return null; },
+        async exchangeDevice() { attempts += 1; return null; }
+      }
+    });
+    for (const token of [
+      "A".repeat(42), "A".repeat(44), `${"A".repeat(42)}.`, `${"A".repeat(42)}~`,
+      `${"A".repeat(42)}+`, ` ${"A".repeat(42)}`, `${"A".repeat(42)}é`
+    ]) {
+      const response = await harness.app(jsonRequest("/api/tv/home", "GET", undefined, {
+        cookie: cookieHeader(["device_session", token])
+      }));
+      expect(response.status).toBe(401);
+    }
+    expect(attempts).toBe(0);
+  });
+
+  it("emits request-bound control-plane telemetry and ignores observer failures", async () => {
+    const observed: unknown[] = [];
+    const harness = await createControlApiHarness({
+      telemetryObserver: { emit: event => observed.push(event) }
+    });
+    const response = await harness.app(jsonRequest(
+      "/api/tv/home",
+      "GET",
+      undefined,
+      harness.deviceHeaders({ "x-request-id": "request-telemetry" })
+    ));
+    expect(response.status).toBe(200);
+    expect(observed).toEqual(expect.arrayContaining([
+      { level: "info", event: "control_plane_cache_hit", requestId: "request-telemetry", householdId: "h1", count: 1 },
+      { level: "info", event: "control_plane_blob_read", requestId: "request-telemetry", householdId: "h1", count: 1 }
+    ]));
+
+    const failing = await createControlApiHarness({
+      telemetryObserver: { emit: () => { throw new Error("observer unavailable"); } }
+    });
+    await expect(failing.app(failing.folderRequest())).resolves.toMatchObject({ status: 200 });
   });
 
   it("requires exact origin and CSRF for unsafe admin requests", async () => {

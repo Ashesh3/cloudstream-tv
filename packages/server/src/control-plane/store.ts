@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { ControlPlaneDocumentV2 } from "../../../shared/src/control-plane.ts";
 import type { VersionedAeadKeyring } from "../crypto/aead.ts";
 import {
@@ -6,6 +8,10 @@ import {
   type ControlPlaneEnvelopeV1
 } from "./envelope.ts";
 import { cloneControlPlaneDocument, parseControlPlaneDocument } from "./schema.ts";
+import {
+  safeControlPlaneTelemetry,
+  type ControlPlaneTelemetryObserver
+} from "./telemetry.ts";
 
 const CONTROL_CACHE_TTL_SECONDS = 300;
 const MAX_CAS_ATTEMPTS = 3;
@@ -57,6 +63,10 @@ export type ControlMutationReducer<T> = (
 export interface ControlPlaneStore {
   load(): Promise<LoadedControlPlaneSnapshot>;
   mutate<T>(name: string, reducer: ControlMutationReducer<T>): Promise<T>;
+  withTelemetry?<T>(
+    observer: ControlPlaneTelemetryObserver | undefined,
+    operation: () => Promise<T>
+  ): Promise<T>;
 }
 
 export type ControlPlaneStoreErrorCode =
@@ -81,6 +91,9 @@ export interface CreateControlPlaneStoreOptions {
   deferred: DeferredTasks;
   keyring: VersionedAeadKeyring;
   now?: () => Date;
+  householdId?: string;
+  requestId?: () => string;
+  observer?: ControlPlaneTelemetryObserver;
 }
 
 function unavailable(): ControlPlaneStoreError {
@@ -147,6 +160,14 @@ export function createControlPlaneStore(
 ): ControlPlaneStore {
   const { cache, deferred, durable, keyring, mirror } = options;
   const now = options.now ?? (() => new Date());
+  const householdId = options.householdId ?? "unknown";
+  const requestId = options.requestId ?? (() => "unknown");
+  const telemetry = new AsyncLocalStorage<ControlPlaneTelemetryObserver | undefined>();
+
+  function emit(event: Parameters<typeof safeControlPlaneTelemetry>[1]): void {
+    const observer = telemetry.getStore() ?? options.observer;
+    safeControlPlaneTelemetry(observer, event);
+  }
 
   function open(stored: StoredControlEnvelope): LoadedControlPlaneSnapshot {
     return {
@@ -163,6 +184,7 @@ export function createControlPlaneStore(
     let stored: StoredControlEnvelope | { notModified: true } | null;
     try {
       stored = await durable.read();
+      emit({ level: "info", event: "control_plane_blob_read", requestId: requestId(), householdId, count: 1 });
     } catch {
       throw unavailable();
     }
@@ -197,12 +219,15 @@ export function createControlPlaneStore(
     }
 
     if (cached === null) {
+      emit({ level: "info", event: "control_plane_cache_miss", requestId: requestId(), householdId, count: 1 });
       return loadFresh(maintainCache);
     }
+    emit({ level: "info", event: "control_plane_cache_hit", requestId: requestId(), householdId, count: 1 });
 
     let durableResult: StoredControlEnvelope | { notModified: true } | null;
     try {
       durableResult = await durable.read(cached.etag);
+      emit({ level: "info", event: "control_plane_blob_read", requestId: requestId(), householdId, count: 1 });
     } catch {
       throw unavailable();
     }
@@ -244,6 +269,7 @@ export function createControlPlaneStore(
     for (let attempt = 1; attempt <= MAX_MIRROR_ATTEMPTS; attempt += 1) {
       try {
         await mirror.write(cloneControlPlaneDocument(document));
+        emit({ level: "info", event: "control_plane_mirror_write", requestId: requestId(), householdId, revision: document.revision, count: 1 });
         try {
           await cache.setMirrorStatus({ status: "current", revision: document.revision });
         } catch {
@@ -252,6 +278,7 @@ export function createControlPlaneStore(
         return;
       } catch {
         if (attempt === MAX_MIRROR_ATTEMPTS) {
+          emit({ level: "error", event: "control_plane_mirror_failed", requestId: requestId(), householdId, revision: document.revision, errorCode: "CONTROL_PLANE_MIRROR_FAILED", count: 1 });
           try {
             await cache.setMirrorStatus({ status: "delayed", revision: document.revision });
           } catch {
@@ -306,5 +333,9 @@ export function createControlPlaneStore(
     throw conflict();
   }
 
-  return { load, mutate };
+  return {
+    load,
+    mutate,
+    withTelemetry: (observer, operation) => telemetry.run(observer, operation)
+  };
 }

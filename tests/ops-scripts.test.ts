@@ -100,7 +100,7 @@ describe("operations scripts", () => {
     const environment = {
       HOUSEHOLD_ID: "h1",
       CONTROL_PLANE_ENV: "preview",
-      PROVIDER_TOKEN_KEY_VERSION: "V1",
+      PROVIDER_TOKEN_KEY_VERSION: "v1",
       PROVIDER_TOKEN_KEY_V1: Buffer.alloc(32, 7).toString("base64url"),
       CONTROL_PLANE_KEY_VERSION: "",
       CONTROL_PLANE_KEY_V1: "",
@@ -125,6 +125,16 @@ describe("operations scripts", () => {
       expect(execution.stdout).not.toContain(secret);
       expect(execution.stdout).not.toMatch(/token|hash|provider|ciphertext|secret/i);
     }
+    expect(migration.stderr).toBe("");
+    const restoreEvents = restore.stderr.trim().split(/\r?\n/).filter(Boolean).map(line => JSON.parse(line));
+    expect(restoreEvents).toEqual([{
+      level: "info",
+      event: "control_plane_restore_read",
+      requestId: "restore-cli",
+      householdId: "h1",
+      count: 1
+    }]);
+    expect(restore.stderr).not.toMatch(/ciphertext|token|hash|providerNodeId|secret/i);
   });
 
   it("normalizes every control-plane CLI failure without leaking its cause", async () => {

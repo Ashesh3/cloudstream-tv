@@ -53,7 +53,7 @@ describe("deployment configuration", () => {
     expect(contract.routes[0]).toEqual({ handle: "filesystem" });
   });
 
-  it("lists all required environment variables as empty placeholders", async () => {
+  it("lists the final environment contract and enables the bounded legacy cutover", async () => {
     const content = await readFile(".env.example", "utf8");
     const entries = new Map(
       content.split(/\r?\n/)
@@ -78,7 +78,8 @@ describe("deployment configuration", () => {
       "PROVIDER_TOKEN_KEY_V1",
     ];
     expect([...entries.keys()]).toEqual(expect.arrayContaining(required));
-    required.forEach(name => expect(["", "v1"], name).toContain(entries.get(name)));
+    required.forEach(name => expect(["", "v1", "1"], name).toContain(entries.get(name)));
+    expect(entries.get("ENABLE_LEGACY_SESSION_EXCHANGE")).toBe("1");
     expect(content).not.toMatch(/KV_REST|ACCESS_CODE|NEXT_PUBLIC_GOOGLE|NEXT_PUBLIC_ONEDRIVE|CRON_SECRET|WORKFLOW_QUEUE_NAMESPACE|BROWSE_CURSOR_SECRET/);
   });
 

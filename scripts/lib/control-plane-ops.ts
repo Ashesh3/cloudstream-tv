@@ -25,6 +25,10 @@ import type {
   ControlHotCache,
   StoredControlEnvelope
 } from "../../packages/server/src/control-plane/store.ts";
+import {
+  safeControlPlaneTelemetry,
+  type ControlPlaneTelemetryObserver
+} from "../../packages/server/src/control-plane/telemetry.ts";
 
 export type ControlPlaneEnvironment = "production" | "preview";
 export type LegacyMigrationCollection =
@@ -119,6 +123,8 @@ interface CommonOperationOptions {
   cache: ControlHotCache;
   keyring: VersionedAeadKeyring;
   providerTokenKeys: Record<string, Uint8Array>;
+  observer?: ControlPlaneTelemetryObserver;
+  requestId?: string;
 }
 
 export interface MigrationOptions extends CommonOperationOptions {
@@ -233,9 +239,17 @@ export async function restoreControlPlane(
 ): Promise<ControlPlaneOpsResult> {
   requireEnvironment(options.environment);
   requireIdentifier(options.householdId, "HOUSEHOLD_ID_INVALID");
-  const recovery = parseControlPlaneDocument(await options.firestore.readRecovery(
+  const recoveryValue = await options.firestore.readRecovery(
     recoveryDocumentPath(options.householdId)
-  ));
+  );
+  safeControlPlaneTelemetry(options.observer, {
+    level: "info",
+    event: "control_plane_restore_read",
+    requestId: options.requestId ?? "restore-cli",
+    householdId: options.householdId,
+    count: 1
+  });
+  const recovery = parseControlPlaneDocument(recoveryValue);
   if (recovery.householdId !== options.householdId) throw new Error("RECOVERY_HOUSEHOLD_MISMATCH");
   validateProviderSecrets(recovery, options.providerTokenKeys, new Date(recovery.updatedAt));
   const checksum = logicalChecksum(recovery);
@@ -394,20 +408,17 @@ function impersonationTarget(value: string): string | null {
 
 export function loadProviderTokenKeys(environment: NodeJS.ProcessEnv): Record<string, Uint8Array> {
   const currentVersion = environment.PROVIDER_TOKEN_KEY_VERSION;
-  if (!currentVersion || !/^[A-Za-z0-9_-]{1,64}$/.test(currentVersion)) {
+  if (!currentVersion || !/^[a-z0-9_-]{1,64}$/.test(currentVersion)) {
     throw new Error("PROVIDER_TOKEN_KEYS_INVALID");
   }
   const keys: Record<string, Uint8Array> = Object.create(null) as Record<string, Uint8Array>;
-  const caseFolded = new Map<string, string>();
   for (const [name, value] of Object.entries(environment)) {
     if (name === "PROVIDER_TOKEN_KEY_VERSION") continue;
-    const match = /^PROVIDER_TOKEN_KEY_([A-Za-z0-9_-]+)$/.exec(name);
-    if (!match || !value) continue;
-    const version = match[1]!;
-    const folded = version.toLowerCase();
-    const previous = caseFolded.get(folded);
-    if (previous && previous !== version) throw new Error("PROVIDER_TOKEN_KEYS_INVALID");
-    caseFolded.set(folded, version);
+    if (!name.startsWith("PROVIDER_TOKEN_KEY_")) continue;
+    const match = /^PROVIDER_TOKEN_KEY_([A-Z0-9_-]+)$/.exec(name);
+    if (!match || !value) throw new Error("PROVIDER_TOKEN_KEYS_INVALID");
+    const version = match[1]!.toLowerCase();
+    if (Object.hasOwn(keys, version)) throw new Error("PROVIDER_TOKEN_KEYS_INVALID");
     const decoded = canonicalBase64Url(value);
     if (decoded.length !== 32) throw new Error("PROVIDER_TOKEN_KEYS_INVALID");
     keys[version] = decoded;

@@ -8,6 +8,7 @@ import type {
   Household
 } from "@cloudframe/shared";
 import type { SealedSessionCodec } from "../auth/sealed-sessions";
+import type { ControlRequestContext } from "../http/request-context";
 
 const LEGACY_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
@@ -42,8 +43,8 @@ export interface LegacySessionExchangeResult {
 }
 
 export interface LegacySessionExchange {
-  exchangeAdmin(rawToken: string, now: Date): Promise<LegacySessionExchangeResult | null>;
-  exchangeDevice(rawToken: string, now: Date): Promise<LegacySessionExchangeResult | null>;
+  exchangeAdmin(rawToken: string, now: Date, context?: ControlRequestContext): Promise<LegacySessionExchangeResult | null>;
+  exchangeDevice(rawToken: string, now: Date, context?: ControlRequestContext): Promise<LegacySessionExchangeResult | null>;
 }
 
 export interface LegacySessionExchangeOptions {
@@ -59,7 +60,8 @@ export function createLegacySessionExchange(
 ): LegacySessionExchange {
   async function exchangeAdmin(
     rawToken: string,
-    now: Date
+    now: Date,
+    context?: ControlRequestContext
   ): Promise<LegacySessionExchangeResult | null> {
     if (!isLegacyToken(rawToken) || invalidDate(now)) return null;
     const matches = await safeRead(() =>
@@ -75,7 +77,7 @@ export function createLegacySessionExchange(
       household.id !== options.householdId ||
       session.passphraseVersion !== household.adminPassphraseVersion
     ) return null;
-    const control = await safeRead(options.loadControlDocument);
+    const control = context?.document ?? await safeRead(options.loadControlDocument);
     if (!control) return null;
     if (
       control.householdId !== options.householdId ||
@@ -98,7 +100,8 @@ export function createLegacySessionExchange(
 
   async function exchangeDevice(
     rawToken: string,
-    now: Date
+    now: Date,
+    context?: ControlRequestContext
   ): Promise<LegacySessionExchangeResult | null> {
     if (!isLegacyToken(rawToken) || invalidDate(now)) return null;
     const matches = await safeRead(() =>
@@ -123,7 +126,7 @@ export function createLegacySessionExchange(
       !device.enabled ||
       device.revokedAt !== null
     ) return null;
-    const control = await safeRead(options.loadControlDocument);
+    const control = context?.document ?? await safeRead(options.loadControlDocument);
     if (!control) return null;
     const current = control.devices[device.id];
     if (

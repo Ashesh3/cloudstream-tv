@@ -26,6 +26,7 @@ import type {
   LegacySessionExchange,
   LegacySessionExchangeResult
 } from "../control-plane/legacy-session-exchange";
+import type { ControlPlaneTelemetryObserver } from "../control-plane/telemetry";
 import {
   ControlAdminServiceError,
   type ControlAdminService
@@ -115,6 +116,7 @@ export interface ControlApiDependencies {
   now?: () => Date;
   requestSubject?: (request: Request) => string;
   logger?: ControlApiLogger;
+  telemetryObserver?: ControlPlaneTelemetryObserver;
 }
 
 const DEFAULT_RATE_LIMITS: Record<string, RuntimeRateLimitPolicy> = {
@@ -134,7 +136,11 @@ interface ActiveDependencies extends ControlApiDependencies {
   now: () => Date;
   requestSubject: (request: Request) => string;
   logger: ControlApiLogger;
-  upgradedCookies: AsyncLocalStorage<{ cookies: string[]; originalRequest: Request }>;
+  telemetryObserver?: ControlPlaneTelemetryObserver;
+  upgradedCookies: AsyncLocalStorage<{
+    originalRequest: Request;
+    upgrades: Map<"admin_session" | "device_session", string>;
+  }>;
 }
 
 interface ProtectedAdminResult {
@@ -153,7 +159,10 @@ export function createControlApiApp(input: ControlApiDependencies) {
     now: input.now ?? (() => new Date()),
     requestSubject: input.requestSubject ?? requestSubject,
     logger: input.logger ?? consoleControlApiLogger,
-    upgradedCookies: new AsyncLocalStorage<{ cookies: string[]; originalRequest: Request }>()
+    upgradedCookies: new AsyncLocalStorage<{
+      originalRequest: Request;
+      upgrades: Map<"admin_session" | "device_session", string>;
+    }>()
   };
 
   return async (request: Request): Promise<Response> => {
@@ -161,49 +170,64 @@ export function createControlApiApp(input: ControlApiDependencies) {
       safeRequestId(request.headers.get("x-request-id")) ?? crypto.randomUUID();
     const startedAt = Date.now();
     const routeTemplate = classifyRoute(request);
-    try {
-      const { response, upgradedCookies } = await dependencies.upgradedCookies.run(
-        { cookies: [], originalRequest: request },
-        async () => ({
-        response: await dependencies.requestContext.runRequest(() =>
-          routeRequest(request, dependencies)
-        ),
-        upgradedCookies: [...(dependencies.upgradedCookies.getStore()?.cookies ?? [])]
-      }));
-      for (const cookie of upgradedCookies) response.headers.append("set-cookie", cookie);
-      secureResponse(response, requestId);
-      dependencies.logger.info(
-        requestEvent(
-          request,
-          routeTemplate,
-          requestId,
-          response.status,
-          Date.now() - startedAt
-        )
-      );
-      return response;
-    } catch (error) {
-      const safe = normalizeHttpError(error);
-      const headers = new Headers(safe.responseHeaders);
-      if (safe.retryAfterSeconds !== undefined) {
-        headers.set("retry-after", String(safe.retryAfterSeconds));
+    const requestTelemetry: ControlPlaneTelemetryObserver | undefined =
+      dependencies.telemetryObserver === undefined
+        ? undefined
+        : {
+            emit(event) {
+              dependencies.telemetryObserver?.emit({ ...event, requestId });
+            }
+          };
+    const result = await dependencies.upgradedCookies.run(
+      { originalRequest: request, upgrades: new Map() },
+      async () => {
+        try {
+          const runRequest = () => dependencies.requestContext.runRequest(
+            () => routeRequest(request, dependencies)
+          );
+          const response = dependencies.controlStore.withTelemetry
+            ? await dependencies.controlStore.withTelemetry(requestTelemetry, runRequest)
+            : await runRequest();
+          safeLog(dependencies.logger, "info", requestEvent(
+            request,
+            routeTemplate,
+            requestId,
+            response.status,
+            Date.now() - startedAt
+          ));
+          return {
+            response,
+            upgrades: new Map(dependencies.upgradedCookies.getStore()?.upgrades)
+          };
+        } catch (error) {
+          const safe = normalizeHttpError(error);
+          const headers = new Headers(safe.responseHeaders);
+          if (safe.retryAfterSeconds !== undefined) {
+            headers.set("retry-after", String(safe.retryAfterSeconds));
+          }
+          const response = errorResponse(safe.toApiError(), safe.status, headers);
+          safeLog(dependencies.logger, "error", {
+            ...requestEvent(
+              request,
+              routeTemplate,
+              requestId,
+              safe.status,
+              Date.now() - startedAt,
+              safe.code
+            ),
+            ...safeErrorIdentity(error),
+            level: "error"
+          });
+          return {
+            response,
+            upgrades: new Map(dependencies.upgradedCookies.getStore()?.upgrades)
+          };
+        }
       }
-      headers.set("x-request-id", requestId);
-      secureHeaders(headers);
-      dependencies.logger.error({
-        ...requestEvent(
-          request,
-          routeTemplate,
-          requestId,
-          safe.status,
-          Date.now() - startedAt,
-          safe.code
-        ),
-        ...safeErrorIdentity(error),
-        level: "error"
-      });
-      return errorResponse(safe.toApiError(), safe.status, headers);
-    }
+    );
+    appendNonConflictingUpgradedCookies(result.response.headers, result.upgrades);
+    secureResponse(result.response, requestId);
+    return result.response;
   };
 }
 
@@ -454,7 +478,8 @@ async function bootstrap(
       "device",
       deviceCookie,
       dependencies,
-      now
+      now,
+      context
     );
     if (exchanged) {
       deviceCookie = exchanged.sealedCookie;
@@ -1150,16 +1175,12 @@ async function protectedAdmin(
     throw unauthorizedAdmin();
   }
   const context = await currentOrLoadControlRequestContext(dependencies);
-  const exchanged = await exchangeLegacyCookie("admin", token, dependencies, now);
+  const exchanged = await exchangeLegacyCookie("admin", token, dependencies, now, context);
   if (exchanged) {
     request = requestWithCookie(
       dependencies.upgradedCookies.getStore()?.originalRequest ?? request,
       "admin_session",
       exchanged.sealedCookie
-    );
-    recordUpgradedCookie(
-      dependencies,
-      createSessionCookie("admin", exchanged.sealedCookie, exchanged.expiresAt)
     );
   }
   return {
@@ -1181,16 +1202,12 @@ async function protectedDevice(
     throw unauthorizedDevice();
   }
   const context = await currentOrLoadControlRequestContext(dependencies);
-  const exchanged = await exchangeLegacyCookie("device", token, dependencies, now);
+  const exchanged = await exchangeLegacyCookie("device", token, dependencies, now, context);
   if (exchanged) {
     request = requestWithCookie(
       dependencies.upgradedCookies.getStore()?.originalRequest ?? request,
       "device_session",
       exchanged.sealedCookie
-    );
-    recordUpgradedCookie(
-      dependencies,
-      createSessionCookie("device", exchanged.sealedCookie, exchanged.expiresAt)
     );
   }
   return {
@@ -1203,13 +1220,26 @@ async function exchangeLegacyCookie(
   kind: "admin" | "device",
   token: string,
   dependencies: ActiveDependencies,
-  now: Date
+  now: Date,
+  context: ControlRequestContext
 ): Promise<LegacySessionExchangeResult | null> {
-  if (!dependencies.legacySessionExchange || token.includes(".")) return null;
+  if (
+    !dependencies.legacySessionExchange ||
+    !/^[A-Za-z0-9_-]{43}$/.test(token)
+  ) return null;
   const exchange = kind === "admin"
     ? dependencies.legacySessionExchange.exchangeAdmin
     : dependencies.legacySessionExchange.exchangeDevice;
-  return exchange(token, now);
+  const result = await exchange(token, now, context);
+  if (result) {
+    const name = kind === "admin" ? "admin_session" : "device_session";
+    recordUpgradedCookie(
+      dependencies,
+      name,
+      createSessionCookie(kind, result.sealedCookie, result.expiresAt)
+    );
+  }
+  return result;
 }
 
 async function currentOrLoadControlRequestContext(
@@ -1227,9 +1257,40 @@ async function currentOrLoadControlRequestContext(
 
 function recordUpgradedCookie(
   dependencies: ActiveDependencies,
+  name: "admin_session" | "device_session",
   cookie: string
 ): void {
-  dependencies.upgradedCookies.getStore()?.cookies.push(cookie);
+  const state = dependencies.upgradedCookies.getStore();
+  if (state) state.upgrades.set(name, cookie);
+}
+
+function appendNonConflictingUpgradedCookies(
+  headers: Headers,
+  cookies: ReadonlyMap<"admin_session" | "device_session", string>
+): void {
+  const existing = headers.getSetCookie();
+  for (const [name, cookie] of cookies) {
+    const retained = existing.filter((value) => !value.startsWith(`${name}=`));
+    if (retained.length !== existing.length) {
+      headers.delete("set-cookie");
+      for (const value of retained) headers.append("set-cookie", value);
+      existing.splice(0, existing.length, ...retained);
+    }
+    headers.append("set-cookie", cookie);
+    existing.push(cookie);
+  }
+}
+
+function safeLog(
+  logger: ControlApiLogger,
+  method: "info" | "error",
+  event: ControlApiLoggerEvent
+): void {
+  try {
+    logger[method](event);
+  } catch {
+    // Observability cannot alter request behavior.
+  }
 }
 
 function requestWithCookie(request: Request, name: string, token: string): Request {

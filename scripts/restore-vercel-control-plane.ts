@@ -5,6 +5,7 @@ import { createVercelBlobControlStore } from "../packages/server/src/control-pla
 import { createVercelRuntimeControlCache } from "../packages/server/src/control-plane/runtime-cache.ts";
 import type { ControlPlaneDocumentV2 } from "../packages/shared/src/control-plane.ts";
 import { versionedAeadKeyringFromEnv } from "../packages/server/src/runtime/keyrings.ts";
+import type { ControlPlaneTelemetryEvent } from "../packages/server/src/control-plane/telemetry.ts";
 import {
   createMigrationFirestoreReader,
   loadOperatorCredentials,
@@ -43,6 +44,7 @@ async function main(): Promise<void> {
       householdId,
       firestore,
       providerTokenKeys,
+      observer: { emit: writeTelemetry },
       ...(apply
         ? activeStoreDependencies(environment, householdId)
         : unusedStoreDependencies())
@@ -52,6 +54,10 @@ async function main(): Promise<void> {
     process.stderr.write(`${safeOperationCode(error)}\n`);
     process.exitCode = 1;
   }
+}
+
+function writeTelemetry(event: ControlPlaneTelemetryEvent): void {
+  process.stderr.write(`${JSON.stringify(event)}\n`);
 }
 
 function fixtureAdapter(value: unknown): LegacyControlPlaneReader {

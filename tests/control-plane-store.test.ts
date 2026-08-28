@@ -362,6 +362,60 @@ describe("control-plane store", () => {
       revision: 2
     });
   });
+
+  it("emits secret-safe counters for cache, Blob, mirror success, and terminal failure", async () => {
+    const successEvents: unknown[] = [];
+    const success = controlStoreHarness(testControlDocument(), {
+      requestId: "request-1",
+      observer: { emit: event => successEvents.push(event) }
+    });
+    await success.store.load();
+    await success.store.mutate("settings", current => ({
+      changed: true,
+      next: { ...current, revision: current.revision + 1 },
+      result: undefined
+    }));
+    await success.deferred.flush();
+    expect(successEvents).toEqual(expect.arrayContaining([
+      { level: "info", event: "control_plane_cache_hit", requestId: "request-1", householdId: "h1", count: 1 },
+      { level: "info", event: "control_plane_blob_read", requestId: "request-1", householdId: "h1", count: 1 },
+      { level: "info", event: "control_plane_mirror_write", requestId: "request-1", householdId: "h1", revision: 2, count: 1 }
+    ]));
+
+    const failureEvents: unknown[] = [];
+    const failure = controlStoreHarness(testControlDocument(), {
+      mirrorFailures: 3,
+      observer: { emit: event => failureEvents.push(event) }
+    });
+    failure.mirror.write = async () => {
+      failure.mirror.writeCount += 1;
+      throw new Error("refresh-token=secret providerNodeId=private");
+    };
+    await failure.store.mutate("settings", current => ({
+      changed: true,
+      next: { ...current, revision: current.revision + 1 },
+      result: undefined
+    }));
+    await failure.deferred.flush();
+    const terminal = failureEvents.find((event: any) => event.event === "control_plane_mirror_failed");
+    expect(terminal).toEqual({
+      level: "error",
+      event: "control_plane_mirror_failed",
+      requestId: "test-request",
+      householdId: "h1",
+      revision: 2,
+      errorCode: "CONTROL_PLANE_MIRROR_FAILED",
+      count: 1
+    });
+    expect(JSON.stringify(terminal)).not.toMatch(/refresh-token|providerNodeId|secret|private/);
+  });
+
+  it("ignores telemetry observer failures", async () => {
+    const harness = controlStoreHarness(testControlDocument(), {
+      observer: { emit: () => { throw new Error("telemetry unavailable"); } }
+    });
+    await expect(harness.store.load()).resolves.toMatchObject({ document: { householdId: "h1" } });
+  });
 });
 
 describe("Vercel control-plane adapters", () => {

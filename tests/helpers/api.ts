@@ -28,6 +28,7 @@ import {
   type ControlApiLogger,
   type ControlApiLoggerEvent,
   type LegacySessionExchange,
+  type ControlPlaneTelemetryObserver,
   type ControlMutationReducer,
   type ControlPlaneStore,
   MemoryControlDurableStore,
@@ -83,6 +84,7 @@ export interface ControlApiHarness {
 
 export interface ControlApiHarnessOptions {
   legacySessionExchange?: LegacySessionExchange;
+  telemetryObserver?: ControlPlaneTelemetryObserver;
 }
 
 export async function createControlApiHarness(
@@ -135,7 +137,8 @@ export async function createControlApiHarness(
     mirror,
     deferred,
     keyring: controlKeyring,
-    now: () => new Date(now)
+    now: () => new Date(now),
+    householdId: document.householdId
   });
   let loadCount = 0;
   let mutateCount = 0;
@@ -152,6 +155,9 @@ export async function createControlApiHarness(
     async mutate<T>(name: string, reducer: ControlMutationReducer<T>) {
       mutateCount += 1;
       return rawStore.mutate(name, reducer);
+    },
+    async withTelemetry<T>(observer: ControlPlaneTelemetryObserver | undefined, operation: () => Promise<T>) {
+      return rawStore.withTelemetry!(observer, operation);
     }
   };
 
@@ -293,7 +299,8 @@ export async function createControlApiHarness(
     config: { householdId: document.householdId, allowedOrigin: origin },
     now: () => new Date(now),
     requestSubject: () => "203.0.113.7",
-    logger
+    logger,
+    telemetryObserver: options.telemetryObserver
   });
 
   const adminCookie = sessionCodec.issueAdmin({

@@ -321,6 +321,43 @@ describe("control-plane operations", () => {
     expect(JSON.stringify(result)).not.toMatch(/token|hash|provider|ciphertext|secret/i);
   });
 
+  it("emits one secret-safe restore-read event and ignores observer failures", async () => {
+    const events: unknown[] = [];
+    const firestore = recoveryReader(migratedControlDocument());
+    await restoreControlPlane({
+      apply: false,
+      environment: "preview",
+      householdId: "h1",
+      firestore,
+      durable: new MemoryControlDurableStore(null),
+      cache: createMemoryControlHotCache(),
+      keyring: testAeadKeyring(),
+      providerTokenKeys: providerKeys(),
+      requestId: "restore-1",
+      observer: { emit: event => events.push(event) }
+    });
+    expect(events).toEqual([{
+      level: "info",
+      event: "control_plane_restore_read",
+      requestId: "restore-1",
+      householdId: "h1",
+      count: 1
+    }]);
+    expect(JSON.stringify(events)).not.toMatch(/ciphertext|authTag|token|providerNodeId/);
+
+    await expect(restoreControlPlane({
+      apply: false,
+      environment: "preview",
+      householdId: "h1",
+      firestore: recoveryReader(migratedControlDocument()),
+      durable: new MemoryControlDurableStore(null),
+      cache: createMemoryControlHotCache(),
+      keyring: testAeadKeyring(),
+      providerTokenKeys: providerKeys(),
+      observer: { emit: () => { throw new Error("observer failed"); } }
+    })).resolves.toMatchObject({ apply: false });
+  });
+
   it("restore apply writes Blob and cache but never Firestore", async () => {
     const firestore = recoveryReader(migratedControlDocument());
     const durable = new MemoryControlDurableStore(null, 0, testAeadKeyring().keys);
@@ -639,14 +676,14 @@ describe("control-plane operations", () => {
     }
   });
 
-  it("loads provider keys using the exact declared version identity", () => {
+  it("loads documented uppercase provider key suffixes as canonical lowercase versions", () => {
     const keys = loadProviderTokenKeys({
-      PROVIDER_TOKEN_KEY_VERSION: "MiXeD",
-      "PROVIDER_TOKEN_KEY_MiXeD": Buffer.alloc(32, 1).toString("base64url"),
+      PROVIDER_TOKEN_KEY_VERSION: "v1",
+      "PROVIDER_TOKEN_KEY_V1": Buffer.alloc(32, 1).toString("base64url"),
       "PROVIDER_TOKEN_KEY_OLD": Buffer.alloc(32, 2).toString("base64url")
     });
-    expect(Object.keys(keys)).toEqual(["MiXeD", "OLD"]);
-    expect(keys.MiXeD).toEqual(Buffer.alloc(32, 1));
+    expect(Object.keys(keys)).toEqual(["v1", "old"]);
+    expect(keys.v1).toEqual(Buffer.alloc(32, 1));
   });
 
   it("rejects missing current provider keys and ambiguous version aliases", () => {
@@ -655,7 +692,12 @@ describe("control-plane operations", () => {
     })).toThrow("PROVIDER_TOKEN_KEYS_INVALID");
     expect(() => loadProviderTokenKeys({
       PROVIDER_TOKEN_KEY_VERSION: "v1",
-      "PROVIDER_TOKEN_KEY_V1": Buffer.alloc(32, 1).toString("base64url")
+      PROVIDER_TOKEN_KEY_V1: Buffer.alloc(32, 1).toString("base64url"),
+      PROVIDER_TOKEN_KEY_old: Buffer.alloc(32, 2).toString("base64url")
+    })).toThrow("PROVIDER_TOKEN_KEYS_INVALID");
+    expect(() => loadProviderTokenKeys({
+      PROVIDER_TOKEN_KEY_VERSION: "MiXeD",
+      "PROVIDER_TOKEN_KEY_MIXED": Buffer.alloc(32, 1).toString("base64url")
     })).toThrow("PROVIDER_TOKEN_KEYS_INVALID");
     expect(() => loadProviderTokenKeys({
       PROVIDER_TOKEN_KEY_VERSION: "V1",

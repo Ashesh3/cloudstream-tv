@@ -1,5 +1,6 @@
 import type { ControlPlaneDocumentV2 } from "@cloudframe/shared";
 import type { VersionedAeadKeyring } from "../crypto/aead";
+import type { ControlPlaneTelemetryObserver } from "./telemetry";
 import {
   decryptControlPlaneEnvelope,
   encryptControlPlaneDocument,
@@ -229,6 +230,8 @@ export interface ControlStoreHarnessOptions {
   conflicts?: number;
   mirrorFailures?: number;
   replaceFailures?: number;
+  observer?: ControlPlaneTelemetryObserver;
+  requestId?: string;
 }
 
 export function controlStoreHarness(
@@ -253,7 +256,16 @@ export function controlStoreHarness(
   cache.replaceOutOfBand(initial);
   const mirror = new MemoryRecoveryMirror(options.mirrorFailures);
   const deferred = new MemoryDeferredTasks();
-  const store = createControlPlaneStore({ durable, cache, mirror, deferred, keyring });
+  const store = createControlPlaneStore({
+    durable,
+    cache,
+    mirror,
+    deferred,
+    keyring,
+    householdId: document.householdId,
+    requestId: () => options.requestId ?? "test-request",
+    observer: options.observer
+  });
 
   return {
     cache,

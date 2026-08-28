@@ -27,6 +27,7 @@
   },
   "include": [
     "api/**/*.ts",
+    "deploy/**/*.ts",
     "packages/**/*.ts",
     "packages/**/*.tsx",
     "tests/**/*.ts",

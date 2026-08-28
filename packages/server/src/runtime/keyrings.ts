@@ -1,7 +1,8 @@
 import type { VersionedAeadKeyring } from "../crypto/aead";
 import type { ProviderTokenKeyring } from "../crypto/provider-tokens";
 
-const KEY_VERSION = /^[A-Za-z0-9_-]{1,64}$/;
+const KEY_VERSION = /^[a-z0-9_-]{1,64}$/;
+const ENV_KEY_VERSION = /^[A-Z0-9_-]{1,64}$/;
 
 export function versionedAeadKeyringFromEnv(
   environment: NodeJS.ProcessEnv,
@@ -23,20 +24,15 @@ function keyring(
   const currentVersion = required(environment, `${prefix}_VERSION`);
   if (!KEY_VERSION.test(currentVersion)) throw new Error(`${prefix}_INVALID`);
   const keys: Record<string, Uint8Array> = {};
-  const canonicalVersions = new Set<string>();
   const stem = `${prefix}_`;
   for (const [name, value] of Object.entries(environment)) {
     if (!name.startsWith(stem) || name === `${prefix}_VERSION` || value === undefined) continue;
-    const version = name.slice(stem.length);
-    const canonical = version.toLocaleLowerCase("en");
-    if (
-      !KEY_VERSION.test(version) ||
-      Object.hasOwn(keys, version) ||
-      canonicalVersions.has(canonical)
-    ) {
+    const suffix = name.slice(stem.length);
+    if (!ENV_KEY_VERSION.test(suffix) || value.length === 0) {
       throw new Error(`${prefix}_INVALID`);
     }
-    canonicalVersions.add(canonical);
+    const version = suffix.toLowerCase();
+    if (Object.hasOwn(keys, version)) throw new Error(`${prefix}_INVALID`);
     keys[version] = decodeKey(value, prefix);
   }
   if (!keys[currentVersion]) throw new Error(`${prefix}_INVALID`);
