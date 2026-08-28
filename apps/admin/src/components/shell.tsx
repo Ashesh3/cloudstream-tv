@@ -86,7 +86,7 @@ export function Shell({ section, onSection, pendingCount, onRefresh, refreshing,
               <p className="truncate text-xs text-muted-foreground">Source truth · television access</p>
             </div>
             {pendingCount > 0 && <Badge variant="secondary">{pendingCount} pending</Badge>}
-            <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing}>
+            <Button variant="outline" size="sm" onClick={onRefresh} aria-busy={refreshing}>
               <RefreshCwIcon data-icon="inline-start" className={refreshing ? "animate-spin" : undefined} />
               <span className="hidden sm:inline">Refresh</span>
             </Button>

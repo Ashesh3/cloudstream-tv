@@ -33,10 +33,10 @@ describe("session cookies", () => {
     expect(cookie).toContain("Path=/");
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("Secure");
-    expect(cookie).toContain("SameSite=Strict");
+    expect(cookie).toContain("SameSite=Lax");
   });
 
-  it("uses lax same-site protection for the admin session only", () => {
+  it("uses lax same-site protection for every sealed session cookie", () => {
     const admin = createSessionCookie(
       "admin",
       "admin-secret",
@@ -51,7 +51,7 @@ describe("session cookies", () => {
     expect(admin).toContain("admin_session=admin-secret");
     expect(admin).toContain("SameSite=Lax");
     expect(request).toContain("device_request=request-secret");
-    expect(request).toContain("SameSite=Strict");
+    expect(request).toContain("SameSite=Lax");
   });
 
   it("clears the selected secure cookie immediately", () => {
@@ -62,7 +62,7 @@ describe("session cookies", () => {
     expect(cookie).toContain("Expires=Thu, 01 Jan 1970 00:00:00 GMT");
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("Secure");
-    expect(cookie).toContain("SameSite=Strict");
+    expect(cookie).toContain("SameSite=Lax");
   });
 });
 

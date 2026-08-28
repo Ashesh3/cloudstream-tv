@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
-import { installAdminFixture, setAdminIndexState } from "./fixtures";
+import { installAdminFixture } from "./fixtures";
 
-test("live source folders stay browsable through indexing and quota recovery", async ({ page }, testInfo) => {
+test("live source folders are immediately available with explicit removal impact", async ({ page }, testInfo) => {
   await installAdminFixture(page, "source-workbench");
   await page.goto("/admin/");
   await page.getByLabel(/passphrase/i).fill("synthetic acceptance passphrase");
@@ -9,67 +9,77 @@ test("live source folders stay browsable through indexing and quota recovery", a
 
   await page.getByRole("button", { name: "Sources", exact: true }).click();
   await page.getByRole("button", { name: "Browse & choose folders" }).click();
-  await expect(page.getByRole("region", { name: "Choose source folders" })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Source health" })).toBeVisible();
-  await expect(page.getByRole("navigation", { name: /admin sections/i }).first()).toBeVisible();
-  await expect(page.getByRole("dialog", { name: "Choose source folders" })).toHaveCount(0);
-  await expect(page.locator(".admin-topbar")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Live provider stage" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Household program ledger" })).toBeVisible();
+  const region = page.getByRole("region", { name: "Choose source folders" });
+  await expect(region).toBeVisible();
+  await expect(region).toContainText("Folders added to the household program are available to assigned televisions immediately.");
+  await expect(page.getByRole("region", { name: "Source health" })).toContainText("Connected");
 
-  await page.getByRole("button", { name: "Open Photos" }).click();
-  await expect(page.getByRole("navigation", { name: "Provider folder path" })).toContainText("My Drive");
-  await page.getByRole("button", { name: "Add Trips to household program" }).click();
-  await expect(workbench(page).getByText("Indexing queued", { exact: true })).toBeVisible();
-
-  await closeWorkbench(page);
-  await setAdminIndexState(page, "indexing");
-  await refreshAndOpenWorkbench(page);
-  await expect(workbench(page).getByText("Indexing selected folders", { exact: true })).toBeVisible();
-
-  await closeWorkbench(page);
-  await setAdminIndexState(page, "quota-exhausted");
-  await refreshAndOpenWorkbench(page);
-  await expect(workbench(page).getByText("Cloudframe indexing is paused by Firestore quota", { exact: true })).toBeVisible();
-  await expect(workbench(page).getByText(/choose a smaller program or enable billing, then retry/i)).toBeVisible();
-
-  await page.getByRole("button", { name: "Open Photos" }).click();
-  await expect(page.getByRole("button", { name: "Trips is in the household program" })).toBeDisabled();
-
-  const region = workbench(page);
-  if (testInfo.project.name === "admin-mobile") {
-    const viewport = page.viewportSize();
-    const bounds = await region.boundingBox();
-    expect(viewport).not.toBeNull();
-    expect(bounds).not.toBeNull();
-    expect(bounds!.x).toBeLessThanOrEqual(1);
-    expect(bounds!.y).toBeLessThanOrEqual(1);
-    expect(Math.abs(bounds!.width - viewport!.width)).toBeLessThanOrEqual(1);
-    expect(bounds!.height).toBeGreaterThanOrEqual(viewport!.height);
-    await expect(page.locator(".source-task-layout")).toHaveCSS("overflow-y", "auto");
+  for (const control of [
+    page.getByRole("button", { name: "Back to sources" }),
+    page.getByRole("button", { name: "Close folder workbench" }),
+    page.getByRole("button", { name: "Back", exact: true }),
+    page.getByRole("button", { name: "My Drive", exact: true }),
+    page.getByRole("button", { name: "Add Photos to household program" })
+  ]) {
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThanOrEqual(44);
+    expect(box!.height).toBeGreaterThanOrEqual(44);
   }
-  await expect(page).toHaveScreenshot("source-workbench-quota.png", { animations: "disabled" });
+
+  await page.getByRole("button", { name: "Open Photos" }).click();
+  await page.getByRole("button", { name: "Add Trips to household program" }).click();
+  await expect(region).toContainText("Trips was added to the household program.");
+  await expect(region).toContainText("available to assigned televisions immediately");
+  await expect(page.getByRole("button", { name: "Trips is in the household program" })).toBeDisabled();
+  await expect(region.getByText("Trips", { exact: true }).last()).toBeVisible();
+
+  await page.getByRole("button", { name: "Close folder workbench" }).click();
+  await expect(page.getByRole("button", { name: "Browse & choose folders" })).toBeFocused();
+  await page.getByRole("button", { name: "Browse & choose folders" }).click();
+  await expect(page.getByRole("region", { name: "Choose source folders" }).getByText("Trips", { exact: true }).last()).toBeVisible();
 
   await page.getByRole("button", { name: "Review removal impact for Trips" }).click();
-  const confirmation = page.getByRole("dialog", { name: "Remove folder from household program" });
-  await expect(confirmation.getByText("Living Room")).toBeVisible();
-  await confirmation.getByRole("button", { name: "Remove Trips" }).click();
-  await expect(workbench(page).getByText("No folders in the household program")).toBeVisible();
-  await expect(workbench(page).getByText("Choose folders", { exact: true })).toBeVisible();
-});
-
-function workbench(page: import("@playwright/test").Page) {
-  return page.getByRole("region", { name: "Choose source folders" });
-}
-
-async function closeWorkbench(page: import("@playwright/test").Page) {
+  let confirmation = page.getByRole("dialog", { name: "Remove folder from household program" });
+  await expect(confirmation).toContainText("No televisions currently use this folder.");
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Close folder workbench" }).click();
-  await expect(page.getByRole("region", { name: "Choose source folders" })).toBeHidden();
-}
-
-async function refreshAndOpenWorkbench(page: import("@playwright/test").Page) {
-  await page.locator(".admin-topbar").getByRole("button").last().click();
-  await expect(page.locator(".truth-reel").first()).toHaveAttribute("data-index-state", /indexing|quota-exhausted/);
+  await page.getByRole("button", { name: "Devices", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Living Room" }).click();
+  await page.getByRole("checkbox", { name: "Trips" }).check();
+  await page.getByRole("button", { name: "Save device" }).click();
+  await expect(page.getByRole("dialog", { name: "Edit device" })).toBeHidden();
+  await page.getByRole("button", { name: "Sources", exact: true }).click();
   await page.getByRole("button", { name: "Browse & choose folders" }).click();
-  await expect(page.getByRole("region", { name: "Choose source folders" })).toBeVisible();
-}
+  await expect(page.getByRole("region", { name: "Choose source folders" }).getByText("Trips", { exact: true }).last()).toBeVisible();
+
+  if (testInfo.project.name === "admin-mobile") {
+    const viewport = page.viewportSize(); const bounds = await region.boundingBox();
+    expect(viewport).not.toBeNull(); expect(bounds).not.toBeNull();
+    expect(bounds!.x).toBeLessThanOrEqual(1); expect(bounds!.y).toBeLessThanOrEqual(1);
+    expect(Math.abs(bounds!.width - viewport!.width)).toBeLessThanOrEqual(1); expect(bounds!.height).toBeGreaterThanOrEqual(viewport!.height);
+  }
+
+  await page.getByRole("button", { name: "Review removal impact for Trips" }).click();
+  confirmation = page.getByRole("dialog", { name: "Remove folder from household program" });
+  await expect(confirmation).toContainText("Access is removed immediately from every assigned television.");
+  await expect(confirmation.getByText("Living Room")).toBeVisible();
+  const removeControl = confirmation.getByRole("button", { name: "Remove Trips" });
+  const removeBox = await removeControl.boundingBox();
+  expect(removeBox).not.toBeNull();
+  expect(removeBox!.width).toBeGreaterThanOrEqual(44);
+  expect(removeBox!.height).toBeGreaterThanOrEqual(44);
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByRole("button", { name: "Review removal impact for Trips" })).toBeFocused();
+  await page.getByRole("button", { name: "Review removal impact for Trips" }).click();
+  await expect(confirmation.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(confirmation).toBeHidden();
+  await expect(page.getByRole("button", { name: "Review removal impact for Trips" })).toBeFocused();
+  await page.getByRole("button", { name: "Review removal impact for Trips" }).click();
+  await confirmation.getByRole("button", { name: "Remove Trips" }).click();
+  await expect(region.getByText("No folders in the household program")).toBeVisible();
+
+  await page.getByRole("button", { name: "Close folder workbench" }).click();
+  await expect(page.getByRole("button", { name: "Browse & choose folders" })).toBeFocused();
+});

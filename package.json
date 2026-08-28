@@ -23,13 +23,11 @@
     "@cloudframe/shared": "*",
     "@cloudframe/server": "*",
     "@cloudframe/providers": "*",
-    "@cloudframe/indexer": "*",
     "@google-cloud/firestore": "^9.0.0",
     "@node-rs/argon2": "^2.1.0",
     "@vercel/blob": "2.8.0",
+    "@vercel/functions": "3.9.5",
     "@vercel/oidc": "^3.8.5",
-    "@workflow/builders": "4.1.10",
-    "workflow": "4.8.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

@@ -5,30 +5,10 @@
     "maxDuration": 300,
     "memory": 1024
   },
-  "workflows": {
-    "regions": ["bom1"],
-    "runtime": "nodejs24.x",
-    "queueNamespace": null
-  },
   "routes": [
-    {
-      "handle": "filesystem"
-    },
-    {
-      "src": "^/\\.well-known/workflow/v1/webhook/([^/]+)$",
-      "dest": "/.well-known/workflow/v1/webhook/[token]"
-    },
-    {
-      "src": "^/api(?:/.*)?$",
-      "dest": "/api"
-    },
-    {
-      "src": "^/admin(?:/.*)?$",
-      "dest": "/admin/index.html"
-    },
-    {
-      "src": "^/(?!api(?:/|$)|\\.well-known/workflow(?:/|$)).*$",
-      "dest": "/index.html"
-    }
+    { "handle": "filesystem" },
+    { "src": "^/api(?:/.*)?$", "dest": "/api" },
+    { "src": "^/admin(?:/.*)?$", "dest": "/admin/index.html" },
+    { "src": "^/(?!api(?:/|$)).*$", "dest": "/index.html" }
   ]
 }

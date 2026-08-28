@@ -17,7 +17,9 @@ export default defineConfig({
     url: "http://127.0.0.1:4173",
     reuseExistingServer: false,
     timeout: 180_000,
-    env: { CLOUDFRAME_E2E_BUILD: "1" }
+    env: { CLOUDFRAME_E2E_BUILD: "1" },
+    stdout: "pipe",
+    stderr: "pipe"
   },
   projects: [
     {

@@ -56,7 +56,13 @@ export async function providerFetch(
     );
   }
   const errorCode = await readProviderErrorCode(response);
-  if (response.status === 401 || errorCode === "invalid_grant") {
+  if (errorCode === "invalid_grant") {
+    throw new ProviderError("PROVIDER_REAUTH_REQUIRED", "Provider authorization is required.", {
+      retryable: false,
+      reauthReason: "invalid_grant"
+    });
+  }
+  if (response.status === 401) {
     throw new ProviderError(
       "PROVIDER_REAUTH_REQUIRED",
       "Provider authorization is required.",
@@ -111,9 +117,6 @@ export async function optionalJson<T>(response: Response): Promise<T | null> {
   return json<T>(response);
 }
 
-export function temporaryExpiry(now: Date, credentialsExpiry?: Date): Date {
-  const conservative = new Date(now.getTime() + 50 * 60 * 1000);
-  return credentialsExpiry && credentialsExpiry < conservative
-    ? credentialsExpiry
-    : conservative;
+export function temporaryExpiry(now: Date): Date {
+  return new Date(now.getTime() + 50 * 60 * 1000);
 }

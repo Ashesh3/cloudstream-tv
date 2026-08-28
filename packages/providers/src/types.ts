@@ -71,24 +71,6 @@ export interface GetNodeInput {
   providerNodeId: string;
 }
 
-export interface ChangesInput {
-  credentials: ProviderCredentials;
-  cursor: string | null;
-  pageSize: number;
-}
-
-export interface ProviderChange {
-  providerNodeId: string;
-  removed: boolean;
-  node: ProviderNode | null;
-}
-
-export interface ChangesPage {
-  changes: ProviderChange[];
-  nextCursor: string | null;
-  deltaCursor: string | null;
-}
-
 export interface ThumbnailUrlInput {
   credentials: ProviderCredentials;
   providerNodeId: string;
@@ -112,7 +94,6 @@ export interface ProviderAdapter {
   getRoot(credentials: ProviderCredentials): Promise<ProviderNode>;
   getNode(input: GetNodeInput): Promise<ProviderNode>;
   listFolder(input: ListFolderInput): Promise<Page<ProviderNode>>;
-  getChanges(input: ChangesInput): Promise<ChangesPage>;
   getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null>;
   getMediaUrl(input: MediaUrlInput): Promise<TemporaryUrl>;
 }
@@ -128,16 +109,22 @@ export type ProviderErrorCode =
 export class ProviderError extends Error {
   readonly retryable: boolean;
   readonly retryAfterSeconds: number | null;
+  readonly reauthReason: "invalid_grant" | null;
 
   constructor(
     readonly code: ProviderErrorCode,
     message: string,
-    options: { retryable: boolean; retryAfterSeconds?: number | null }
+    options: {
+      retryable: boolean;
+      retryAfterSeconds?: number | null;
+      reauthReason?: "invalid_grant" | null;
+    }
   ) {
     super(message);
     this.name = "ProviderError";
     this.retryable = options.retryable;
     this.retryAfterSeconds = options.retryAfterSeconds ?? null;
+    this.reauthReason = options.reauthReason ?? null;
   }
 }
 

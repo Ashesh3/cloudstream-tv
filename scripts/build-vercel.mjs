@@ -15,42 +15,30 @@ const nativePackages = [
   { name: "@node-rs/argon2-linux-arm64-gnu", version: "2.1.0" }
 ];
 
+await buildProductionStatic();
 await rm(output, { recursive: true, force: true });
+await mkdir(output, { recursive: true });
+await cp(join(root, "dist"), join(output, "static"), { recursive: true });
+await buildApiFunction();
+await writeFile(
+  join(output, "config.json"),
+  JSON.stringify({ version: 3, routes: contract.routes }, null, 2)
+);
 
-const inheritedWorkflowNamespace = process.env.WORKFLOW_QUEUE_NAMESPACE;
-delete process.env.WORKFLOW_QUEUE_NAMESPACE;
-const { VercelBuildOutputAPIBuilder } = await import("@workflow/builders");
-const builder = new VercelBuildOutputAPIBuilder({
-    buildTarget: "vercel-build-output-api",
-    dirs: ["./workflows"],
-    workingDir: root,
-    projectRoot: root,
-    moduleSpecifierRoot: root,
-    stepsBundlePath: "",
-    workflowsBundlePath: "",
-    webhookBundlePath: "",
-    externalPackages: [
-      "@node-rs/argon2",
-      "@node-rs/argon2-linux-x64-gnu",
-      "@node-rs/argon2-linux-arm64-gnu"
-    ],
-    runtime: contract.workflows.runtime
-});
-try {
-  await builder.build();
-} finally {
-  if (inheritedWorkflowNamespace !== undefined) {
-    process.env.WORKFLOW_QUEUE_NAMESPACE = inheritedWorkflowNamespace;
-  }
+async function buildProductionStatic() {
+  const npmCli = process.platform === "win32"
+    ? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
+    : "npm";
+  const command = process.platform === "win32" ? process.execPath : npmCli;
+  const args = process.platform === "win32"
+    ? [npmCli, "run", "build"]
+    : ["run", "build"];
+  const environment = { ...process.env };
+  delete environment.CLOUDFRAME_E2E_BUILD;
+  await exec(command, args, { cwd: root, windowsHide: true, env: environment, maxBuffer: 20 * 1024 * 1024 });
 }
 
-await cp(join(root, "dist"), join(output, "static"), { recursive: true });
-const syncWorkflowId = await readSyncWorkflowId();
-await buildApiFunction(syncWorkflowId);
-await applyFunctionContract();
-await mergeRoutes();
-
-async function buildApiFunction(syncWorkflowId) {
+async function buildApiFunction() {
   const directory = join(output, "functions", "api.func");
   await mkdir(directory, { recursive: true });
   await esbuild({
@@ -61,16 +49,11 @@ async function buildApiFunction(syncWorkflowId) {
     format: "cjs",
     target: "node24",
     sourcemap: true,
-    define: {
-      __SYNC_SOURCE_WORKFLOW_ID__: JSON.stringify(syncWorkflowId)
-    },
     external: ["@node-rs/argon2", "@node-rs/argon2/*", "@node-rs/argon2-linux-*"]
   });
   await writeFile(join(directory, "package.json"), JSON.stringify({ type: "commonjs" }, null, 2));
   await copyRuntimePackage("@node-rs/argon2", directory);
-  for (const pkg of nativePackages) {
-    await copyOrFetchRuntimePackage(pkg, directory);
-  }
+  for (const pkg of nativePackages) await copyOrFetchRuntimePackage(pkg, directory);
   await writeFile(
     join(directory, ".vc-config.json"),
     JSON.stringify({
@@ -85,21 +68,6 @@ async function buildApiFunction(syncWorkflowId) {
       regions: contract.api.regions
     }, null, 2)
   );
-}
-
-async function readSyncWorkflowId() {
-  const manifest = JSON.parse(await readFile(
-    join(output, "functions", ".well-known", "workflow", "v1", "manifest.json"),
-    "utf8"
-  ));
-  const workflows = Object.values(manifest.workflows ?? {})
-    .flatMap(value => Object.values(value));
-  const match = workflows.find(workflow =>
-    typeof workflow?.workflowId === "string" &&
-    workflow.workflowId.includes("syncSourceWorkflow")
-  );
-  if (!match) throw new Error("Transformed syncSourceWorkflow metadata is missing");
-  return match.workflowId;
 }
 
 async function copyRuntimePackage(name, functionDirectory, optional = false) {
@@ -120,50 +88,19 @@ async function copyOrFetchRuntimePackage(pkg, functionDirectory) {
   } catch (error) {
     if (error?.code !== "ENOENT") throw error;
   }
-
   const cache = join(root, ".vercel", "native-cache", pkg.name.replace("/", "-"));
   await rm(cache, { recursive: true, force: true });
   await mkdir(cache, { recursive: true });
-  const npmCommand = process.platform === "win32"
+  const npmCli = process.platform === "win32"
     ? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
     : "npm";
-  const command = process.platform === "win32" ? process.execPath : npmCommand;
+  const command = process.platform === "win32" ? process.execPath : npmCli;
   const args = process.platform === "win32"
-    ? [npmCommand, "pack", `${pkg.name}@${pkg.version}`, "--silent"]
+    ? [npmCli, "pack", `${pkg.name}@${pkg.version}`, "--silent"]
     : ["pack", `${pkg.name}@${pkg.version}`, "--silent"];
-  const { stdout } = await exec(command, args, {
-    cwd: cache,
-    windowsHide: true,
-    maxBuffer: 1024 * 1024
-  });
+  const { stdout } = await exec(command, args, { cwd: cache, windowsHide: true, maxBuffer: 1024 * 1024 });
   const archive = stdout.trim().split(/\r?\n/).at(-1);
   if (!archive) throw new Error(`npm pack produced no archive for ${pkg.name}`);
   await exec("tar", ["-xzf", archive], { cwd: cache, windowsHide: true });
   await cp(join(cache, "package"), destination, { recursive: true });
-}
-
-async function applyFunctionContract() {
-  const workflowRoot = join(output, "functions", ".well-known", "workflow", "v1");
-  for (const relative of ["flow.func", "step.func", "webhook/[token].func"]) {
-    const file = join(workflowRoot, relative, ".vc-config.json");
-    const config = JSON.parse(await readFile(file, "utf8"));
-    config.architecture = "x86_64";
-    config.regions = contract.workflows.regions;
-    await writeFile(file, JSON.stringify(config, null, 2));
-  }
-  const stepDirectory = join(workflowRoot, "step.func");
-  await copyRuntimePackage("@node-rs/argon2", stepDirectory);
-  for (const pkg of nativePackages) {
-    await copyOrFetchRuntimePackage(pkg, stepDirectory);
-  }
-}
-
-async function mergeRoutes() {
-  const file = join(output, "config.json");
-  const generated = JSON.parse(await readFile(file, "utf8"));
-  await writeFile(file, JSON.stringify({
-    ...generated,
-    version: 3,
-    routes: contract.routes
-  }, null, 2));
 }

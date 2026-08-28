@@ -1,84 +1,36 @@
-import type { MediaNode, MediaOrder } from "./contracts";
+import type { TvBrowseItemDto } from "./api";
+import type { MediaOrder } from "./contracts";
 
-const collator = new Intl.Collator("en", {
-  sensitivity: "base",
-  numeric: true
-});
+const collator = new Intl.Collator("en", { sensitivity: "base", numeric: true });
 
-function effectiveMediaTime(node: MediaNode): number {
-  return (
-    node.capturedAt ??
-    node.createdAtProvider ??
-    node.modifiedAtProvider ??
-    new Date(0)
-  ).getTime();
+type SortableBrowseItem = Pick<TvBrowseItemDto, "kind" | "name" | "capturedAt" | "createdAtProvider" | "modifiedAtProvider">;
+
+function effectiveBrowseTime(item: SortableBrowseItem): number {
+  const value = item.capturedAt ?? item.createdAtProvider ?? item.modifiedAtProvider;
+  return value === null ? 0 : Date.parse(value);
 }
 
-function compareName(left: MediaNode, right: MediaNode): number {
+function compareName(left: SortableBrowseItem, right: SortableBrowseItem): number {
   return collator.compare(left.name, right.name);
 }
 
-function compareMedia(left: MediaNode, right: MediaNode, order: MediaOrder): number {
-  if (order === "name-asc") {
-    return compareName(left, right);
-  }
-
-  const difference = effectiveMediaTime(left) - effectiveMediaTime(right);
+function compareBrowseMedia(left: SortableBrowseItem, right: SortableBrowseItem, order: MediaOrder): number {
+  if (order === "name-asc") return compareName(left, right);
+  const difference = effectiveBrowseTime(left) - effectiveBrowseTime(right);
   return order === "captured-desc" ? -difference : difference;
 }
 
-export function sortFolderListing(
-  nodes: readonly MediaNode[],
-  order: MediaOrder
-): MediaNode[] {
-  return nodes
-    .map((node, originalIndex) => ({ node, originalIndex }))
+export function sortBrowseItems<T extends SortableBrowseItem>(items: readonly T[], order: MediaOrder): T[] {
+  return items
+    .map((item, originalIndex) => ({ item, originalIndex }))
     .sort((left, right) => {
-      const leftIsFolder = left.node.kind === "folder";
-      const rightIsFolder = right.node.kind === "folder";
+      const leftIsFolder = left.item.kind === "folder";
+      const rightIsFolder = right.item.kind === "folder";
       if (leftIsFolder !== rightIsFolder) return leftIsFolder ? -1 : 1;
-
       const comparison = leftIsFolder
-        ? compareName(left.node, right.node)
-        : compareMedia(left.node, right.node, order);
+        ? compareName(left.item, right.item)
+        : compareBrowseMedia(left.item, right.item, order);
       return comparison || left.originalIndex - right.originalIndex;
     })
-    .map(item => item.node);
-}
-
-export function selectFolderCoverNodeIds(
-  descendants: readonly MediaNode[],
-  limit = 3
-): string[] {
-  const requestedLimit = Math.max(0, limit);
-  if (requestedLimit === 0) return [];
-
-  const sorted = descendants
-    .filter(
-      node =>
-        node.kind !== "folder" &&
-        node.available &&
-        node.hasPreview
-    )
-    .sort((left, right) => {
-      const newestFirst = effectiveMediaTime(right) - effectiveMediaTime(left);
-      const providerOrder =
-        left.providerNodeId < right.providerNodeId
-          ? -1
-          : left.providerNodeId > right.providerNodeId
-            ? 1
-            : 0;
-      return newestFirst || providerOrder;
-    });
-  const selected: string[] = [];
-  const seen = new Set<string>();
-
-  for (const node of sorted) {
-    if (seen.has(node.id)) continue;
-    seen.add(node.id);
-    selected.push(node.id);
-    if (selected.length === requestedLimit) break;
-  }
-
-  return selected;
+    .map(entry => entry.item);
 }

@@ -2,7 +2,6 @@ import { bearer, json, optionalJson, providerFetch, temporaryExpiry } from "./ht
 import { ProviderError } from "./types";
 import type {
   AuthorizationCallback,
-  ChangesPage,
   GetNodeInput,
   ListFolderInput,
   MediaUrlInput,
@@ -132,7 +131,7 @@ export function createOneDriveAdapter(
 
     async listFolder(input: ListFolderInput) {
       const url = input.cursor
-        ? requireFolderGraphCursor(input.cursor, input.folderId)
+        ? requireFolderGraphCursor(input.cursor, input.folderId, input.pageSize)
         : new URL(`${GRAPH_ENDPOINT}/me/drive/items/${encodeURIComponent(input.folderId)}/children`);
       if (!input.cursor) {
         url.searchParams.set("$top", String(input.pageSize));
@@ -144,34 +143,6 @@ export function createOneDriveAdapter(
         items: page.value.map(normalizeOneDriveItem).filter(isDefined),
         nextCursor: page["@odata.nextLink"] ?? null
       };
-    },
-
-    async getChanges(input) {
-      const url = input.cursor
-        ? requireGraphCursor(input.cursor)
-        : new URL(`${GRAPH_ENDPOINT}/me/drive/root/delta`);
-      if (!input.cursor) {
-        url.searchParams.set("$top", String(input.pageSize));
-        url.searchParams.set("$select", ONEDRIVE_SELECT);
-        url.searchParams.set("$expand", "thumbnails($select=large)");
-      }
-      const page = await graphJson<OneDrivePage>(fetch, url, input.credentials.accessToken, now);
-      const changes = page.value
-        .map(item => {
-          if (item.deleted) {
-            return { providerNodeId: item.id, removed: true, node: null };
-          }
-          const node = normalizeOneDriveItem(item);
-          return node
-            ? { providerNodeId: item.id, removed: false, node }
-            : null;
-        })
-        .filter(isDefined);
-      return {
-        changes,
-        nextCursor: page["@odata.nextLink"] ?? null,
-        deltaCursor: page["@odata.nextLink"] ? null : page["@odata.deltaLink"] ?? input.cursor
-      } satisfies ChangesPage;
     },
 
     async getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null> {
@@ -186,7 +157,7 @@ export function createOneDriveAdapter(
       return value?.url
         ? {
             url: value.url,
-            expiresAt: temporaryExpiry(now(), input.credentials.accessTokenExpiresAt)
+            expiresAt: temporaryExpiry(now())
           }
         : null;
     },
@@ -194,7 +165,7 @@ export function createOneDriveAdapter(
     async getMediaUrl(input: MediaUrlInput): Promise<TemporaryUrl> {
       const item = await graphJson<OneDriveItem>(
         fetch,
-        `${GRAPH_ENDPOINT}/me/drive/items/${encodeURIComponent(input.providerNodeId)}?$select=id,@microsoft.graph.downloadUrl`,
+        `${GRAPH_ENDPOINT}/me/drive/items/${encodeURIComponent(input.providerNodeId)}?$select=@microsoft.graph.downloadUrl`,
         input.credentials.accessToken,
         now
       );
@@ -206,13 +177,13 @@ export function createOneDriveAdapter(
           { retryable: false }
         );
       }
-      return { url, expiresAt: temporaryExpiry(now(), input.credentials.accessTokenExpiresAt) };
+      return { url, expiresAt: temporaryExpiry(now()) };
     }
   };
 }
 
 const ONEDRIVE_SELECT =
-  "id,name,parentReference,folder,file,image,video,size,createdDateTime,lastModifiedDateTime,photo,eTag,deleted,@microsoft.graph.downloadUrl";
+  "id,name,parentReference,folder,file,image,video,size,createdDateTime,lastModifiedDateTime,photo,eTag";
 
 interface OneDriveItem {
   id: string;
@@ -228,14 +199,12 @@ interface OneDriveItem {
   photo?: { takenDateTime?: string };
   thumbnails?: Array<{ large?: { url?: string } }>;
   eTag?: string;
-  deleted?: unknown;
   "@microsoft.graph.downloadUrl"?: string;
 }
 
 interface OneDrivePage {
   value: OneDriveItem[];
   "@odata.nextLink"?: string;
-  "@odata.deltaLink"?: string;
 }
 
 interface MicrosoftTokenResponse {
@@ -318,28 +287,52 @@ async function graphJson<T>(
 }
 
 function requireGraphCursor(cursor: string): URL {
-  const url = new URL(cursor);
-  if (url.protocol !== "https:" || url.hostname !== "graph.microsoft.com") {
-    throw new ProviderError(
-      "PROVIDER_BAD_RESPONSE",
-      "The cloud provider returned an invalid cursor.",
-      { retryable: false }
-    );
+  try {
+    const url = new URL(cursor);
+    if (
+      url.origin !== new URL(GRAPH_ENDPOINT).origin ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.hash !== ""
+    ) throw invalidCursor();
+    return url;
+  } catch (error) {
+    if (error instanceof ProviderError) throw error;
+    throw invalidCursor();
+  }
+}
+
+function requireFolderGraphCursor(cursor: string, folderId: string, pageSize: number): URL {
+  const url = requireGraphCursor(cursor);
+  const expectedPath = `/v1.0/me/drive/items/${encodeURIComponent(folderId)}/children`;
+  if (url.pathname !== expectedPath) throw invalidCursor();
+
+  const expected = new Map([
+    ["$top", String(pageSize)],
+    ["$select", ONEDRIVE_SELECT],
+    ["$expand", "thumbnails($select=large)"]
+  ]);
+  const allowed = new Set(["$skiptoken", ...expected.keys()]);
+  for (const key of url.searchParams.keys()) {
+    if (!allowed.has(key) || url.searchParams.getAll(key).length !== 1) {
+      throw invalidCursor();
+    }
+  }
+  const skipTokens = url.searchParams.getAll("$skiptoken");
+  if (skipTokens.length !== 1 || skipTokens[0].trim() === "") throw invalidCursor();
+  for (const [key, value] of expected) {
+    const actual = url.searchParams.get(key);
+    if (actual !== null && actual !== value) throw invalidCursor();
   }
   return url;
 }
 
-function requireFolderGraphCursor(cursor: string, folderId: string): URL {
-  const url = requireGraphCursor(cursor);
-  const expectedPath = `/v1.0/me/drive/items/${encodeURIComponent(folderId)}/children`;
-  if (url.origin !== new URL(GRAPH_ENDPOINT).origin || url.pathname !== expectedPath) {
-    throw new ProviderError(
-      "PROVIDER_BAD_RESPONSE",
-      "The cloud provider returned an invalid cursor.",
-      { retryable: false }
-    );
-  }
-  return url;
+function invalidCursor(): ProviderError {
+  return new ProviderError(
+    "PROVIDER_BAD_RESPONSE",
+    "The cloud provider returned an invalid cursor.",
+    { retryable: false }
+  );
 }
 
 function requireString(value: string | undefined): string {

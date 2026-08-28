@@ -1,4 +1,4 @@
-import type { MediaNodeDto, ThumbnailUrlItem, WatchHistoryDto } from "@cloudframe/shared";
+import type { DirectThumbnailItem, TvBrowseItemDto } from "@cloudframe/shared";
 import {
   activeViewerItem,
   calculateBufferedPercent,
@@ -14,77 +14,134 @@ import {
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "preact/hooks";
 
 import type { TvApi } from "../api/client";
+import type { LocalWatchHistory } from "../state/local-watch-history";
 import { ImageViewer } from "./image-viewer";
 import { VideoPlayer } from "./video-player";
 import { ViewerOverlay } from "./viewer-overlay";
 
-export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews, onClose, onUnauthorized = () => undefined }: {
+export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, previews, onClose, onUnauthorized = () => undefined, onNavigationExpired = () => undefined }: {
   api: TvApi;
-  items: MediaNodeDto[];
+  history: LocalWatchHistory;
+  items: TvBrowseItemDto[];
   selectedItemId: string;
   slideshowSeconds: number;
-  previews: Record<string, ThumbnailUrlItem>;
+  previews: Record<string, DirectThumbnailItem>;
   onClose: (restorationItemId: string) => void;
   onUnauthorized?: () => void;
+  onNavigationExpired?: () => void;
 }) {
   const viewerItems = useMemo(() => items.map(toViewerItem), [items]);
+  const itemHandles = useMemo(() => {
+    const result: Record<string, string> = {};
+    items.forEach(item => { result[item.id] = item.handle; });
+    return result;
+  }, [items]);
   const [state, dispatch] = useReducer(viewerReducer, undefined, () => createViewerState(viewerItems, selectedItemId));
-  const [history, setHistory] = useState<Record<string, WatchHistoryDto>>({});
+  const [historyAvailable, setHistoryAvailable] = useState(history.available);
   const [buffering, setBuffering] = useState(false);
   const [currentSeconds, setCurrentSeconds] = useState(0);
   const [durationSeconds, setDurationSeconds] = useState(0);
   const [bufferedPercent, setBufferedPercent] = useState(0);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const active = activeViewerItem(state);
   const activeUrl = state.urls[active.id];
   const urlRequests = pendingViewerUrlRequests(state);
   const urlRequestKey = urlRequests.map(request => `${request.nodeId}:${request.requestId}`).join("|");
-  const previousVideo = useRef<{ nodeId: string; element: HTMLVideoElement } | null>(null);
+  const associatedVideo = useRef<{ itemId: string; element: HTMLVideoElement } | null>(null);
+  const lastVideoElements = useRef<Record<string, HTMLVideoElement>>({});
   const inflightUrls = useRef<Record<string, { requestId: number; controller: AbortController }>>({});
   const startedUrlRequests = useRef<Record<string, boolean>>({});
+  const urlExpiryTimers = useRef<Record<string, { identity: string; cancel: () => void }>>({});
+  const activeRef = useRef({ id: active.id, kind: active.kind });
+  const urlsRef = useRef(state.urls);
   const latestResumeOverrides = useRef<Record<string, number>>({});
   const latestVideoPositions = useRef<Record<string, number>>({});
+  const lastSavedSnapshots = useRef<Record<string, string>>({});
   const [resumeOverrides, setResumeOverrides] = useState<Record<string, number>>({});
   const closed = useRef(false);
   const unauthorized = useRef(false);
+  const navigationExpired = useRef(false);
   const mounted = useRef(true);
-  const historyController = useRef<AbortController | null>(null);
+  activeRef.current = { id: active.id, kind: active.kind };
+  urlsRef.current = state.urls;
+
+  const abortUrlRequests = useCallback(() => {
+    Object.keys(inflightUrls.current).forEach(nodeId => inflightUrls.current[nodeId]!.controller.abort());
+    inflightUrls.current = {};
+    startedUrlRequests.current = {};
+  }, []);
+
+  const clearUrlExpiryTimers = useCallback(() => {
+    Object.keys(urlExpiryTimers.current).forEach(nodeId => urlExpiryTimers.current[nodeId]!.cancel());
+    urlExpiryTimers.current = {};
+  }, []);
+
+  const invalidateNavigation = useCallback((): boolean => {
+    if (navigationExpired.current) return true;
+    navigationExpired.current = true;
+    closed.current = true;
+    abortUrlRequests();
+    clearUrlExpiryTimers();
+    const element = videoElementFor(active.id);
+    if (element) element.pause();
+    onNavigationExpired();
+    return true;
+  }, [abortUrlRequests, active.id, clearUrlExpiryTimers, onNavigationExpired]);
 
   const propagateUnauthorized = useCallback((error: unknown): boolean => {
     if (!isDeviceUnauthorized(error)) return false;
     if (unauthorized.current) return true;
     unauthorized.current = true;
     closed.current = true;
-    historyController.current?.abort();
-    Object.keys(inflightUrls.current).forEach(nodeId => inflightUrls.current[nodeId]!.controller.abort());
-    inflightUrls.current = {};
-    const element = videoRef.current;
+    abortUrlRequests();
+    clearUrlExpiryTimers();
+    const element = videoElementFor(active.id);
     if (element) element.pause();
     onUnauthorized();
     return true;
-  }, [onUnauthorized]);
+  }, [abortUrlRequests, active.id, clearUrlExpiryTimers, onUnauthorized]);
 
-  const saveElementHistory = useCallback((nodeId: string, element: HTMLVideoElement | null) => {
-    if (!element || unauthorized.current || !mounted.current) return;
-    latestVideoPositions.current[nodeId] = Number.isFinite(element.currentTime) ? Math.max(0, element.currentTime) : 0;
+  const propagateNavigationExpired = useCallback((error: unknown): boolean => {
+    if (!isNavigationExpired(error)) return false;
+    return invalidateNavigation();
+  }, [invalidateNavigation]);
+
+  const saveElementHistory = useCallback((itemId: string, element: HTMLVideoElement | null) => {
+    if (!element || unauthorized.current || !Number.isFinite(element.currentTime) || element.currentTime < 0 || !Number.isFinite(element.duration) || element.duration <= 0) return;
+    latestVideoPositions.current[itemId] = element.currentTime;
     const value = historySnapshot(element.currentTime, element.duration);
-    void api.saveHistory(nodeId, value).catch(error => { propagateUnauthorized(error); });
-  }, [api, propagateUnauthorized]);
+    const snapshotKey = `${value.positionSeconds}:${value.durationSeconds}:${value.completed ? 1 : 0}:${history.available ? 1 : 0}`;
+    if (lastSavedSnapshots.current[itemId] === snapshotKey) return;
+    lastSavedSnapshots.current[itemId] = snapshotKey;
+    history.save(itemId, value);
+    if (!history.available) setHistoryAvailable(false);
+  }, [history]);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    historyController.current = controller;
-    void api.history(controller.signal).then(response => {
-      if (controller.signal.aborted || unauthorized.current || !mounted.current) return;
-      const next: Record<string, WatchHistoryDto> = {};
-      response.history.forEach(value => { next[value.nodeId] = value; });
-      setHistory(next);
-    }).catch(error => { if (!controller.signal.aborted) propagateUnauthorized(error); });
-    return () => {
-      controller.abort();
-      if (historyController.current === controller) historyController.current = null;
-    };
-  }, [api, propagateUnauthorized]);
+  const associateVideo = useCallback((itemId: string, element: HTMLVideoElement | null) => {
+    const current = associatedVideo.current;
+    if (!element) {
+      if (current?.itemId === itemId) {
+        saveElementHistory(current.itemId, current.element);
+        if (associatedVideo.current === current) associatedVideo.current = null;
+      }
+      return;
+    }
+    if (current && (current.itemId !== itemId || current.element !== element)) {
+      current.element.pause();
+      saveElementHistory(current.itemId, current.element);
+      if (associatedVideo.current === current) associatedVideo.current = null;
+    }
+    associatedVideo.current = { itemId, element };
+    lastVideoElements.current[itemId] = element;
+  }, [saveElementHistory]);
+
+  const videoRef = useCallback((element: HTMLVideoElement | null) => {
+    associateVideo(active.id, element);
+  }, [active.id, associateVideo]);
+
+  function videoElementFor(itemId: string): HTMLVideoElement | null {
+    const current = associatedVideo.current;
+    return current?.itemId === itemId ? current.element : lastVideoElements.current[itemId] ?? null;
+  }
 
   useEffect(() => {
     if (unauthorized.current) return;
@@ -104,44 +161,83 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
       startedUrlRequests.current[requestKey] = true;
       const controller = new AbortController();
       inflightUrls.current[nodeId] = { requestId, controller };
-      void api.mediaUrl(nodeId, controller.signal).then(result => {
+      const handle = itemHandles[nodeId];
+      if (!handle) {
+        dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: "authorization" });
+        return;
+      }
+      const expected = items.find(item => item.id === nodeId);
+      if (!expected || expected.kind === "folder") {
+        invalidateNavigation();
+        return;
+      }
+      void api.mediaUrl(handle, controller.signal, { itemId: expected.id, kind: expected.kind }).then(result => {
         if (!controller.signal.aborted && !unauthorized.current && mounted.current) {
           delete inflightUrls.current[nodeId];
-          dispatch({ type: "url-ready", nodeId, requestId: entry.requestId, ...result });
+          dispatch({ type: "url-ready", nodeId, requestId: entry.requestId, url: result.url, expiresAtEpoch: Date.parse(result.expiresAt), revision: result.revision });
         }
       }).catch(error => {
         if (controller.signal.aborted || unauthorized.current || !mounted.current) return;
         delete inflightUrls.current[nodeId];
-        if (propagateUnauthorized(error)) return;
+        if (propagateUnauthorized(error) || propagateNavigationExpired(error)) return;
+        if (isInvalidResponse(error)) {
+          invalidateNavigation();
+          return;
+        }
         if (isAuthorizationEvidence(error)) dispatch({ type: "authorization-expired", nodeId, resumeSeconds: entry.resumeSeconds });
         else dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: "generic" });
       });
     });
-  }, [api, propagateUnauthorized, urlRequestKey]);
+  }, [api, invalidateNavigation, itemHandles, items, propagateNavigationExpired, propagateUnauthorized, urlRequestKey]);
+
+  useEffect(() => {
+    const wanted: Record<string, string> = {};
+    Object.keys(state.urls).forEach(nodeId => {
+      const entry = state.urls[nodeId]!;
+      if (entry.status !== "ready" || entry.expiresAtEpoch === undefined) return;
+      const identity = `${entry.requestId}:${entry.expiresAtEpoch}`;
+      wanted[nodeId] = identity;
+      const previous = urlExpiryTimers.current[nodeId];
+      if (previous?.identity === identity) return;
+      previous?.cancel();
+      const timer: { identity: string; cancel: () => void } = { identity, cancel: () => undefined };
+      timer.cancel = scheduleAt(entry.expiresAtEpoch, () => {
+        if (urlExpiryTimers.current[nodeId]?.identity !== identity) return;
+        delete urlExpiryTimers.current[nodeId];
+        if (unauthorized.current || navigationExpired.current || closed.current || !mounted.current) return;
+        const current = urlsRef.current[nodeId];
+        if (!current || current.status !== "ready" || current.requestId !== entry.requestId || current.expiresAtEpoch !== entry.expiresAtEpoch) return;
+        const currentActive = activeRef.current;
+        const resumeSeconds = currentActive.id === nodeId && currentActive.kind === "video"
+          ? videoElementFor(nodeId)?.currentTime ?? latestVideoPositions.current[nodeId] ?? 0
+          : 0;
+        latestResumeOverrides.current[nodeId] = resumeSeconds;
+        dispatch({ type: "url-expired", nodeId, requestId: entry.requestId, resumeSeconds });
+      });
+      urlExpiryTimers.current[nodeId] = timer;
+    });
+    Object.keys(urlExpiryTimers.current).forEach(nodeId => {
+      if (wanted[nodeId] === urlExpiryTimers.current[nodeId]!.identity) return;
+      urlExpiryTimers.current[nodeId]!.cancel();
+      delete urlExpiryTimers.current[nodeId];
+    });
+  }, [state.urls]);
 
   useEffect(() => () => {
     mounted.current = false;
-    Object.keys(inflightUrls.current).forEach(nodeId => inflightUrls.current[nodeId]!.controller.abort());
-    inflightUrls.current = {};
-    startedUrlRequests.current = {};
-  }, []);
+    abortUrlRequests();
+    clearUrlExpiryTimers();
+  }, [abortUrlRequests, clearUrlExpiryTimers]);
 
   useEffect(() => {
-    const currentVideo = active.kind === "video" ? videoRef.current : null;
-    const previous = previousVideo.current;
-    if (previous && (previous.nodeId !== active.id || previous.element !== currentVideo)) {
-      previous.element.pause();
-      saveElementHistory(previous.nodeId, previous.element);
-    }
-    previousVideo.current = currentVideo ? { nodeId: active.id, element: currentVideo } : null;
     setCurrentSeconds(0);
     setDurationSeconds(0);
     setBuffering(false);
     setBufferedPercent(0);
-  }, [active.id, active.kind, activeUrl?.url, saveElementHistory]);
+  }, [active.id, active.kind, activeUrl?.url]);
 
   useEffect(() => {
-    const element = videoRef.current;
+    const element = videoElementFor(active.id);
     if (!element || active.kind !== "video") return;
     if (state.playbackIntent === "play") void element.play().catch(() => dispatch({ type: "media-error", nodeId: active.id, kind: "generic" }));
     else element.pause();
@@ -161,23 +257,25 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
 
   useEffect(() => {
     if (active.kind !== "video" || !state.videoPlaying) return;
-    const timer = window.setInterval(() => saveElementHistory(active.id, videoRef.current), 15_000);
+    const timer = window.setInterval(() => saveElementHistory(active.id, videoElementFor(active.id)), 15_000);
     return () => window.clearInterval(timer);
   }, [active.id, active.kind, saveElementHistory, state.videoPlaying]);
 
   const close = useCallback(() => {
     if (closed.current || unauthorized.current || !mounted.current) return;
+    if (active.kind === "video") saveElementHistory(active.id, videoElementFor(active.id));
     closed.current = true;
-    if (active.kind === "video") saveElementHistory(active.id, videoRef.current);
+    abortUrlRequests();
+    clearUrlExpiryTimers();
     dispatch({ type: "back" });
     onClose(state.restorationItemId);
-  }, [active.id, active.kind, onClose, saveElementHistory, state.restorationItemId]);
+  }, [abortUrlRequests, active.id, active.kind, clearUrlExpiryTimers, onClose, saveElementHistory, state.restorationItemId]);
 
   useEffect(() => {
     const onVisibility = () => {
-      if (document.visibilityState === "hidden" && active.kind === "video") saveElementHistory(active.id, videoRef.current);
+      if (document.visibilityState === "hidden" && active.kind === "video") saveElementHistory(active.id, videoElementFor(active.id));
     };
-    const onPageHide = () => { if (active.kind === "video") saveElementHistory(active.id, videoRef.current); };
+    const onPageHide = () => { if (active.kind === "video") saveElementHistory(active.id, videoElementFor(active.id)); };
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("pagehide", onPageHide);
     return () => {
@@ -208,8 +306,9 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
         return;
       }
       const code = event.keyCode || event.which;
-      if ((code === 412 || code === 417) && active.kind === "video" && videoRef.current) {
-        videoRef.current.currentTime = clampVideoSeek(videoRef.current.currentTime, videoRef.current.duration, code === 412 ? -10 : 10);
+      const video = videoElementFor(active.id);
+      if ((code === 412 || code === 417) && active.kind === "video" && video) {
+        video.currentTime = clampVideoSeek(video.currentTime, video.duration, code === 412 ? -10 : 10);
         dispatch({ type: "activity" });
         event.preventDefault();
       }
@@ -221,21 +320,22 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
   const retry = () => {
     if (unauthorized.current || !mounted.current) return;
     const before = state.urls[active.id];
-    const resumeSeconds = latestVideoPositions.current[active.id] || currentSeconds || videoRef.current?.currentTime || 0;
+    const resumeSeconds = latestVideoPositions.current[active.id] || currentSeconds || videoElementFor(active.id)?.currentTime || 0;
     latestResumeOverrides.current[active.id] = resumeSeconds;
     setResumeOverrides(current => ({ ...current, [active.id]: resumeSeconds }));
     dispatch({ type: "manual-retry", nodeId: active.id, resumeSeconds });
     if (before?.refreshUsed) dispatch({ type: "media-error", nodeId: active.id, kind: "authorization" });
   };
 
-  const onMediaError = () => {
+  const onMediaError = (itemId: string, element: HTMLVideoElement | null) => {
     if (unauthorized.current || !mounted.current) return;
-    const elementError = active.kind === "video" ? videoRef.current?.error : null;
-    if (active.kind === "video" && videoRef.current) latestVideoPositions.current[active.id] = videoRef.current.currentTime;
-    dispatch({ type: "media-error", nodeId: active.id, kind: elementError?.code === 4 ? "codec" : "generic" });
+    saveElementHistory(itemId, element);
+    if (element && Number.isFinite(element.currentTime) && element.currentTime >= 0) latestVideoPositions.current[itemId] = element.currentTime;
+    dispatch({ type: "media-error", nodeId: itemId, kind: element?.error?.code === 4 ? "codec" : "generic" });
   };
 
-  const historyResume = history[active.id]?.completed ? 0 : history[active.id]?.positionSeconds ?? 0;
+  const historyEntry = history.get(active.id);
+  const historyResume = historyEntry?.completed ? 0 : historyEntry?.positionSeconds ?? 0;
   return (
     <section className="viewer-shell" aria-label="Media viewer" data-media-kind={active.kind}>
       <span className="viewer-frame-corners" aria-hidden="true"><i /><i /><b /><b /></span>
@@ -244,6 +344,7 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
         <strong>{active.name}</strong>
         <span>Up: details · Back: collection</span>
       </div>
+      {!historyAvailable ? <p className="viewer-history-status" role="status">Watch progress is unavailable on this TV, but playback will continue.</p> : null}
       {resumeOverrides[active.id] ? <span className="viewer-resume-note">Resuming at {formatResume(resumeOverrides[active.id]!)}</span> : null}
       <div className="viewer-stage">
         {state.mediaError?.kind === "codec" ? (
@@ -251,14 +352,12 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
         ) : state.mediaError ? (
           <ViewerError title="This media could not be opened" item={active} body={activeUrl?.refreshUsed ? "A fresh link did not solve this media error." : "The provider link failed. You can request one fresh link safely."} onRetry={retry} />
         ) : active.kind === "image" ? (
-          <ImageViewer item={active} url={activeUrl} previewUrl={previews[active.id]?.url} onError={onMediaError} />
+          <ImageViewer item={active} url={activeUrl} previewUrl={previews[active.id]?.url} onError={() => onMediaError(active.id, null)} />
         ) : (
           <VideoPlayer
-            item={active} url={activeUrl} videoRef={videoRef} controlsVisible={state.controlsVisible}
+            key={active.id} item={active} url={activeUrl} videoRef={videoRef} controlsVisible={state.controlsVisible}
             buffering={buffering} currentSeconds={currentSeconds} durationSeconds={durationSeconds} bufferedPercent={bufferedPercent}
-            onLoadedMetadata={() => {
-              const element = videoRef.current;
-              if (!element) return;
+            onLoadedMetadata={element => {
               const resumeSeconds = latestResumeOverrides.current[active.id] || resumeOverrides[active.id] || activeUrl?.resumeSeconds || historyResume;
               if (resumeSeconds > 0 && resumeSeconds < element.duration) element.currentTime = resumeSeconds;
               if (resumeSeconds > 0) delete latestResumeOverrides.current[active.id];
@@ -274,7 +373,7 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
             onPlaying={() => setBuffering(false)}
             onPlay={() => { setBuffering(false); dispatch({ type: "video-playing", nodeId: active.id }); }}
             onCanPlay={() => setBuffering(false)}
-            onPause={() => { dispatch({ type: "video-paused", nodeId: active.id }); saveElementHistory(active.id, videoRef.current); }}
+            onPause={element => { dispatch({ type: "video-paused", nodeId: active.id }); saveElementHistory(active.id, element); }}
             onWaiting={() => setBuffering(true)}
             onTimeUpdate={element => {
               const current = element.currentTime;
@@ -289,9 +388,9 @@ export function Viewer({ api, items, selectedItemId, slideshowSeconds, previews,
               if (!Number.isFinite(element.duration) || element.duration <= 0 || element.buffered.length === 0) return;
               setBufferedPercent(calculateBufferedPercent(element.buffered.end(element.buffered.length - 1), element.duration));
             }}
-            onSeeked={() => saveElementHistory(active.id, videoRef.current)}
-            onEnded={() => dispatch({ type: "video-ended", nodeId: active.id })}
-            onError={onMediaError}
+            onSeeked={element => saveElementHistory(active.id, element)}
+            onEnded={element => { saveElementHistory(active.id, element); dispatch({ type: "video-ended", nodeId: active.id }); }}
+            onError={element => onMediaError(active.id, element)}
           />
         )}
       </div>
@@ -311,7 +410,7 @@ function ViewerError({ title, item, body, onRetry }: { title: string; item: View
   return <div className="viewer-error" role="alert"><h2>{title}</h2><strong>{item.name}</strong><span>{item.mimeType ?? "Unknown format"}</span><p>{body}</p><button type="button" onClick={onRetry}>Try fresh URL</button></div>;
 }
 
-function toViewerItem(item: MediaNodeDto): ViewerMediaItem {
+function toViewerItem(item: TvBrowseItemDto): ViewerMediaItem {
   if (item.kind === "folder") throw new Error("Folders cannot enter the viewer sequence.");
   return { id: item.id, name: item.name, kind: item.kind, mimeType: item.mimeType, revision: item.thumbnailRevision };
 }
@@ -326,9 +425,39 @@ function isDeviceUnauthorized(error: unknown): boolean {
   return code === "DEVICE_UNAUTHORIZED";
 }
 
+function isNavigationExpired(error: unknown): boolean {
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code: unknown }).code) : "";
+  return code === "NAVIGATION_EXPIRED" || code === "ITEM_NOT_FOUND";
+}
+
+function isInvalidResponse(error: unknown): boolean {
+  const code = typeof error === "object" && error && "code" in error ? String((error as { code: unknown }).code) : "";
+  return code === "INVALID_RESPONSE";
+}
+
 function formatResume(seconds: number): string {
   const safe = Math.max(0, Math.floor(seconds));
   const minutes = Math.floor(safe / 60);
   const rest = safe % 60;
   return `${minutes}:${rest < 10 ? "0" : ""}${rest}`;
+}
+
+function scheduleAt(expiresAtEpoch: number, callback: () => void): () => void {
+  const state = { cancelled: false, timer: 0 };
+  const schedule = () => {
+    if (state.cancelled) return;
+    const remaining = expiresAtEpoch - Date.now();
+    if (remaining <= 0) {
+      state.timer = window.setTimeout(() => {
+        if (!state.cancelled) callback();
+      }, 0);
+      return;
+    }
+    state.timer = window.setTimeout(schedule, Math.min(remaining, 2_147_000_000));
+  };
+  schedule();
+  return () => {
+    state.cancelled = true;
+    window.clearTimeout(state.timer);
+  };
 }

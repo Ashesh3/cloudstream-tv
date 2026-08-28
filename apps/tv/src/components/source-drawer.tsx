@@ -1,19 +1,17 @@
-import type { TvRootCardDto } from "@cloudframe/shared";
+import type { TvRootDto } from "@cloudframe/shared";
 import { normalizeTvKey, shouldHandleTvKey } from "@cloudframe/tv-core";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { ProgramStatus } from "./program-status";
 
 export function SourceDrawer({ open, roots, onClose, onHome, onSelect }: {
   open: boolean;
-  roots: TvRootCardDto[];
+  roots: TvRootDto[];
   onClose: () => void;
   onHome: () => void;
-  onSelect: (root: TvRootCardDto) => void;
+  onSelect: (root: TvRootDto) => void;
 }) {
   const host = useRef<HTMLElement>(null);
   const [focusedIndex, setFocusedIndex] = useState(0);
-  const readyRoots = roots.filter(isReadyRoot);
-  const actions = [onClose, onHome, ...readyRoots.map(root => () => onSelect(root))];
+  const actions = [onClose, onHome, ...roots.map(root => () => onSelect(root))];
   useEffect(() => {
     if (!open) return;
     setFocusedIndex(0);
@@ -63,23 +61,16 @@ export function SourceDrawer({ open, roots, onClose, onHome, onSelect }: {
         <header><h2>Choose a collection</h2><button type="button" onClick={onClose} data-drawer-focusable="true" tabIndex={focusedIndex === 0 ? 0 : -1}>Close <kbd>Back</kbd></button></header>
         <button className="drawer-home" type="button" onClick={onHome} data-drawer-focusable="true" tabIndex={focusedIndex === 1 ? 0 : -1}><span className="drawer-cue" />Household program</button>
         <div className="drawer-list">
-          {roots.map(root => {
-            const readyIndex = readyRoots.findIndex(candidate => candidate.id === root.id);
-            const ready = readyIndex >= 0;
-            return (
-            <button type="button" key={root.id} onClick={() => ready && onSelect(root)} aria-disabled={!ready} data-drawer-focusable={ready ? "true" : undefined} tabIndex={ready && focusedIndex === readyIndex + 2 ? 0 : -1}>
+          {roots.map((root, index) => (
+            <button type="button" key={root.id} onClick={() => onSelect(root)} data-drawer-focusable="true" tabIndex={focusedIndex === index + 2 ? 0 : -1}>
               <span className={`provider-monogram ${root.provider}`}>{root.provider === "google" ? "G" : "1"}</span>
-              <span><strong>{root.displayName}</strong><small>{root.accountLabel}</small><ProgramStatus readiness={root.readiness} message={root.readinessMessage} compact /></span>
+              <span><strong>{root.displayName}</strong><small>{root.accountLabel}</small></span>
             </button>
-          );})}
+          ))}
         </div>
       </aside>
     </div>
   );
-}
-
-function isReadyRoot(root: TvRootCardDto): boolean {
-  return root.readiness === "ready" && root.nodeId !== null;
 }
 
 function focusableButtons(host: HTMLElement | null): NodeListOf<HTMLButtonElement> | [] {

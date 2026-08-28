@@ -15,7 +15,6 @@ export default defineProject({
       "@cloudframe/shared": `${root}packages/shared/src/index.ts`,
       "@cloudframe/server": `${root}packages/server/src/index.ts`,
       "@cloudframe/providers": `${root}packages/providers/src/index.ts`,
-      "@cloudframe/indexer": `${root}packages/indexer/src/index.ts`,
       "@cloudframe/tv-core": `${root}packages/tv-core/src/index.ts`
     }
   },

@@ -1,26 +1,26 @@
-import type { RefObject } from "preact";
+import type { Ref } from "preact";
 import type { ViewerMediaItem, ViewerUrlState } from "@cloudframe/tv-core";
 
 export interface VideoPlayerProps {
   item: ViewerMediaItem;
   url?: ViewerUrlState;
-  videoRef: RefObject<HTMLVideoElement>;
+  videoRef: Ref<HTMLVideoElement>;
   controlsVisible: boolean;
   buffering: boolean;
   currentSeconds: number;
   durationSeconds: number;
   bufferedPercent: number;
-  onLoadedMetadata: () => void;
+  onLoadedMetadata: (element: HTMLVideoElement) => void;
   onPlaying: () => void;
   onPlay: () => void;
   onCanPlay: () => void;
-  onPause: () => void;
+  onPause: (element: HTMLVideoElement) => void;
   onWaiting: () => void;
   onTimeUpdate: (element: HTMLVideoElement) => void;
   onProgress: (element: HTMLVideoElement) => void;
-  onSeeked: () => void;
-  onEnded: () => void;
-  onError: () => void;
+  onSeeked: (element: HTMLVideoElement) => void;
+  onEnded: (element: HTMLVideoElement) => void;
+  onError: (element: HTMLVideoElement) => void;
 }
 
 export function VideoPlayer(props: VideoPlayerProps) {
@@ -35,18 +35,18 @@ export function VideoPlayer(props: VideoPlayerProps) {
           aria-label={`Playing ${props.item.name}`}
           preload="metadata"
           playsInline
-          onLoadedMetadata={props.onLoadedMetadata}
+          onLoadedMetadata={event => props.onLoadedMetadata(event.currentTarget)}
           onPlaying={props.onPlaying}
           onPlay={props.onPlay}
-          onPause={props.onPause}
+          onPause={event => props.onPause(event.currentTarget)}
           onWaiting={props.onWaiting}
           onCanPlay={props.onCanPlay}
           onTimeUpdate={event => props.onTimeUpdate(event.currentTarget)}
           onProgress={event => props.onProgress(event.currentTarget)}
           onLoadedData={event => props.onProgress(event.currentTarget)}
-          onSeeked={props.onSeeked}
-          onEnded={props.onEnded}
-          onError={props.onError}
+          onSeeked={event => props.onSeeked(event.currentTarget)}
+          onEnded={event => props.onEnded(event.currentTarget)}
+          onError={event => props.onError(event.currentTarget)}
         />
       ) : <div className="viewer-loading" role="status">Preparing video…</div>}
       <div className={`video-controls${props.controlsVisible ? " is-visible" : ""}`} aria-hidden={!props.controlsVisible}>

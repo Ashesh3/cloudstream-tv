@@ -1,8 +1,7 @@
-import { bearer, json, providerFetch, temporaryExpiry } from "./http";
+import { bearer, json, providerFetch } from "./http";
 import { ProviderError } from "./types";
 import type {
   AuthorizationCallback,
-  ChangesPage,
   GetNodeInput,
   ListFolderInput,
   MediaUrlInput,
@@ -126,7 +125,7 @@ export function createGoogleDriveAdapter(
 
     async listFolder(input: ListFolderInput) {
       const url = new URL(`${DRIVE_ENDPOINT}/files`);
-      url.searchParams.set("q", `'${input.folderId.replaceAll("'", "\\'")}' in parents and trashed = false`);
+      url.searchParams.set("q", `'${input.folderId.replaceAll("'", "\\'")}' in parents and trashed=false`);
       url.searchParams.set("pageSize", String(input.pageSize));
       url.searchParams.set("spaces", "drive");
       url.searchParams.set("supportsAllDrives", "true");
@@ -140,69 +139,25 @@ export function createGoogleDriveAdapter(
       };
     },
 
-    async getChanges(input) {
-      if (!input.cursor) {
-        const start = await googleJson<{ startPageToken: string }>(
-          fetch,
-          `${DRIVE_ENDPOINT}/changes/startPageToken?supportsAllDrives=true`,
-          input.credentials.accessToken,
-          now
-        );
-        return { changes: [], nextCursor: null, deltaCursor: start.startPageToken };
-      }
-      const url = new URL(`${DRIVE_ENDPOINT}/changes`);
-      url.searchParams.set("pageToken", input.cursor);
-      url.searchParams.set("pageSize", String(input.pageSize));
-      url.searchParams.set("includeRemoved", "true");
-      url.searchParams.set("supportsAllDrives", "true");
-      url.searchParams.set("includeItemsFromAllDrives", "true");
-      url.searchParams.set("fields", `nextPageToken,newStartPageToken,changes(fileId,removed,file(${GOOGLE_FILE_FIELDS}))`);
-      const page = await googleJson<GoogleChangesResponse>(
-        fetch,
-        url,
-        input.credentials.accessToken,
-        now
-      );
-      const changes = page.changes
-        .map(change => {
-          if (change.removed) {
-            return { providerNodeId: change.fileId, removed: true, node: null };
-          }
-          const node = change.file ? normalizeGoogleFile(change.file) : null;
-          return node
-            ? { providerNodeId: change.fileId, removed: false, node }
-            : null;
-        })
-        .filter(isDefined);
-      return {
-        changes,
-        nextCursor: page.nextPageToken ?? null,
-        deltaCursor: page.nextPageToken ? null : page.newStartPageToken ?? input.cursor
-      } satisfies ChangesPage;
-    },
-
     async getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null> {
       const file = await googleJson<GoogleFile>(
         fetch,
-        `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}?fields=id,thumbnailLink,version&supportsAllDrives=true`,
+        `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}?fields=mimeType&supportsAllDrives=true`,
         input.credentials.accessToken,
         now
       );
-      if (!file.thumbnailLink) return null;
+      if (!file.mimeType?.startsWith("image/")) return null;
       return {
-        url: resizeGoogleThumbnail(file.thumbnailLink, input.maxDimension),
-        expiresAt: temporaryExpiry(now(), input.credentials.accessTokenExpiresAt)
+        url: googleMediaUrl(input.providerNodeId, input.credentials.accessToken),
+        expiresAt: input.credentials.accessTokenExpiresAt
       };
     },
 
     async getMediaUrl(input: MediaUrlInput): Promise<TemporaryUrl> {
-      const url = new URL(
-        `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}`
-      );
-      url.searchParams.set("alt", "media");
-      url.searchParams.set("access_token", input.credentials.accessToken);
-      url.searchParams.set("supportsAllDrives", "true");
-      return { url: url.toString(), expiresAt: input.credentials.accessTokenExpiresAt };
+      return {
+        url: googleMediaUrl(input.providerNodeId, input.credentials.accessToken),
+        expiresAt: input.credentials.accessTokenExpiresAt
+      };
     }
   };
 }
@@ -227,12 +182,6 @@ interface GoogleFile {
 interface GoogleFilePage {
   files: GoogleFile[];
   nextPageToken?: string;
-}
-
-interface GoogleChangesResponse {
-  changes: Array<{ fileId: string; removed?: boolean; file?: GoogleFile }>;
-  nextPageToken?: string;
-  newStartPageToken?: string;
 }
 
 interface GoogleTokenResponse {
@@ -314,11 +263,12 @@ async function googleJson<T>(
   }));
 }
 
-function resizeGoogleThumbnail(url: string, size: number): string {
-  const normalized = Math.max(64, Math.min(4096, Math.round(size)));
-  return /=[^/?#]+$/.test(url)
-    ? url.replace(/=[^/?#]+$/, `=s${normalized}`)
-    : `${url}=s${normalized}`;
+function googleMediaUrl(providerNodeId: string, accessToken: string): string {
+  const url = new URL(`${DRIVE_ENDPOINT}/files/${encodeURIComponent(providerNodeId)}`);
+  url.searchParams.set("alt", "media");
+  url.searchParams.set("access_token", accessToken);
+  url.searchParams.set("supportsAllDrives", "true");
+  return url.toString();
 }
 
 function requireString(value: string | undefined): string {

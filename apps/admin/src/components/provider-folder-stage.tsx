@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AdminProviderFolderPageResponse, ProviderFolderDto, SourceDto } from "@cloudframe/shared";
+import type { ControlSourceDto, ProviderFolderDto } from "@cloudframe/shared";
 import { ChevronRightIcon, FolderIcon, FolderPlusIcon, LoaderCircleIcon, RefreshCwIcon, XIcon } from "lucide-react";
-import type { AdminApi } from "../api/client";
+import type { AdminApi, AdminProviderFolderPage } from "../api/client";
 import { providerName } from "../design/ledger";
 import { AdminApiError } from "../api/client";
 import { Button } from "./ui/button";
@@ -11,9 +11,9 @@ type BrowseLocation = { providerFolderId?: string; name: string };
 
 export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRootAdded, onClose }: {
   api: AdminApi;
-  source: SourceDto;
+  source: ControlSourceDto;
   selectedProviderNodeIds: ReadonlySet<string>;
-  onRootAdded(root: Awaited<ReturnType<AdminApi["createRoot"]>>["root"]): void;
+  onRootAdded(root: Awaited<ReturnType<AdminApi["createRoot"]>>["root"], providerNodeId: string): Promise<void>;
   onClose(): void;
 }) {
   const providerRootName = source.provider === "google" ? "My Drive" : "OneDrive";
@@ -77,23 +77,24 @@ export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRo
   const navigateBreadcrumb = (index: number) => setTrail(value => value.slice(0, index + 1));
   const add = async (folder: ProviderFolderDto) => {
     setPending(folder.providerNodeId); setError(null);
+    let result: Awaited<ReturnType<AdminApi["createRoot"]>>;
     try {
-      const result = await api.createRoot(source.id, { providerNodeId: folder.providerNodeId });
-      onRootAdded(result.root);
-      setPages(value => value.map(item => item.providerNodeId === folder.providerNodeId ? { ...item, assignedRootId: result.root.id } : item));
-    } catch (cause) { setError(stageError(cause, "Folder could not be added")); }
-    finally { setPending(null); }
+      result = await api.createRoot(source.id, { providerNodeId: folder.providerNodeId });
+    } catch (cause) { setError(stageError(cause, "Folder could not be added")); setPending(null); return; }
+    setPages(value => value.map(item => item.providerNodeId === folder.providerNodeId ? { ...item, assignedRootId: result.root.id } : item));
+    try { await onRootAdded(result.root, folder.providerNodeId); } catch { /* Session expiry is handled by the app. */ }
+    setPending(null);
   };
 
   return <section className="provider-folder-stage flex min-h-0 flex-col" aria-labelledby="provider-folder-stage-title" data-workbench-region="provider-stage">
     <header className="stage-header flex items-start justify-between gap-4 border-b pb-4">
       <div><h2 id="provider-folder-stage-title" className="font-heading text-lg font-medium">Live provider stage</h2><p className="mt-1 text-xs text-muted-foreground">{providerName(source.provider)} · {source.accountLabel}</p></div>
-      <Button size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close folder workbench"><XIcon /></Button>
+      <Button className="workbench-touch-target" size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close folder workbench"><XIcon /></Button>
     </header>
     <div className="flex items-center gap-2 border-b py-3">
-      <Button variant="outline" size="sm" disabled={loading || trail.length <= 1} onClick={() => setTrail(value => value.slice(0, -1))}>Back</Button>
+      <Button className="workbench-touch-target" variant="outline" size="sm" disabled={loading || trail.length <= 1} onClick={() => setTrail(value => value.slice(0, -1))}>Back</Button>
       <nav className="flex min-w-0 flex-1 items-center overflow-x-auto text-sm" aria-label="Provider folder path">
-        {trail.map((item, index) => <span className="flex items-center" key={item.providerFolderId ?? "provider-root"}>{index > 0 && <ChevronRightIcon className="mx-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}<button className="min-h-8 truncate rounded-md px-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50" onClick={() => navigateBreadcrumb(index)}>{item.name}</button></span>)}
+        {trail.map((item, index) => <span className="flex items-center" key={item.providerFolderId ?? "provider-root"}>{index > 0 && <ChevronRightIcon className="mx-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}<button className="workbench-touch-target min-h-11 truncate rounded-md px-2 hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50" onClick={() => navigateBreadcrumb(index)}>{item.name}</button></span>)}
       </nav>
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto py-4" aria-live="polite">
@@ -102,7 +103,7 @@ export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRo
           const selected = Boolean(folder.assignedRootId || selectedProviderNodeIds.has(folder.providerNodeId));
           return <li className="provider-folder-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-2.5" key={folder.providerNodeId}>
             <button className="folder-row-action flex min-h-11 min-w-0 items-center gap-3 px-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50" aria-label={`Open ${folder.name}`} onClick={() => navigate(folder)}><span className="folder-ticket grid size-8 shrink-0 place-items-center bg-muted"><FolderIcon className="size-4" aria-hidden="true" /></span><span className="truncate font-medium">{folder.name}</span><ChevronRightIcon className="ml-auto size-4 shrink-0 text-muted-foreground" aria-hidden="true" /></button>
-            <Button variant={selected ? "secondary" : "outline"} size="sm" disabled={selected || pending === folder.providerNodeId} aria-label={selected ? `${folder.name} is in the household program` : `Add ${folder.name} to household program`} onClick={() => void add(folder)}>{pending === folder.providerNodeId ? <><LoaderCircleIcon className="animate-spin" />Adding…</> : selected ? "Added" : <><FolderPlusIcon />Add</>}</Button>
+            <Button className="workbench-touch-target" variant={selected ? "secondary" : "outline"} size="sm" disabled={selected || pending === folder.providerNodeId} aria-label={selected ? `${folder.name} is in the household program` : `Add ${folder.name} to household program`} onClick={() => void add(folder)}>{pending === folder.providerNodeId ? <><LoaderCircleIcon className="animate-spin" />Adding…</> : selected ? "Added" : <><FolderPlusIcon />Add</>}</Button>
           </li>;
         })}
       </ul>}
@@ -111,7 +112,7 @@ export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRo
   </section>;
 }
 
-function applyResponse(response: AdminProviderFolderPageResponse, append: boolean, setPages: React.Dispatch<React.SetStateAction<ProviderFolderDto[]>>) {
+function applyResponse(response: AdminProviderFolderPage, append: boolean, setPages: React.Dispatch<React.SetStateAction<ProviderFolderDto[]>>) {
   setPages(value => uniqueFolders(append ? [...value, ...response.folders] : response.folders));
 }
 function uniqueFolders(folders: ProviderFolderDto[]) { return [...new Map(folders.map(folder => [folder.providerNodeId, folder])).values()]; }
@@ -119,8 +120,7 @@ function isAbort(cause: unknown) { return cause instanceof DOMException && cause
 type StageError = { title: string; description: string; action: "retry" | "reconnect" };
 function stageError(cause: unknown, fallback = "Folder listing failed"): StageError {
   if (cause instanceof AdminApiError && cause.code === "PROVIDER_REAUTH_REQUIRED" || isCode(cause, "PROVIDER_REAUTH_REQUIRED")) return { title: "Reconnect this account", description: "The provider needs renewed authorization before live browsing can continue.", action: "reconnect" };
-  const description = cause instanceof Error ? cause.message : "The provider folder list could not be loaded.";
-  return { title: fallback, description, action: "retry" };
+  return { title: fallback, description: "Provider temporarily unavailable", action: "retry" };
 }
 function isCode(value: unknown, code: string) { return Boolean(value && typeof value === "object" && "code" in value && (value as { code: unknown }).code === code); }
 function StageErrorPanel({ error, onRetry, onReconnect }: { error: StageError; onRetry(): void; onReconnect(): void }) { return <div className="grid min-h-52 place-items-center rounded-xl border border-destructive/30 p-6 text-center" role="alert"><div><p className="font-medium text-destructive">{error.title}</p><p className="mt-1 max-w-md text-sm text-muted-foreground">{error.description}</p><Button className="mt-4" variant="outline" onClick={error.action === "reconnect" ? onReconnect : onRetry}><RefreshCwIcon />{error.action === "reconnect" ? "Return to reconnect" : "Try again"}</Button></div></div>; }

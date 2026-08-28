@@ -31,6 +31,28 @@ export function parseCookies(request: Request): Record<string, string> {
   return result;
 }
 
+export function readUniqueCookie(
+  request: Request,
+  requestedName: string
+): string | null {
+  let value: string | null = null;
+  for (const pair of (request.headers.get("cookie") ?? "").split(";")) {
+    const separator = pair.indexOf("=");
+    if (separator < 0 || pair.slice(0, separator).trim() !== requestedName) {
+      continue;
+    }
+    if (value !== null) {
+      throw new Error("DUPLICATE_COOKIE");
+    }
+    try {
+      value = decodeURIComponent(pair.slice(separator + 1).trim());
+    } catch {
+      value = "";
+    }
+  }
+  return value;
+}
+
 export type RequestSubjectResolver = (request: Request) => string;
 
 export const requestSubject: RequestSubjectResolver = request => {

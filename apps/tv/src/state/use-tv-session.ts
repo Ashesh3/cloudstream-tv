@@ -1,4 +1,4 @@
-import type { BootstrapResponse, DeviceDto, DeviceRequestDto, HouseholdDto } from "@cloudframe/shared";
+import type { ControlDeviceDto, ControlHouseholdDto, ControlRequestDto, TvBootstrapResponse } from "@cloudframe/shared";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 import type { TvApi } from "../api/client";
@@ -8,8 +8,8 @@ export type TvSessionState =
   | { status: "unsupported" }
   | { status: "requests-disabled" }
   | { status: "unenrolled" }
-  | { status: "pending"; request: DeviceRequestDto }
-  | { status: "ready"; device: DeviceDto; household: HouseholdDto }
+  | { status: "pending"; request: ControlRequestDto }
+  | { status: "ready"; device: ControlDeviceDto; household: ControlHouseholdDto }
   | { status: "denied" | "expired" | "revoked" }
   | { status: "offline"; message: string };
 
@@ -20,7 +20,7 @@ export function useTvSession(api: TvApi, browserSupported: boolean) {
   const pollAttempt = useRef(0);
   const timer = useRef<number | null>(null);
 
-  const apply = useCallback((response: BootstrapResponse) => {
+  const apply = useCallback((response: TvBootstrapResponse) => {
     const enrollment = response.enrollment;
     if (enrollment.state === "pending") setState({ status: "pending", request: enrollment.request });
     else if (enrollment.state === "ready") setState({ status: "ready", device: enrollment.device, household: enrollment.household });
