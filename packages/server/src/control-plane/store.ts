@@ -65,6 +65,7 @@ export interface ControlPlaneStore {
   mutate<T>(name: string, reducer: ControlMutationReducer<T>): Promise<T>;
   withTelemetry?<T>(
     observer: ControlPlaneTelemetryObserver | undefined,
+    requestId: string,
     operation: () => Promise<T>
   ): Promise<T>;
 }
@@ -162,10 +163,13 @@ export function createControlPlaneStore(
   const now = options.now ?? (() => new Date());
   const householdId = options.householdId ?? "unknown";
   const requestId = options.requestId ?? (() => "unknown");
-  const telemetry = new AsyncLocalStorage<ControlPlaneTelemetryObserver | undefined>();
+  const telemetry = new AsyncLocalStorage<{
+    observer: ControlPlaneTelemetryObserver | undefined;
+    requestId: string;
+  }>();
 
   function emit(event: Parameters<typeof safeControlPlaneTelemetry>[1]): void {
-    const observer = telemetry.getStore() ?? options.observer;
+    const observer = telemetry.getStore()?.observer ?? options.observer;
     safeControlPlaneTelemetry(observer, event);
   }
 
@@ -264,12 +268,14 @@ export function createControlPlaneStore(
   }
 
   async function mirrorCommittedDocument(
-    document: ControlPlaneDocumentV2
+    document: ControlPlaneDocumentV2,
+    scheduledObserver: ControlPlaneTelemetryObserver | undefined,
+    scheduledRequestId: string
   ): Promise<void> {
     for (let attempt = 1; attempt <= MAX_MIRROR_ATTEMPTS; attempt += 1) {
       try {
         await mirror.write(cloneControlPlaneDocument(document));
-        emit({ level: "info", event: "control_plane_mirror_write", requestId: requestId(), householdId, revision: document.revision, count: 1 });
+        safeControlPlaneTelemetry(scheduledObserver, { level: "info", event: "control_plane_mirror_write", requestId: scheduledRequestId, householdId, revision: document.revision, count: 1 });
         try {
           await cache.setMirrorStatus({ status: "current", revision: document.revision });
         } catch {
@@ -278,7 +284,7 @@ export function createControlPlaneStore(
         return;
       } catch {
         if (attempt === MAX_MIRROR_ATTEMPTS) {
-          emit({ level: "error", event: "control_plane_mirror_failed", requestId: requestId(), householdId, revision: document.revision, errorCode: "CONTROL_PLANE_MIRROR_FAILED", count: 1 });
+          safeControlPlaneTelemetry(scheduledObserver, { level: "error", event: "control_plane_mirror_failed", requestId: scheduledRequestId, householdId, revision: document.revision, errorCode: "CONTROL_PLANE_MIRROR_FAILED", count: 1 });
           try {
             await cache.setMirrorStatus({ status: "delayed", revision: document.revision });
           } catch {
@@ -317,7 +323,12 @@ export function createControlPlaneStore(
       try {
         const committed = await durable.replace(envelope, current.etag);
         await replaceCacheBestEffort(cache, { envelope, etag: committed.etag });
-        deferred.run(mirrorCommittedDocument(next));
+        const scheduledTelemetry = telemetry.getStore();
+        deferred.run(mirrorCommittedDocument(
+          next,
+          scheduledTelemetry?.observer ?? options.observer,
+          scheduledTelemetry?.requestId ?? requestId()
+        ));
         return mutation.result;
       } catch (error) {
         if (!isConflict(error)) {
@@ -336,6 +347,7 @@ export function createControlPlaneStore(
   return {
     load,
     mutate,
-    withTelemetry: (observer, operation) => telemetry.run(observer, operation)
+    withTelemetry: (observer, activeRequestId, operation) =>
+      telemetry.run({ observer, requestId: activeRequestId }, operation)
   };
 }

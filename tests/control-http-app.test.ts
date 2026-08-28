@@ -368,6 +368,30 @@ describe("final control HTTP API", () => {
     await expect(failing.app(failing.folderRequest())).resolves.toMatchObject({ status: 200 });
   });
 
+  it("retains the HTTP request id for mirror telemetry after the response scope ends", async () => {
+    const observed: unknown[] = [];
+    const harness = await createControlApiHarness({
+      telemetryObserver: { emit: event => observed.push(event) }
+    });
+    const response = await harness.app(jsonRequest(
+      "/api/admin/settings",
+      "PATCH",
+      { allowNewDeviceRequests: false },
+      harness.adminMutationHeaders({ "x-request-id": "mutation-request" })
+    ));
+
+    expect(response.status).toBe(200);
+    await harness.deferred.flush();
+    expect(observed).toContainEqual({
+      level: "info",
+      event: "control_plane_mirror_write",
+      requestId: "mutation-request",
+      householdId: "h1",
+      revision: 2,
+      count: 1
+    });
+  });
+
   it("requires exact origin and CSRF for unsafe admin requests", async () => {
     const harness = await createControlApiHarness();
     const body = { allowNewDeviceRequests: false };

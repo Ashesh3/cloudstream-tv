@@ -156,8 +156,8 @@ export async function createControlApiHarness(
       mutateCount += 1;
       return rawStore.mutate(name, reducer);
     },
-    async withTelemetry<T>(observer: ControlPlaneTelemetryObserver | undefined, operation: () => Promise<T>) {
-      return rawStore.withTelemetry!(observer, operation);
+    async withTelemetry<T>(observer: ControlPlaneTelemetryObserver | undefined, requestId: string, operation: () => Promise<T>) {
+      return rawStore.withTelemetry!(observer, requestId, operation);
     }
   };
 

@@ -186,7 +186,7 @@ export function createControlApiApp(input: ControlApiDependencies) {
             () => routeRequest(request, dependencies)
           );
           const response = dependencies.controlStore.withTelemetry
-            ? await dependencies.controlStore.withTelemetry(requestTelemetry, runRequest)
+            ? await dependencies.controlStore.withTelemetry(requestTelemetry, requestId, runRequest)
             : await runRequest();
           safeLog(dependencies.logger, "info", requestEvent(
             request,

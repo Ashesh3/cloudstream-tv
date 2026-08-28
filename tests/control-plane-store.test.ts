@@ -416,6 +416,53 @@ describe("control-plane store", () => {
     });
     await expect(harness.store.load()).resolves.toMatchObject({ document: { householdId: "h1" } });
   });
+
+  it("retains the scheduling request id for mirror telemetry after the request scope exits", async () => {
+    const keyring = testAeadKeyring();
+    const initial = {
+      envelope: encryptControlPlaneDocument(testControlDocument(), keyring),
+      etag: "etag-1"
+    };
+    const durable = new MemoryControlDurableStore(initial, 0, keyring.keys);
+    const cache = createMemoryControlHotCache();
+    cache.replaceOutOfBand(initial);
+    const deferred = new MemoryDeferredTasks();
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const mirror = { write: vi.fn(async () => gate) };
+    const events: unknown[] = [];
+    const store = createControlPlaneStore({
+      durable,
+      cache,
+      mirror,
+      deferred,
+      keyring,
+      householdId: "h1"
+    });
+
+    await store.withTelemetry!(
+      { emit: event => events.push(event) },
+      "originating-request",
+      () => store.mutate("settings", current => ({
+        changed: true,
+        next: { ...current, revision: current.revision + 1 },
+        result: undefined
+      }))
+    );
+    expect(events.some((event: any) => event.event === "control_plane_mirror_write")).toBe(false);
+
+    release();
+    await deferred.flush();
+
+    expect(events).toContainEqual({
+      level: "info",
+      event: "control_plane_mirror_write",
+      requestId: "originating-request",
+      householdId: "h1",
+      revision: 2,
+      count: 1
+    });
+  });
 });
 
 describe("Vercel control-plane adapters", () => {
