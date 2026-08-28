@@ -336,12 +336,47 @@ function validServiceAccountCredential(
 function validExternalAccountCredential(credential: Record<string, unknown>): boolean {
   const source = credential.credential_source;
   return credential.type === "external_account" &&
-    validBoundedString(credential.audience, 1, 2048) &&
+    validWorkloadIdentityAudience(credential.audience) &&
     credential.subject_token_type === "urn:ietf:params:oauth:token-type:jwt" &&
     credential.token_url === "https://sts.googleapis.com/v1/token" &&
-    !!source && typeof source === "object" && !Array.isArray(source) &&
-    Object.keys(source).length > 0 &&
-    Object.values(source).some((value) => validBoundedString(value, 1, 4096));
+    validCredentialSource(source);
+}
+
+function validWorkloadIdentityAudience(value: unknown): boolean {
+  return typeof value === "string" &&
+    /^\/\/iam\.googleapis\.com\/projects\/[1-9][0-9]{0,30}\/locations\/global\/workloadIdentityPools\/[A-Za-z0-9_-]{1,128}\/providers\/[A-Za-z0-9_-]{1,128}$/.test(value);
+}
+
+function validCredentialSource(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const source = value as Record<string, unknown>;
+  const hasFile = Object.hasOwn(source, "file");
+  const hasUrl = Object.hasOwn(source, "url");
+  if (hasFile === hasUrl) return false;
+  const allowed = hasFile ? new Set(["file", "format"]) : new Set(["url", "format"]);
+  if (Object.keys(source).some((key) => !allowed.has(key))) return false;
+  if (hasFile && !validBoundedString(source.file, 1, 4096)) return false;
+  if (hasUrl && !validCredentialSourceUrl(source.url)) return false;
+  return validCredentialFormat(source.format);
+}
+
+function validCredentialSourceUrl(value: unknown): boolean {
+  if (typeof value !== "string" || value.length > 4096) return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && !url.username && !url.password && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+function validCredentialFormat(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const format = value as Record<string, unknown>;
+  if (format.type === "text") return Object.keys(format).length === 1;
+  return format.type === "json" &&
+    Object.keys(format).length === 2 &&
+    validBoundedString(format.subject_token_field_name, 1, 256);
 }
 
 function impersonationTarget(value: string): string | null {
@@ -897,12 +932,22 @@ function requiredCredentialValue(value: string | undefined): string {
 
 function canonicalServiceAccountEmail(value: string | undefined): string {
   const email = requiredCredentialValue(value).toLowerCase();
-  if (
-    email.length > 254 ||
-    !/^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?@[a-z0-9](?:[a-z0-9.-]{0,125}[a-z0-9])?$/.test(email) ||
-    email.includes("..")
-  ) throw new Error("OPERATOR_IDENTITY_INVALID");
+  if (email.length > 254 || !email.endsWith(".gserviceaccount.com")) {
+    throw new Error("OPERATOR_IDENTITY_INVALID");
+  }
+  const at = email.indexOf("@");
+  if (at < 1 || at !== email.lastIndexOf("@")) throw new Error("OPERATOR_IDENTITY_INVALID");
+  const local = email.slice(0, at);
+  const domain = email.slice(at + 1);
+  if (!validDnsLabel(local, 128) || !domain.split(".").every((label) => validDnsLabel(label, 63))) {
+    throw new Error("OPERATOR_IDENTITY_INVALID");
+  }
   return email;
+}
+
+function validDnsLabel(value: string, maximum: number): boolean {
+  return value.length >= 1 && value.length <= maximum &&
+    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(value);
 }
 
 function canonicalCredentialEmail(value: unknown): string | null {

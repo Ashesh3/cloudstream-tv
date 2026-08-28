@@ -524,7 +524,7 @@ describe("control-plane operations", () => {
   it("requires a dedicated matching operator credential file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cloudframe-operator-"));
     try {
-      const email = "operator@example.test";
+      const email = "operator@project-1.iam.gserviceaccount.com";
       const service = join(directory, "service.json");
       await writeFile(service, JSON.stringify(validServiceCredential(email)));
       await expect(loadOperatorCredentials({ operatorEmail: email, credentialFile: service }))
@@ -533,16 +533,25 @@ describe("control-plane operations", () => {
         operatorEmail: email, credentialFile: service, runtimeWriterEmail: email
       })).rejects.toThrow("OPERATOR_IDENTITY_INVALID");
       await expect(loadOperatorCredentials({
-        operatorEmail: "other@example.test", credentialFile: service
+        operatorEmail: "other@project-1.iam.gserviceaccount.com", credentialFile: service
       })).rejects.toThrow("OPERATOR_CREDENTIALS_INVALID");
       await expect(loadOperatorCredentials({
-        operatorEmail: "OPERATOR@EXAMPLE.TEST", credentialFile: service
+        operatorEmail: "OPERATOR@PROJECT-1.IAM.GSERVICEACCOUNT.COM", credentialFile: service
       })).resolves.toEqual({ keyFilename: service });
 
       const external = join(directory, "external.json");
       await writeFile(external, JSON.stringify(validExternalCredential(email)));
       await expect(loadOperatorCredentials({ operatorEmail: email, credentialFile: external }))
         .resolves.toEqual({ keyFilename: external });
+      const urlExternal = join(directory, "external-url.json");
+      await writeFile(urlExternal, JSON.stringify(validExternalCredential(email, {
+        credential_source: {
+          url: "https://metadata.example.test/token",
+          format: { type: "json", subject_token_field_name: "value" }
+        }
+      })));
+      await expect(loadOperatorCredentials({ operatorEmail: email, credentialFile: urlExternal }))
+        .resolves.toEqual({ keyFilename: urlExternal });
       await expect(loadOperatorCredentials({ operatorEmail: undefined, credentialFile: external }))
         .rejects.toThrow("OPERATOR_IDENTITY_INVALID");
     } finally {
@@ -552,7 +561,7 @@ describe("control-plane operations", () => {
 
   it("rejects unusable and mixed-case-reused operator credentials", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cloudframe-operator-invalid-"));
-    const email = "operator@example.test";
+    const email = "operator@project-1.iam.gserviceaccount.com";
     try {
       const missing = join(directory, "missing.json");
       await writeFile(missing, JSON.stringify({ type: "service_account", client_email: email }));
@@ -574,11 +583,57 @@ describe("control-plane operations", () => {
         .rejects.toThrow("OPERATOR_CREDENTIALS_INVALID");
 
       const mixed = join(directory, "mixed.json");
-      await writeFile(mixed, JSON.stringify(validServiceCredential("Operator@Example.Test")));
+      await writeFile(mixed, JSON.stringify(validServiceCredential("Operator@Project-1.Iam.Gserviceaccount.Com")));
       await expect(loadOperatorCredentials({
-        operatorEmail: "Operator@Example.Test", credentialFile: mixed,
-        runtimeWriterEmail: "operator@example.test"
+        operatorEmail: "Operator@Project-1.Iam.Gserviceaccount.Com", credentialFile: mixed,
+        runtimeWriterEmail: "operator@project-1.iam.gserviceaccount.com"
       })).rejects.toThrow("OPERATOR_IDENTITY_INVALID");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects non-canonical Google service-account principals", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cloudframe-email-invalid-"));
+    const credential = join(directory, "credential.json");
+    try {
+      await writeFile(credential, JSON.stringify(validServiceCredential(
+        "operator@project-1.iam.gserviceaccount.com"
+      )));
+      for (const email of [
+        "operator@example",
+        "x@bad-.com",
+        "x@bad..iam.gserviceaccount.com",
+        "x@example.com",
+        `${"x".repeat(120)}@${"y".repeat(120)}.iam.gserviceaccount.com`
+      ]) {
+        await expect(loadOperatorCredentials({ operatorEmail: email, credentialFile: credential }))
+          .rejects.toThrow("OPERATOR_IDENTITY_INVALID");
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unsupported and malformed WIF credential sources", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cloudframe-wif-invalid-"));
+    const email = "operator@project-1.iam.gserviceaccount.com";
+    try {
+      const invalidSources = [
+        { credential_source: { anything: "x" } },
+        { credential_source: { file: "C:/token", url: "https://metadata.test/token", format: { type: "text" } } },
+        { credential_source: { url: "javascript:alert(1)", format: { type: "text" } } },
+        { credential_source: { url: "https://user:pass@metadata.test/token", format: { type: "text" } } },
+        { credential_source: { url: "https://metadata.test/token#fragment", format: { type: "text" } } },
+        { credential_source: { file: "C:/token", format: { type: "json" } } },
+        { audience: "malformed-audience" }
+      ];
+      for (const [index, patch] of invalidSources.entries()) {
+        const file = join(directory, `invalid-${index}.json`);
+        await writeFile(file, JSON.stringify(validExternalCredential(email, patch)));
+        await expect(loadOperatorCredentials({ operatorEmail: email, credentialFile: file }))
+          .rejects.toThrow("OPERATOR_CREDENTIALS_INVALID");
+      }
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -850,7 +905,7 @@ function validExternalCredential(
     audience: "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/provider",
     subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
     token_url: "https://sts.googleapis.com/v1/token",
-    credential_source: { file: "C:/secure/oidc-token" },
+    credential_source: { file: "C:/secure/oidc-token", format: { type: "text" } },
     service_account_impersonation_url:
       `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(email.toLowerCase())}:generateAccessToken`,
     ...patch
