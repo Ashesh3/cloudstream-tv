@@ -1,32 +1,31 @@
+import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
 
 export const media = {
-  image: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1200' height='800'%3E%3Crect width='1200' height='800' fill='%2315304f'/%3E%3Ccircle cx='350' cy='310' r='130' fill='%23ffd36e'/%3E%3Cpath d='M0 720 430 350 730 610 940 430 1200 690V800H0Z' fill='%2369b1d4'/%3E%3C/svg%3E",
-  video: "/e2e-video.mp4"
+  image: "https://provider-assets.example/sunset.svg",
+  video: "https://provider-assets.example/lake.mp4"
 };
 
 export async function installTvFixture(page: Page, state: "unenrolled" | "ready" = "ready") {
-  const persistedHistory = new Map<string, { nodeId: string; positionSeconds: number; durationSeconds: number; completed: boolean; updatedAt: string }>();
-  await page.exposeFunction("__cloudframeHistoryList", () => [...persistedHistory.values()]);
-  await page.exposeFunction("__cloudframeHistorySave", (nodeId: string, value: { positionSeconds: number; durationSeconds: number; completed: boolean }) => {
-    const saved = { nodeId, ...value, updatedAt: new Date().toISOString() };
-    persistedHistory.set(nodeId, saved);
-    return saved;
-  });
+  await page.route(media.image, route => route.fulfill({
+    contentType: "image/svg+xml",
+    body: "<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='800'><rect width='1200' height='800' fill='#15304f'/><circle cx='350' cy='310' r='130' fill='#ffd36e'/><path d='M0 720 430 350 730 610 940 430 1200 690V800H0Z' fill='#69b1d4'/></svg>"
+  }));
+  await page.route(media.video, async route => route.fulfill({
+    contentType: "video/mp4",
+    path: fileURLToPath(new URL("./fixtures/video.mp4", import.meta.url))
+  }));
   await page.addInitScript(({ state, media }) => {
     const now = new Date().toISOString();
     let status = state;
-    let historySaves = 0;
     const folder = {
-      id: "folder-1", sourceId: "source-1", provider: "google", parentNodeId: null,
+      id: "item_folder", handle: "sealed-folder",
       name: "Family Trips", normalizedName: "family trips", kind: "folder", mimeType: null,
       size: null, width: null, height: null, capturedAt: null, createdAtProvider: now,
-      modifiedAtProvider: now, thumbnailRevision: null, hasPreview: false,
-      folderCoverNodeIds: ["image-1", "image-2"], childFolderCount: 0,
-      childMediaCount: 2, available: true
+      modifiedAtProvider: now, thumbnailRevision: null, hasPreview: false
     };
-    const image = { ...folder, id: "image-1", parentNodeId: folder.id, name: "Sunset.jpg", normalizedName: "sunset.jpg", kind: "image", mimeType: "image/jpeg", width: 1200, height: 800, hasPreview: true, folderCoverNodeIds: [], childMediaCount: 0 };
-    const video = { ...folder, id: "video-1", parentNodeId: folder.id, name: "Lake.mp4", normalizedName: "lake.mp4", kind: "video", mimeType: "video/mp4", width: 1280, height: 720, hasPreview: true, folderCoverNodeIds: [], childMediaCount: 0 };
+    const image = { ...folder, id: "item_image", handle: "sealed-image", name: "Sunset.jpg", normalizedName: "sunset.jpg", kind: "image", mimeType: "image/jpeg", width: 1200, height: 800, hasPreview: true };
+    const video = { ...folder, id: "item_video", handle: "sealed-video", name: "Lake.mp4", normalizedName: "lake.mp4", kind: "video", mimeType: "video/mp4", width: 1280, height: 720, hasPreview: true };
     const household = { id: "household-test", allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8 };
     const device = { id: "device-1", name: "Living Room", enabled: true, assignedRootIds: ["root-1"], mediaOrder: null, slideshowSeconds: null, createdAt: now, approvedAt: now, lastSeenAt: now, revokedAt: null };
     const enrollment = () => status === "ready"
@@ -38,21 +37,12 @@ export async function installTvFixture(page: Page, state: "unenrolled" | "ready"
       bootstrap: async () => ({ enrollment: enrollment() }),
       createDeviceRequest: async name => { status = "pending"; document.cookie = "cf_device_request=e2e; path=/"; return { request: { id: "request-1", requestedName: name, status: "pending", createdAt: now, expiresAt: new Date(Date.now() + 3600000).toISOString(), resolvedAt: null, approvedDeviceId: null } }; },
       requestStatus: async () => ({ enrollment: enrollment() }),
-      home: async () => ({ roots: [{ id: "root-1", sourceId: "source-1", displayName: "Family Trips", provider: "google", accountLabel: "Family Drive", nodeId: "folder-1", folderCoverNodeIds: ["image-1", "image-2"], childFolderCount: 0, childMediaCount: 2, readiness: "ready", readinessMessage: "Ready to screen" }] }),
+      home: async () => ({ roots: [{ id: "item_folder", handle: "sealed-folder", displayName: "Family Trips", provider: "google", accountLabel: "Family Drive" }] }),
       folder: async () => ({ parent: folder, breadcrumbs: [folder], children: [image, video], nextCursor: null }),
-      thumbnailUrls: async ids => ({ items: ids.map(nodeId => ({ nodeId, status: "ready", url: media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" })) }),
-      mediaUrl: async nodeId => ({ nodeId, kind: nodeId === "video-1" ? "video" : "image", url: nodeId === "video-1" ? media.video : media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" }),
-      history: async () => ({ history: await window.__cloudframeHistoryList() }),
-      saveHistory: async (nodeId, value) => { historySaves += 1; document.documentElement.dataset.historySaves = String(historySaves); return { history: await window.__cloudframeHistorySave(nodeId, value) }; }
+      thumbnailUrls: async handles => ({ items: handles.map(handle => ({ itemId: handle === "sealed-video" ? "item_video" : "item_image", status: "ready", url: media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" })) }),
+      mediaUrl: async handle => ({ itemId: handle === "sealed-video" ? "item_video" : "item_image", kind: handle === "sealed-video" ? "video" : "image", url: handle === "sealed-video" ? media.video : media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" })
     };
   }, { state, media });
-}
-
-declare global {
-  interface Window {
-    __cloudframeHistoryList(): Promise<Array<{ nodeId: string; positionSeconds: number; durationSeconds: number; completed: boolean; updatedAt: string }>>;
-    __cloudframeHistorySave(nodeId: string, value: { positionSeconds: number; durationSeconds: number; completed: boolean }): Promise<{ nodeId: string; positionSeconds: number; durationSeconds: number; completed: boolean; updatedAt: string }>;
-  }
 }
 
 export type AdminFixtureScenario = "enrollment" | "source-workbench";

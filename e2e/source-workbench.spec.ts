@@ -29,8 +29,15 @@ test("live source folders are immediately available with explicit removal impact
 
   await page.getByRole("button", { name: "Open Photos" }).click();
   await page.getByRole("button", { name: "Add Trips to household program" }).click();
+  await expect(region).toContainText("Trips was added to the household program.");
+  await expect(region).toContainText("available to assigned televisions immediately");
   await expect(page.getByRole("button", { name: "Trips is in the household program" })).toBeDisabled();
   await expect(region.getByText("Trips", { exact: true }).last()).toBeVisible();
+
+  await page.getByRole("button", { name: "Close folder workbench" }).click();
+  await expect(page.getByRole("button", { name: "Browse & choose folders" })).toBeFocused();
+  await page.getByRole("button", { name: "Browse & choose folders" }).click();
+  await expect(page.getByRole("region", { name: "Choose source folders" }).getByText("Trips", { exact: true }).last()).toBeVisible();
 
   if (testInfo.project.name === "admin-mobile") {
     const viewport = page.viewportSize(); const bounds = await region.boundingBox();
