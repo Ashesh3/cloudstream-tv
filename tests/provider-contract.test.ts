@@ -165,6 +165,9 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     expect(url.searchParams.get("scope")).toContain(
       provider === "google" ? "drive.readonly" : "Files.Read"
     );
+    if (provider === "onedrive") {
+      expect(url.searchParams.get("scope")).toContain("User.Read");
+    }
     expect(start.authorizationUrl).not.toContain("synthetic-google-secret");
     expect(start.authorizationUrl).not.toContain("synthetic-microsoft-secret");
     if (provider === "google") {
