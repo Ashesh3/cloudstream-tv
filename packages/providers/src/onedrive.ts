@@ -16,7 +16,8 @@ import type {
 } from "./types";
 
 const GRAPH_ENDPOINT = "https://graph.microsoft.com/v1.0";
-const MICROSOFT_SCOPES = "openid profile email offline_access Files.Read";
+const MICROSOFT_SCOPES =
+  "openid profile email offline_access User.Read Files.Read";
 
 interface OneDriveDependencies extends ProviderAdapterDependencies {
   tenant?: string;
