@@ -94,12 +94,11 @@ For Google playback, the returned short-lived Drive URL includes the current acc
 
 OneDrive uses its temporary provider download URL and has the same direct-byte path without exposing the stored refresh token.
 
-## Firestore identities and cutover
+## Firestore identities after cutover
 
 - The permanent runtime writer has only `datastore.entities.create` and `datastore.entities.update`, scoped to the exact recovery document where supported. It has no get/list permission.
 - Migration and restore use a separate operator identity with temporary read/write access.
-- During cutover only, setting `ENABLE_LEGACY_SESSION_EXCHANGE=1` instantiates a separate read-only legacy service account so each existing admin/TV cookie can be exchanged once for a sealed version-2 cookie.
-- After both active browsers migrate, set the flag to anything other than exact `1`, remove the legacy reader binding and variable, then remove the compatibility code in a separately verified change.
+- The temporary legacy-cookie reader and compatibility exchange have been removed. Existing sealed version-2 sessions continue normally; an old legacy cookie is rejected and cleared by the final authentication path.
 
 No migration, deployment, rollback, or recovery command deletes legacy Firestore documents or a Google Cloud/Firebase project. Any cleanup requires separate approval, an exact inventory, and a dry run.
 

@@ -1,7 +1,6 @@
 import { waitUntil } from "@vercel/functions";
 
 import {
-  CONTROL_SESSION_LIFETIME_MS,
   createBrowseHandleCodec,
   createControlAdminService,
   createControlApiApp,
@@ -13,9 +12,7 @@ import {
   createCredentialBroker,
   createDirectMediaService,
   createFirestoreClient,
-  createFirestoreLegacySessionReader,
   createFirestoreRecoveryMirror,
-  createLegacySessionExchange,
   createLiveBrowseService,
   createLiveProviderFolderService,
   createRuntimeRateLimiter,
@@ -27,7 +24,6 @@ import {
   versionedAeadKeyringFromEnv,
   type FirestoreClientConfig,
   type FirestoreClientDependencies,
-  type LegacySessionExchange,
   type ControlPlaneTelemetryObserver,
 } from "@cloudframe/server";
 import {
@@ -185,15 +181,6 @@ export function createProductionApi(
     providers,
     now
   });
-  const legacySessionExchange = createOptionalLegacyExchange({
-    environment,
-    request,
-    firestoreConfig,
-    firestoreFactory,
-    householdId,
-    sessionCodec
-  });
-
   return createControlApiApp({
     controlStore,
     requestContext,
@@ -207,7 +194,6 @@ export function createProductionApi(
     rateLimiter: createRuntimeRateLimiter({
       secret: requiredSecret(environment, "RATE_LIMIT_SECRET")
     }),
-    ...(legacySessionExchange ? { legacySessionExchange } : {}),
     telemetryObserver,
     config: { householdId, allowedOrigin: appOrigin },
     now
@@ -219,42 +205,6 @@ export default {
     return createProductionApi(request)(request);
   }
 };
-
-interface LegacyComposition {
-  environment: NodeJS.ProcessEnv;
-  request: Request;
-  firestoreConfig: {
-    environment: "production" | "staging";
-    projectId: string;
-    databaseId?: string;
-    emulatorHost?: string;
-    workloadIdentityProvider: string;
-    oidcTokenSupplier: () => Promise<string>;
-  };
-  firestoreFactory: NonNullable<ProductionApiCompositionDependencies["createFirestoreClient"]>;
-  householdId: string;
-  sessionCodec: ReturnType<typeof createSealedSessionCodec>;
-}
-
-function createOptionalLegacyExchange(
-  input: LegacyComposition
-): LegacySessionExchange | undefined {
-  if (input.environment.ENABLE_LEGACY_SESSION_EXCHANGE !== "1") return undefined;
-  const readerClient = input.firestoreFactory({
-    ...input.firestoreConfig,
-    serviceAccountEmail: required(
-      input.environment,
-      "GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL"
-    )
-  });
-  return createLegacySessionExchange({
-    reader: createFirestoreLegacySessionReader(readerClient),
-    codec: input.sessionCodec,
-    householdId: input.householdId,
-    loadControlDocument: async () => { throw new Error("LEGACY_EXCHANGE_CONTEXT_REQUIRED"); },
-    sessionLifetimeMs: CONTROL_SESSION_LIFETIME_MS
-  });
-}
 
 function required(environment: NodeJS.ProcessEnv, name: string): string {
   const value = environment[name];

@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 describe("operations scripts", () => {
-  it("documents dry-run-first migration, one-document recovery, and bounded legacy exchange", async () => {
+  it("documents dry-run-first migration and one-document recovery after cutover", async () => {
     const operations = await readFile("docs/operations/firebase-vercel-setup.md", "utf8");
     const environment = await readFile(".env.example", "utf8");
 
@@ -23,7 +23,7 @@ describe("operations scripts", () => {
     expect(operations).toContain("node --experimental-strip-types scripts/restore-vercel-control-plane.ts");
     expect(operations).toContain("controlPlaneBackups/{householdId}");
     expect(operations).toContain("reads exactly one recovery document");
-    expect(operations).toContain("ENABLE_LEGACY_SESSION_EXCHANGE=1");
+    expect(operations).not.toMatch(/ENABLE_LEGACY_SESSION_EXCHANGE|GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL/);
     expect(operations).toContain("zero steady-state Firestore reads");
     expect(operations.toLowerCase()).toContain("no legacy firestore document or google cloud/firebase project is deleted");
 
@@ -190,19 +190,6 @@ describe("operations scripts", () => {
     }
   });
 
-  it("isolates the legacy reader to the temporary exchange boundary", async () => {
-    const serverFiles = await listTypeScriptFiles("packages/server/src");
-    const importers: string[] = [];
-    for (const file of serverFiles) {
-      const source = await readFile(file, "utf8");
-      if (source.includes("legacy-session-exchange")) importers.push(file.replaceAll("\\", "/"));
-    }
-    expect(importers).toEqual([
-      "packages/server/src/http/control-app.ts",
-      "packages/server/src/index.ts"
-    ]);
-  });
-
   it("TV bundle checker enforces legacy syntax and compressed budgets", async () => {
     const source = await readFile("scripts/check-tv-bundle.mjs", "utf8");
     expect(source).toContain("180 * 1024");
@@ -281,16 +268,4 @@ async function runNodeWithStripTypes(file: string, args: string[], env: Record<s
     const failure = error as { code?: number; stdout?: string; stderr?: string };
     return { code: failure.code ?? 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
   }
-}
-
-async function listTypeScriptFiles(root: string): Promise<string[]> {
-  const { readdir } = await import("node:fs/promises");
-  const entries = await readdir(root, { withFileTypes: true });
-  const nested = await Promise.all(entries.map(entry => {
-    const path = join(root, entry.name);
-    return entry.isDirectory()
-      ? listTypeScriptFiles(path)
-      : Promise.resolve(path.endsWith(".ts") ? [path] : []);
-  }));
-  return nested.flat().sort();
 }

@@ -27,7 +27,6 @@ import {
   hashPassphrase,
   type ControlApiLogger,
   type ControlApiLoggerEvent,
-  type LegacySessionExchange,
   type ControlPlaneTelemetryObserver,
   type ControlMutationReducer,
   type ControlPlaneStore,
@@ -85,7 +84,6 @@ export interface ControlApiHarness {
 }
 
 export interface ControlApiHarnessOptions {
-  legacySessionExchange?: LegacySessionExchange;
   telemetryObserver?: ControlPlaneTelemetryObserver;
 }
 
@@ -295,9 +293,6 @@ export async function createControlApiHarness(
     browse,
     directMedia,
     rateLimiter,
-    ...(options.legacySessionExchange
-      ? { legacySessionExchange: options.legacySessionExchange }
-      : {}),
     config: { householdId: document.householdId, allowedOrigin: origin },
     now: () => new Date(now),
     requestSubject: () => "203.0.113.7",

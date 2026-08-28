@@ -137,7 +137,6 @@ export interface OperatorCredentialOptions {
   operatorEmail: string | undefined;
   credentialFile: string | undefined;
   runtimeWriterEmail?: string | undefined;
-  legacyReaderEmail?: string | undefined;
 }
 
 export interface OperatorCredentials {
@@ -304,10 +303,7 @@ export async function loadOperatorCredentials(
 ): Promise<OperatorCredentials> {
   const email = canonicalServiceAccountEmail(options.operatorEmail);
   const filename = requiredCredentialValue(options.credentialFile);
-  if (
-    samePrincipal(email, options.runtimeWriterEmail) ||
-    samePrincipal(email, options.legacyReaderEmail)
-  ) {
+  if (samePrincipal(email, options.runtimeWriterEmail)) {
     throw new Error("OPERATOR_IDENTITY_INVALID");
   }
   let parsed: unknown;
