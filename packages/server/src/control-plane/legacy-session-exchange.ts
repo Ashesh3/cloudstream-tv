@@ -9,8 +9,7 @@ import type {
 } from "@cloudframe/shared";
 import type { SealedSessionCodec } from "../auth/sealed-sessions";
 
-const MAX_LEGACY_TOKEN_BYTES = 4096;
-const LEGACY_TOKEN_PATTERN = /^[A-Za-z0-9._~-]+$/;
+const LEGACY_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export interface LegacySessionReader {
   findAdminSessionsByTokenHash(tokenHash: string): Promise<AdminSession[]>;
@@ -133,7 +132,6 @@ export function createLegacySessionExchange(
       !current.enabled ||
       current.revokedAt !== null ||
       current.sessionVersion !== 1 ||
-      !sameIdentifiers(device.assignedRootIds, current.assignedRootIds) ||
       current.assignedRootIds.some((rootId) => !control.roots[rootId]?.enabled)
     ) return null;
     const expiresAt = boundedExpiry(session.expiresAt, now, options.sessionLifetimeMs);
@@ -217,9 +215,6 @@ function decodeFirestoreValue(value: unknown): unknown {
 function isLegacyToken(value: string): boolean {
   if (
     typeof value !== "string" ||
-    value.length < 1 ||
-    Buffer.byteLength(value, "utf8") > MAX_LEGACY_TOKEN_BYTES ||
-    value.startsWith("a1.") ||
     !LEGACY_TOKEN_PATTERN.test(value)
   ) return false;
   return true;
@@ -250,12 +245,6 @@ function boundedExpiry(legacy: Date, now: Date, lifetimeMs: number): Date | null
 
 function invalidDate(value: Date): boolean {
   return !(value instanceof Date) || !Number.isFinite(value.getTime());
-}
-
-function sameIdentifiers(left: string[], right: string[]): boolean {
-  if (left.length !== right.length) return false;
-  const expected = new Set(right);
-  return expected.size === right.length && left.every((value) => expected.has(value));
 }
 
 async function safeRead<T>(operation: () => Promise<T>): Promise<T | null> {

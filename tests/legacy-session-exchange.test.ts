@@ -14,7 +14,7 @@ describe("legacy session exchange", () => {
   it("exchanges a valid device cookie once with zero writes", async () => {
     const harness = exchangeHarness();
 
-    const result = await harness.exchange.exchangeDevice("legacy-device-token", TEST_NOW);
+    const result = await harness.exchange.exchangeDevice(DEVICE_TOKEN, TEST_NOW);
 
     expect(result?.sealedCookie).toBeTruthy();
     expect(harness.reader.readCount).toBeGreaterThan(0);
@@ -26,7 +26,7 @@ describe("legacy session exchange", () => {
   it("exchanges a valid admin cookie bounded by the legacy expiry", async () => {
     const harness = exchangeHarness();
 
-    const result = await harness.exchange.exchangeAdmin("legacy-admin-token", TEST_NOW);
+    const result = await harness.exchange.exchangeAdmin(ADMIN_TOKEN, TEST_NOW);
     const claims = harness.codec.openAdmin(result!.sealedCookie);
 
     expect(claims.expiresAt).toBe(harness.reader.adminSession.expiresAt.getTime());
@@ -38,7 +38,7 @@ describe("legacy session exchange", () => {
     const harness = exchangeHarness();
     harness.reader.deviceMatches = 2;
 
-    await expect(harness.exchange.exchangeDevice("legacy-device-token", TEST_NOW)).resolves.toBeNull();
+    await expect(harness.exchange.exchangeDevice(DEVICE_TOKEN, TEST_NOW)).resolves.toBeNull();
 
     expect(harness.reader.readCount).toBe(1);
   });
@@ -54,8 +54,17 @@ describe("legacy session exchange", () => {
       expiresAt: TEST_NOW.getTime() + 60_000
     });
 
-    await expect(harness.exchange.exchangeDevice("contains whitespace", TEST_NOW)).resolves.toBeNull();
-    await expect(harness.exchange.exchangeDevice("x".repeat(4097), TEST_NOW)).resolves.toBeNull();
+    for (const invalid of [
+      "",
+      "x".repeat(42),
+      "x".repeat(44),
+      `${"x".repeat(42)}.`,
+      `${"x".repeat(42)}~`,
+      `${"x".repeat(42)}+`,
+      ` ${"x".repeat(42)}`
+    ]) {
+      await expect(harness.exchange.exchangeDevice(invalid, TEST_NOW)).resolves.toBeNull();
+    }
     await expect(harness.exchange.exchangeDevice(current, TEST_NOW)).resolves.toBeNull();
 
     expect(harness.reader.readCount).toBe(0);
@@ -66,40 +75,42 @@ describe("legacy session exchange", () => {
     readerFailure.reader.findDeviceSessionsByTokenHash = async () => {
       throw new Error("reader failure with secret detail");
     };
-    await expect(readerFailure.exchange.exchangeDevice("legacy-device-token", TEST_NOW)).resolves.toBeNull();
+    await expect(readerFailure.exchange.exchangeDevice(DEVICE_TOKEN, TEST_NOW)).resolves.toBeNull();
 
     const controlFailure = exchangeHarness(() => Promise.reject(new Error("blob failure")));
-    await expect(controlFailure.exchange.exchangeAdmin("legacy-admin-token", TEST_NOW)).resolves.toBeNull();
+    await expect(controlFailure.exchange.exchangeAdmin(ADMIN_TOKEN, TEST_NOW)).resolves.toBeNull();
   });
 
   it("validates legacy records against active V2 authorization", async () => {
     const harness = exchangeHarness();
     harness.control.devices["device-1"].enabled = false;
 
-    await expect(harness.exchange.exchangeDevice("legacy-device-token", TEST_NOW)).resolves.toBeNull();
+    await expect(harness.exchange.exchangeDevice(DEVICE_TOKEN, TEST_NOW)).resolves.toBeNull();
 
     expect(harness.reader.writeCount).toBe(0);
   });
 
-  it("rejects a legacy device whose current V2 root assignment was filtered out", async () => {
+  it("accepts a legacy device whose disabled assignment was filtered from V2", async () => {
     const harness = exchangeHarness();
     harness.reader.device.assignedRootIds = ["root-1", "legacy-filtered-root"];
 
-    await expect(harness.exchange.exchangeDevice("legacy-device-token", TEST_NOW)).resolves.toBeNull();
+    await expect(harness.exchange.exchangeDevice(DEVICE_TOKEN, TEST_NOW)).resolves.toMatchObject({
+      sealedCookie: expect.any(String)
+    });
   });
 
   it("rejects stale passphrase, session, device, and household relationships", async () => {
     const admin = exchangeHarness();
     admin.reader.adminSession.passphraseVersion = 1;
-    await expect(admin.exchange.exchangeAdmin("legacy-admin-token", TEST_NOW)).resolves.toBeNull();
+    await expect(admin.exchange.exchangeAdmin(ADMIN_TOKEN, TEST_NOW)).resolves.toBeNull();
 
     const device = exchangeHarness();
     device.reader.device.enabled = false;
-    await expect(device.exchange.exchangeDevice("legacy-device-token", TEST_NOW)).resolves.toBeNull();
+    await expect(device.exchange.exchangeDevice(DEVICE_TOKEN, TEST_NOW)).resolves.toBeNull();
 
     const wrongHousehold = exchangeHarness();
     wrongHousehold.reader.deviceSession.householdId = "other";
-    await expect(wrongHousehold.exchange.exchangeDevice("legacy-device-token", TEST_NOW)).resolves.toBeNull();
+    await expect(wrongHousehold.exchange.exchangeDevice(DEVICE_TOKEN, TEST_NOW)).resolves.toBeNull();
   });
 
   it("keeps the concrete Firestore reader narrow, duplicate-aware, and read-only", async () => {
@@ -156,7 +167,7 @@ class RecordingLegacyReader implements LegacySessionReader {
   adminSession = {
     id: "admin-session-1",
     householdId: "h1",
-    tokenHash: digest("legacy-admin-token"),
+    tokenHash: digest(ADMIN_TOKEN),
     passphraseVersion: 2,
     createdAt: TEST_NOW,
     lastSeenAt: TEST_NOW,
@@ -167,7 +178,7 @@ class RecordingLegacyReader implements LegacySessionReader {
     id: "device-session-1",
     householdId: "h1",
     deviceId: "device-1",
-    tokenHash: digest("legacy-device-token"),
+    tokenHash: digest(DEVICE_TOKEN),
     createdAt: TEST_NOW,
     lastSeenAt: TEST_NOW,
     expiresAt: new Date(TEST_NOW.getTime() + 30_000),
@@ -225,6 +236,9 @@ class RecordingLegacyReader implements LegacySessionReader {
 function digest(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
+
+const ADMIN_TOKEN = "A".repeat(43);
+const DEVICE_TOKEN = "B".repeat(43);
 
 function recordingFirestore() {
   const operations: unknown[][] = [];

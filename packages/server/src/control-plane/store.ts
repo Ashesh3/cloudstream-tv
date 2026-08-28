@@ -17,6 +17,7 @@ export interface StoredControlEnvelope {
 }
 
 export interface ControlDurableStore {
+  inspect(): Promise<{ status: "missing" } | { status: "present"; etag: string }>;
   read(ifNoneMatch?: string): Promise<StoredControlEnvelope | { notModified: true } | null>;
   create(envelope: ControlPlaneEnvelopeV1): Promise<{ etag: string }>;
   replace(envelope: ControlPlaneEnvelopeV1, expectedEtag: string): Promise<{ etag: string }>;

@@ -22,6 +22,7 @@ import { testAeadKeyring, testControlDocument, testDocumentAtRevision } from "./
 
 const blobSdk = vi.hoisted(() => ({
   get: vi.fn(),
+  head: vi.fn(),
   put: vi.fn()
 }));
 
@@ -31,7 +32,7 @@ const runtimeCacheSdk = vi.hoisted(() => ({
 
 vi.mock("@vercel/blob", async (importOriginal) => {
   const original = await importOriginal<typeof import("@vercel/blob")>();
-  return { ...original, get: blobSdk.get, put: blobSdk.put };
+  return { ...original, get: blobSdk.get, head: blobSdk.head, put: blobSdk.put };
 });
 
 vi.mock("@vercel/functions", async (importOriginal) => {
@@ -364,6 +365,20 @@ describe("control-plane store", () => {
 });
 
 describe("Vercel control-plane adapters", () => {
+  it("inspects the deterministic Blob ETag without parsing its body", async () => {
+    blobSdk.head.mockResolvedValueOnce({ etag: "etag-1" });
+    const durable = createVercelBlobControlStore({
+      environment: "preview",
+      householdId: "h1",
+      storeId: "store-1"
+    });
+
+    await expect(durable.inspect()).resolves.toEqual({ status: "present", etag: "etag-1" });
+    expect(blobSdk.head).toHaveBeenCalledWith(
+      "cloudframe/control-plane/preview/h1.json.enc",
+      { storeId: "store-1" }
+    );
+  });
   it("reads the deterministic private Blob path with origin revalidation", async () => {
     const envelope = encryptControlPlaneDocument(testControlDocument(), testAeadKeyring());
     blobSdk.get
@@ -398,6 +413,7 @@ describe("Vercel control-plane adapters", () => {
     blobSdk.put
       .mockResolvedValueOnce({ etag: "etag-created" })
       .mockResolvedValueOnce({ etag: "etag-replaced" })
+      .mockRejectedValueOnce(new BlobPreconditionFailedError())
       .mockRejectedValueOnce(new BlobPreconditionFailedError());
     const durable = createVercelBlobControlStore({
       environment: "production",
@@ -409,6 +425,9 @@ describe("Vercel control-plane adapters", () => {
     await expect(durable.replace(envelope, "etag-stale")).rejects.toMatchObject({
       code: "CONTROL_PLANE_CONFLICT"
     });
+    await expect(durable.create(envelope)).rejects.toMatchObject({
+      code: "CONTROL_PLANE_CONFLICT"
+    });
     expect(blobSdk.put).toHaveBeenNthCalledWith(
       1,
       "cloudframe/control-plane/production/h1.json.enc",
@@ -417,7 +436,7 @@ describe("Vercel control-plane adapters", () => {
         access: "private",
         contentType: "application/json",
         addRandomSuffix: false,
-        allowOverwrite: true,
+        allowOverwrite: false,
         ifMatch: undefined
       }
     );

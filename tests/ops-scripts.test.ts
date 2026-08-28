@@ -174,6 +174,38 @@ describe("operations scripts", () => {
     }
   });
 
+  it("normalizes every control-plane CLI failure without leaking its cause", async () => {
+    const directory = await temp();
+    const fixture = join(directory, "hostile-secret-path.json");
+    const hostile = "tokenHash=abc providerNodeId=root ciphertext=xyz super-secret";
+    await writeFile(fixture, `{${hostile}`);
+    const result = await runNodeWithStripTypes(
+      "scripts/migrate-vercel-control-plane.ts",
+      ["--fixture", fixture],
+      { HOUSEHOLD_ID: "h1", CONTROL_PLANE_ENV: "preview" }
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("CONTROL_PLANE_OPERATION_FAILED");
+    expect(result.stderr).not.toContain(hostile);
+    expect(result.stderr).not.toContain(fixture);
+    expect(result.stderr).not.toContain("SyntaxError");
+  });
+
+  it("requires explicit operator identity/config and Blob store for non-fixture apply", async () => {
+    for (const file of [
+      "scripts/migrate-vercel-control-plane.ts",
+      "scripts/restore-vercel-control-plane.ts"
+    ]) {
+      const source = await readFile(file, "utf8");
+      expect(source).toContain("GCP_OPERATOR_SERVICE_ACCOUNT_EMAIL");
+      expect(source).toContain("GCP_OPERATOR_CREDENTIALS_FILE");
+      expect(source).toContain('required("BLOB_STORE_ID")');
+      expect(source).toContain("loadOperatorCredentials");
+    }
+  });
+
   it("isolates the legacy reader to the temporary exchange boundary", async () => {
     const serverFiles = await listTypeScriptFiles("packages/server/src");
     const importers: string[] = [];

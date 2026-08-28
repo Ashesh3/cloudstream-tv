@@ -1,6 +1,8 @@
 import {
+  BlobNotFoundError,
   BlobPreconditionFailedError,
   get,
+  head,
   put,
   type GetCommandOptions,
   type PutCommandOptions
@@ -36,7 +38,7 @@ function writeOptions(
     access: "private",
     contentType: "application/json",
     addRandomSuffix: false,
-    allowOverwrite: true,
+    allowOverwrite: ifMatch !== undefined,
     ifMatch,
     ...blobIdentityOptions(storeId)
   };
@@ -48,6 +50,20 @@ export function createVercelBlobControlStore(
   const controlPathname = pathname(options);
 
   return {
+    async inspect() {
+      try {
+        const result = await head(
+          controlPathname,
+          blobIdentityOptions(options.storeId)
+        );
+        return { status: "present", etag: result.etag } as const;
+      } catch (error) {
+        if (error instanceof BlobNotFoundError) {
+          return { status: "missing" } as const;
+        }
+        throw error;
+      }
+    },
     async read(ifNoneMatch) {
       const result = await get(controlPathname, {
         access: "private",
@@ -67,12 +83,19 @@ export function createVercelBlobControlStore(
     },
 
     async create(envelope) {
-      const result = await put(
-        controlPathname,
-        JSON.stringify(envelope),
-        writeOptions(options.storeId)
-      );
-      return { etag: result.etag };
+      try {
+        const result = await put(
+          controlPathname,
+          JSON.stringify(envelope),
+          writeOptions(options.storeId)
+        );
+        return { etag: result.etag };
+      } catch (error) {
+        if (error instanceof BlobPreconditionFailedError) {
+          throw new ControlPlaneStoreError("CONTROL_PLANE_CONFLICT");
+        }
+        throw error;
+      }
     },
 
     async replace(envelope, expectedEtag) {

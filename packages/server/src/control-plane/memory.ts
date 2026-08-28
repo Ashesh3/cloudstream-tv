@@ -59,6 +59,12 @@ export class MemoryControlDurableStore implements ControlDurableStore {
     }
   }
 
+  async inspect() {
+    return this.value === null
+      ? { status: "missing" as const }
+      : { status: "present" as const, etag: this.value.etag };
+  }
+
   async read(ifNoneMatch?: string) {
     this.readCount += 1;
     this.lastIfNoneMatch = ifNoneMatch;
