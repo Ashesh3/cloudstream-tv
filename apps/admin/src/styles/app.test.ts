@@ -16,3 +16,12 @@ describe("admin reduced motion", () => {
     expect(block).toContain('[data-slot="alert-dialog-content"] .animate-spin');
   });
 });
+
+describe("settings layout", () => {
+  it("provides card spacing to form-based settings panels", () => {
+    const styles = readFileSync(resolve(process.cwd(), "apps/admin/src/styles/app.css"), "utf8");
+    const rule = styles.match(/\.settings-card\s*\{([^}]*)\}/)?.[1] ?? "";
+    expect(rule).toContain("--card-spacing: 1rem");
+    expect(rule).toContain("padding-top: var(--card-spacing)");
+  });
+});
