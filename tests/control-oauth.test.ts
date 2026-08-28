@@ -146,7 +146,7 @@ function providerHarness(): ProviderHarness {
     async beginAuthorization(input) {
       harness.beginInputs.push(structuredClone(input));
       return {
-        authorizationUrl: `https://accounts.example.test/authorize?state=${encodeURIComponent(input.state)}`
+        authorizationUrl: `https://accounts.google.com/o/oauth2/v2/auth?state=${encodeURIComponent(input.state)}`
       };
     },
     async completeAuthorization(input) {
@@ -277,6 +277,42 @@ function setup(options: { replaceFailures?: number } = {}) {
 }
 
 describe("sealed control OAuth", () => {
+  it("rejects off-provider authorization URLs before returning them", async () => {
+    const hostile = [
+      "https://evil.test/o/oauth2/v2/auth",
+      "https://accounts.google.com:444/o/oauth2/v2/auth",
+      "https://user:pass@accounts.google.com/o/oauth2/v2/auth",
+      "https://accounts.google.com/o/oauth2/v2/auth#fragment",
+      "https://accounts.google.com/o/oauth2/v2/auth/../token"
+    ];
+    for (const authorizationUrl of hostile) {
+      const harness = setup();
+      harness.provider.adapter.beginAuthorization = async () => ({ authorizationUrl });
+      await expect(harness.beginGoogle()).rejects.toMatchObject({ code: "OAUTH_PROVIDER_ERROR" });
+    }
+  });
+
+  it("accepts exactly one safe Microsoft tenant segment", async () => {
+    for (const authorizationUrl of [
+      "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=one",
+      "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize"
+    ]) {
+      const harness = setup();
+      harness.provider.adapter.beginAuthorization = async () => ({ authorizationUrl });
+      await expect(harness.oauth.beginAuthorization({ admin: harness.admin, context: harness.context(), provider: "onedrive" })).resolves.toMatchObject({ authorizationUrl });
+    }
+    for (const authorizationUrl of [
+      "https://login.microsoftonline.com//oauth2/v2.0/authorize",
+      "https://login.microsoftonline.com/common/extra/oauth2/v2.0/authorize",
+      "https://login.microsoftonline.com/common%2Fevil/oauth2/v2.0/authorize",
+      "https://login.microsoftonline.com/../common/oauth2/v2.0/authorize"
+    ]) {
+      const harness = setup();
+      harness.provider.adapter.beginAuthorization = async () => ({ authorizationUrl });
+      await expect(harness.oauth.beginAuthorization({ admin: harness.admin, context: harness.context(), provider: "onedrive" })).rejects.toMatchObject({ code: "OAUTH_PROVIDER_ERROR" });
+    }
+  });
+
   it("stores PKCE state only in a sealed ten-minute HttpOnly cookie", async () => {
     const harness = setup();
 

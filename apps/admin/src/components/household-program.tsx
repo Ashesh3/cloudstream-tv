@@ -26,7 +26,7 @@ export function HouseholdProgram({ source, roots, devices, onRemove }: {
         return <li className="program-root border p-3" key={root.id} data-legacy-root={inactive || undefined} data-root-status={inactive ? "inactive" : "approved"}>
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0"><p className="truncate font-medium">{root.displayName}</p><p className="mt-1 text-xs text-muted-foreground">{providerName(source.provider)} · {source.accountLabel}</p></div>
-            <Button size="icon-sm" variant="destructive" aria-label={`Review removal impact for ${root.displayName}`} onClick={() => onRemove(root)}><Trash2Icon /><span className="sr-only">Review removal impact</span></Button>
+            <Button className="workbench-touch-target" size="icon-sm" variant="destructive" aria-label={`Review removal impact for ${root.displayName}`} onClick={() => onRemove(root)}><Trash2Icon /><span className="sr-only">Review removal impact</span></Button>
           </div>
           {inactive && <div className="mt-3 flex gap-2 bg-destructive/10 p-2.5 text-xs text-destructive"><AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /><div><p className="font-medium">Inactive legacy selection</p><p className="mt-1 text-destructive/80">This migration record grants no television access and can be removed safely after review.</p></div></div>}
           <div className="mt-3 flex flex-wrap gap-1.5" aria-label={`Televisions assigned to ${root.displayName}`}>

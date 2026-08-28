@@ -13,7 +13,7 @@ export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRo
   api: AdminApi;
   source: ControlSourceDto;
   selectedProviderNodeIds: ReadonlySet<string>;
-  onRootAdded(root: Awaited<ReturnType<AdminApi["createRoot"]>>["root"], providerNodeId: string): void;
+  onRootAdded(root: Awaited<ReturnType<AdminApi["createRoot"]>>["root"], providerNodeId: string): Promise<void>;
   onClose(): void;
 }) {
   const providerRootName = source.provider === "google" ? "My Drive" : "OneDrive";
@@ -77,23 +77,24 @@ export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRo
   const navigateBreadcrumb = (index: number) => setTrail(value => value.slice(0, index + 1));
   const add = async (folder: ProviderFolderDto) => {
     setPending(folder.providerNodeId); setError(null);
+    let result: Awaited<ReturnType<AdminApi["createRoot"]>>;
     try {
-      const result = await api.createRoot(source.id, { providerNodeId: folder.providerNodeId });
-      onRootAdded(result.root, folder.providerNodeId);
-      setPages(value => value.map(item => item.providerNodeId === folder.providerNodeId ? { ...item, assignedRootId: result.root.id } : item));
-    } catch (cause) { setError(stageError(cause, "Folder could not be added")); }
-    finally { setPending(null); }
+      result = await api.createRoot(source.id, { providerNodeId: folder.providerNodeId });
+    } catch (cause) { setError(stageError(cause, "Folder could not be added")); setPending(null); return; }
+    setPages(value => value.map(item => item.providerNodeId === folder.providerNodeId ? { ...item, assignedRootId: result.root.id } : item));
+    try { await onRootAdded(result.root, folder.providerNodeId); } catch { /* Session expiry is handled by the app. */ }
+    setPending(null);
   };
 
   return <section className="provider-folder-stage flex min-h-0 flex-col" aria-labelledby="provider-folder-stage-title" data-workbench-region="provider-stage">
     <header className="stage-header flex items-start justify-between gap-4 border-b pb-4">
       <div><h2 id="provider-folder-stage-title" className="font-heading text-lg font-medium">Live provider stage</h2><p className="mt-1 text-xs text-muted-foreground">{providerName(source.provider)} · {source.accountLabel}</p></div>
-      <Button size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close folder workbench"><XIcon /></Button>
+      <Button className="workbench-touch-target" size="icon-sm" variant="ghost" onClick={onClose} aria-label="Close folder workbench"><XIcon /></Button>
     </header>
     <div className="flex items-center gap-2 border-b py-3">
-      <Button variant="outline" size="sm" disabled={loading || trail.length <= 1} onClick={() => setTrail(value => value.slice(0, -1))}>Back</Button>
+      <Button className="workbench-touch-target" variant="outline" size="sm" disabled={loading || trail.length <= 1} onClick={() => setTrail(value => value.slice(0, -1))}>Back</Button>
       <nav className="flex min-w-0 flex-1 items-center overflow-x-auto text-sm" aria-label="Provider folder path">
-        {trail.map((item, index) => <span className="flex items-center" key={item.providerFolderId ?? "provider-root"}>{index > 0 && <ChevronRightIcon className="mx-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}<button className="min-h-8 truncate rounded-md px-1.5 hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50" onClick={() => navigateBreadcrumb(index)}>{item.name}</button></span>)}
+        {trail.map((item, index) => <span className="flex items-center" key={item.providerFolderId ?? "provider-root"}>{index > 0 && <ChevronRightIcon className="mx-1 size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}<button className="workbench-touch-target min-h-11 truncate rounded-md px-2 hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50" onClick={() => navigateBreadcrumb(index)}>{item.name}</button></span>)}
       </nav>
     </div>
     <div className="min-h-0 flex-1 overflow-y-auto py-4" aria-live="polite">
@@ -102,7 +103,7 @@ export function ProviderFolderStage({ api, source, selectedProviderNodeIds, onRo
           const selected = Boolean(folder.assignedRootId || selectedProviderNodeIds.has(folder.providerNodeId));
           return <li className="provider-folder-row grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 py-2.5" key={folder.providerNodeId}>
             <button className="folder-row-action flex min-h-11 min-w-0 items-center gap-3 px-2 text-left hover:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50" aria-label={`Open ${folder.name}`} onClick={() => navigate(folder)}><span className="folder-ticket grid size-8 shrink-0 place-items-center bg-muted"><FolderIcon className="size-4" aria-hidden="true" /></span><span className="truncate font-medium">{folder.name}</span><ChevronRightIcon className="ml-auto size-4 shrink-0 text-muted-foreground" aria-hidden="true" /></button>
-            <Button variant={selected ? "secondary" : "outline"} size="sm" disabled={selected || pending === folder.providerNodeId} aria-label={selected ? `${folder.name} is in the household program` : `Add ${folder.name} to household program`} onClick={() => void add(folder)}>{pending === folder.providerNodeId ? <><LoaderCircleIcon className="animate-spin" />Adding…</> : selected ? "Added" : <><FolderPlusIcon />Add</>}</Button>
+            <Button className="workbench-touch-target" variant={selected ? "secondary" : "outline"} size="sm" disabled={selected || pending === folder.providerNodeId} aria-label={selected ? `${folder.name} is in the household program` : `Add ${folder.name} to household program`} onClick={() => void add(folder)}>{pending === folder.providerNodeId ? <><LoaderCircleIcon className="animate-spin" />Adding…</> : selected ? "Added" : <><FolderPlusIcon />Add</>}</Button>
           </li>;
         })}
       </ul>}

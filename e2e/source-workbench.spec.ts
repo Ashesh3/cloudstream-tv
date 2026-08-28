@@ -14,6 +14,19 @@ test("live source folders are immediately available with explicit removal impact
   await expect(region).toContainText("Folders added to the household program are available to assigned televisions immediately.");
   await expect(page.getByRole("region", { name: "Source health" })).toContainText("Connected");
 
+  for (const control of [
+    page.getByRole("button", { name: "Back to sources" }),
+    page.getByRole("button", { name: "Close folder workbench" }),
+    page.getByRole("button", { name: "Back", exact: true }),
+    page.getByRole("button", { name: "My Drive", exact: true }),
+    page.getByRole("button", { name: "Add Photos to household program" })
+  ]) {
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.width).toBeGreaterThanOrEqual(44);
+    expect(box!.height).toBeGreaterThanOrEqual(44);
+  }
+
   await page.getByRole("button", { name: "Open Photos" }).click();
   await page.getByRole("button", { name: "Add Trips to household program" }).click();
   await expect(page.getByRole("button", { name: "Trips is in the household program" })).toBeDisabled();
@@ -30,6 +43,22 @@ test("live source folders are immediately available with explicit removal impact
   const confirmation = page.getByRole("dialog", { name: "Remove folder from household program" });
   await expect(confirmation).toContainText("Access is removed immediately from every assigned television.");
   await expect(confirmation.getByText("Living Room")).toBeVisible();
+  const removeControl = confirmation.getByRole("button", { name: "Remove Trips" });
+  const removeBox = await removeControl.boundingBox();
+  expect(removeBox).not.toBeNull();
+  expect(removeBox!.width).toBeGreaterThanOrEqual(44);
+  expect(removeBox!.height).toBeGreaterThanOrEqual(44);
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByRole("button", { name: "Review removal impact for Trips" })).toBeFocused();
+  await page.getByRole("button", { name: "Review removal impact for Trips" }).click();
+  await expect(confirmation.getByRole("button", { name: "Cancel" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(confirmation).toBeHidden();
+  await expect(page.getByRole("button", { name: "Review removal impact for Trips" })).toBeFocused();
+  await page.getByRole("button", { name: "Review removal impact for Trips" }).click();
   await confirmation.getByRole("button", { name: "Remove Trips" }).click();
   await expect(region.getByText("No folders in the household program")).toBeVisible();
+
+  await page.getByRole("button", { name: "Close folder workbench" }).click();
+  await expect(page.getByRole("button", { name: "Browse & choose folders" })).toBeFocused();
 });

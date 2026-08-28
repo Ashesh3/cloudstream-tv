@@ -9,9 +9,11 @@ import type {
   CreateAssignedRootBody,
   MediaOrder,
   ProviderFolderDto,
+  ProviderKind,
   UpdateAdminSettingsBody,
   UpdateDeviceBody
 } from "@cloudframe/shared";
+import { assertProviderAuthorizationUrl } from "@cloudframe/shared";
 
 export interface AdminProviderFolderPage {
   source: ControlSourceDto;
@@ -77,7 +79,8 @@ export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
       if (init.signal?.aborted) throw cause;
       throw new AdminApiError(0, "NETWORK_ERROR", "Cloudframe could not reach the server.");
     }
-    const refreshed = response.headers.get("x-csrf-token");
+    let refreshed: string | null;
+    try { refreshed = response.headers.get("x-csrf-token"); } catch { throw invalidResponse(response.status); }
     if (refreshed && requestId >= appliedCsrfRequest) {
       csrfToken = refreshed;
       appliedCsrfRequest = requestId;
@@ -90,8 +93,8 @@ export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
       }
       throw error;
     }
-    const data = decodeSuccessEnvelope(payload, response.status);
     try {
+      const data = decodeSuccessEnvelope(payload, response.status);
       return decode(data);
     } catch {
       throw invalidResponse(response.status);
@@ -109,7 +112,7 @@ export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
     revokeDevice: id => request(`/api/admin/devices/${encodeURIComponent(id)}`, removedFlag("revoked"), { method: "DELETE", body: json({}) }),
     updateSettings: body => request("/api/admin/settings", revisionResult, { method: "PATCH", body: json(body) }),
     rotatePassphrase: (currentPassphrase, newPassphrase) => request("/api/admin/passphrase", passphraseResult, { method: "POST", body: json({ currentPassphrase, newPassphrase }) }),
-    authorizeSource: (provider, reconnectSourceId) => request(`/api/admin/sources/${provider}/authorize`, authorizationResult, { method: "POST", body: json(reconnectSourceId ? { reconnectSourceId } : {}) }),
+    authorizeSource: (provider, reconnectSourceId) => request(`/api/admin/sources/${provider}/authorize`, value => authorizationResult(provider, value), { method: "POST", body: json(reconnectSourceId ? { reconnectSourceId } : {}) }),
     sourceImpact: id => request(`/api/admin/sources/${encodeURIComponent(id)}/impact`, impactResult),
     removeSource: id => request(`/api/admin/sources/${encodeURIComponent(id)}`, removalResult, { method: "DELETE", body: json({ confirm: true }) }),
     providerFolders: (id, input) => {
@@ -172,17 +175,40 @@ function invalidResponse(status: number) {
 }
 
 function exactRecord(value: unknown, allowed: string[], required = allowed): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("record");
-  const record = value as Record<string, unknown>;
-  if (Object.keys(record).some(key => !allowed.includes(key)) || required.some(key => !(key in record))) throw new Error("keys");
-  return record;
+  if (!plainDataRecord(value)) throw new Error("record");
+  const keys = Reflect.ownKeys(value);
+  if (keys.some(key => typeof key !== "string" || !allowed.includes(key)) || required.some(key => !keys.includes(key))) throw new Error("keys");
+  return value;
+}
+function plainDataRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== "string") return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor) || descriptor.get !== undefined || descriptor.set !== undefined) return false;
+  }
+  return true;
 }
 const stringValue = (value: unknown) => { if (typeof value !== "string") throw new Error("string"); return value; };
 const booleanValue = (value: unknown) => { if (typeof value !== "boolean") throw new Error("boolean"); return value; };
 const nonNegativeNumber = (value: unknown) => { if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("number"); return value; };
-const integerValue = (value: unknown) => { const number = nonNegativeNumber(value); if (!Number.isInteger(number)) throw new Error("integer"); return number; };
+const integerValue = (value: unknown) => { const number = nonNegativeNumber(value); if (!Number.isSafeInteger(number)) throw new Error("integer"); return number; };
 const nullableString = (value: unknown) => value === null ? null : stringValue(value);
-const arrayOf = <T,>(value: unknown, decode: Decoder<T>) => { if (!Array.isArray(value)) throw new Error("array"); return value.map(decode); };
+const arrayOf = <T,>(value: unknown, decode: Decoder<T>) => { if (!ordinaryArray(value)) throw new Error("array"); return value.map(decode); };
+function ordinaryArray(value: unknown): value is unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) return false;
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== value.length + 1 || keys[keys.length - 1] !== "length") return false;
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+  if (!lengthDescriptor || lengthDescriptor.enumerable || !("value" in lengthDescriptor)) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !descriptor.enumerable || !("value" in descriptor) || descriptor.get !== undefined || descriptor.set !== undefined) return false;
+  }
+  return true;
+}
 const enumValue = <T extends string>(value: unknown, allowed: readonly T[]): T => { if (typeof value !== "string" || !allowed.includes(value as T)) throw new Error("enum"); return value as T; };
 
 function authenticatedTrue(value: unknown) { const record = exactRecord(value, ["authenticated"]); if (record.authenticated !== true) throw new Error("auth"); return { authenticated: true as const }; }
@@ -190,7 +216,7 @@ function authenticatedFalse(value: unknown) { const record = exactRecord(value, 
 function revisionResult(value: unknown) { const record = exactRecord(value, ["revision"]); return { revision: integerValue(record.revision) }; }
 function passphraseResult(value: unknown) { const record = exactRecord(value, ["authenticated", "revision"]); if (record.authenticated !== false) throw new Error("auth"); return { authenticated: false as const, revision: integerValue(record.revision) }; }
 function removedFlag<K extends "revoked">(key: K) { return (value: unknown) => { const record = exactRecord(value, [key]); if (record[key] !== true) throw new Error(key); return { [key]: true } as Record<K, true>; }; }
-function authorizationResult(value: unknown) { const record = exactRecord(value, ["authorizationUrl"]); const authorizationUrl = stringValue(record.authorizationUrl); const url = new URL(authorizationUrl); if (url.protocol !== "https:") throw new Error("url"); return { authorizationUrl }; }
+function authorizationResult(provider: ProviderKind, value: unknown) { const record = exactRecord(value, ["authorizationUrl"]); return { authorizationUrl: assertProviderAuthorizationUrl(provider, stringValue(record.authorizationUrl)) }; }
 
 function household(value: unknown): ControlHouseholdDto {
   const record = exactRecord(value, ["allowNewDeviceRequests", "defaultMediaOrder", "defaultSlideshowSeconds"]);

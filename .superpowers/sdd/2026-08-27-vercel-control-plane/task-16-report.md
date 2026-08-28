@@ -158,3 +158,64 @@ node F:\Projects\tv-video-ui\.agents\skills\impeccable\scripts\detect.mjs --json
 ## Concerns
 
 None known. The committed design metadata still describes the superseded indexing model, but it was intentionally not refreshed because the task explicitly prohibited stale metadata refresh and plan/spec/ledger edits.
+
+## Review fix round 1
+
+### Findings addressed
+
+- Split focused mutation success from snapshot refresh recovery. Approval, denial, device edits, revocation, settings, root creation/removal, and source removal now apply their committed result locally, close editors/confirmations, show success, then attempt exactly one refresh. A non-401 refresh failure shows: “Change saved, but the household ledger could not be refreshed. Refresh to confirm the latest state.” Mutation failures still use the existing stale-mutation recovery path.
+- Device cards count only enabled assigned roots, identify disabled assignments as inactive legacy entries that grant no access, and never show active access when no active roots remain. Device editing starts from enabled IDs only, explicitly names stale assignments that saving removes, and submits an empty active assignment set when appropriate.
+- Added one shared provider authorization URL validator used by the admin client decoder and the control OAuth service. Google is restricted to `https://accounts.google.com/o/oauth2/v2/auth`; Microsoft is restricted to `https://login.microsoftonline.com/{one safe tenant segment}/oauth2/v2.0/authorize`. Alternate origins/ports/paths, credentials, fragments, encoded separators, dot segments, empty tenants, and multiple tenant segments are rejected.
+- Hardened successful-response decoding to plain own enumerable data records and ordinary arrays only. Symbols, non-enumerables, accessors, class instances, inherited structure, proxies, and unsafe integers fail as `AdminApiError(INVALID_RESPONSE)`; null-prototype data records remain accepted.
+- Raised primary workbench Close, Back, Add, breadcrumb, and removal controls to at least 44×44 CSS pixels. Browser acceptance now measures each class of target and verifies focus restoration after Cancel, Escape, and workbench closure.
+- Replaced the global reduced-motion kill switch with scoped alternatives for program-row animation, folder/approval transitions, admin controls, and dialogs.
+
+### RED evidence
+
+The focused pre-fix run produced 12 failing admin regressions and 2 failing OAuth regressions. Failures showed committed mutations remaining in dialogs or being reported as errors after refresh rejection, inactive root IDs counted/submitted as active, arbitrary provider URLs accepted, hostile decoder objects accepted, and the global reduced-motion rule still present.
+
+### GREEN and verification evidence
+
+```text
+npx vitest run --config apps/admin/vitest.config.ts
+Test Files  10 passed (10)
+Tests       54 passed (54)
+```
+
+```text
+npx vitest run tests/control-oauth.test.ts
+Test Files  1 passed (1)
+Tests       26 passed (26)
+```
+
+```text
+npm run typecheck
+Exit code: 0
+```
+
+```text
+npm run lint -- --quiet
+Exit code: 0
+```
+
+```text
+npm run build -w @cloudframe/admin
+1951 modules transformed
+build completed successfully
+```
+
+```text
+npx playwright test e2e/source-workbench.spec.ts --project=admin-mobile --project=admin-wide
+2 passed (12.4s)
+```
+
+The Playwright journey checks touch dimensions, live selection/removal, Cancel focus restoration, Escape focus restoration, and return focus after closing the workbench on mobile and wide projects.
+
+### Impeccable review pass
+
+Re-read the hardening and craft-floor guidance, preserved the Screening Room Ledger identity, and ran the design detector once after final visual changes:
+
+```text
+node F:\Projects\tv-video-ui\.agents\skills\impeccable\scripts\detect.mjs --json <changed admin UI targets>
+[]
+```

@@ -241,6 +241,7 @@
 .folder-ticket { border: 1px solid var(--hairline); background: transparent; }
 .program-root-list { scrollbar-gutter: stable; }
 .program-root { border-radius: 0; animation: cue-in .28s cubic-bezier(.16,1,.3,1); }
+.workbench-touch-target { min-width: var(--control-hit-target); min-height: var(--control-hit-target); }
 .provider-folder-list > li { transition: background .18s ease, color .18s ease; }
 .provider-folder-list > li:hover { background: #1a1d1e; }
 .folder-toolbar { display: flex; align-items: center; gap: .75rem; border-bottom: 1px solid var(--hairline); padding: .75rem 1rem; }
@@ -300,5 +301,8 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; scroll-behavior: auto !important; transition-duration: .01ms !important; }
+  .program-root { animation: none; }
+  .provider-folder-list > li, .approval-root-row, .admin-root [data-slot="button"], .admin-root [data-slot="checkbox"], .admin-root [data-slot="switch"] { transition: none; }
+  .admin-root [data-slot="button"]:active { transform: none; }
+  [data-slot="dialog-content"], [data-slot="alert-dialog-content"] { animation: none; }
 }

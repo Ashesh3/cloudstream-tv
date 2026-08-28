@@ -16,6 +16,7 @@ import type {
   ControlPlaneSource,
   EncryptedSecret
 } from "@cloudframe/shared";
+import { assertProviderAuthorizationUrl } from "@cloudframe/shared";
 import { getCache, type RuntimeCache } from "@vercel/functions";
 
 import type { SealedSessionCodec } from "../auth/sealed-sessions";
@@ -350,6 +351,7 @@ export function createControlOAuthService(
       })
     );
     if (!nonEmpty(started?.authorizationUrl)) providerInvalid();
+    try { assertProviderAuthorizationUrl(input.provider, started.authorizationUrl); } catch { providerInvalid(); }
     return {
       authorizationUrl: started.authorizationUrl,
       stateCookie: formatStateCookie(stateToken, expiresAt)

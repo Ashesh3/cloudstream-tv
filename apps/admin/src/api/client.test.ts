@@ -94,6 +94,70 @@ describe("admin API browser boundary", () => {
     await expect(createAdminApi(vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, error: { code: "PRIVATE", message: "token" } }), { status: 500 }))).snapshot()).rejects.toMatchObject({ code: "REQUEST_FAILED", message: "Cloudframe is temporarily unavailable. Try again." });
   });
 
+  it("rejects hostile successful response objects as INVALID_RESPONSE", async () => {
+    const hostileValues: unknown[] = [];
+    const inherited = Object.create({ revision: 7 });
+    Object.assign(inherited, snapshot);
+    hostileValues.push(inherited);
+    hostileValues.push(Object.assign(new (class Snapshot {})(), snapshot));
+    const symbolRecord = { ...snapshot } as Record<PropertyKey, unknown>;
+    symbolRecord[Symbol("hidden")] = true;
+    hostileValues.push(symbolRecord);
+    const nonEnumerable = { ...snapshot };
+    Object.defineProperty(nonEnumerable, "hidden", { value: true, enumerable: false });
+    hostileValues.push(nonEnumerable);
+    const getter = { ...snapshot } as Record<string, unknown>;
+    Object.defineProperty(getter, "revision", { enumerable: true, get() { throw new Error("getter executed"); } });
+    hostileValues.push(getter);
+    hostileValues.push(new Proxy({ ...snapshot }, { ownKeys() { throw new Error("proxy trap"); } }));
+    hostileValues.push({ ...snapshot, revision: Number.MAX_SAFE_INTEGER + 1 });
+
+    for (const data of hostileValues) {
+      const payload = Object.create(null) as Record<string, unknown>;
+      Object.defineProperties(payload, {
+        ok: { value: true, enumerable: true },
+        data: { value: data, enumerable: true }
+      });
+      await expect(createAdminApi(vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        json: vi.fn().mockResolvedValue(payload)
+      } as unknown as Response)).snapshot()).rejects.toMatchObject({ code: "INVALID_RESPONSE", message: "The server returned an unexpected response." });
+    }
+  });
+
+  it("accepts null-prototype data records", async () => {
+    const data = Object.assign(Object.create(null), snapshot);
+    const payload = Object.assign(Object.create(null), { ok: true, data });
+    const response = { ok: true, status: 200, headers: new Headers(), json: vi.fn().mockResolvedValue(payload) } as unknown as Response;
+    await expect(createAdminApi(vi.fn().mockResolvedValue(response)).snapshot()).resolves.toEqual(snapshot);
+  });
+
+  it("allows only exact provider authorization endpoints", async () => {
+    const valid = [
+      ["google", "https://accounts.google.com/o/oauth2/v2/auth?client_id=one"],
+      ["onedrive", "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=one"]
+    ] as const;
+    for (const [provider, authorizationUrl] of valid) {
+      await expect(createAdminApi(vi.fn().mockResolvedValue(ok({ authorizationUrl }))).authorizeSource(provider)).resolves.toEqual({ authorizationUrl });
+    }
+    const hostile = [
+      ["google", "https://evil.test/o/oauth2/v2/auth"],
+      ["google", "https://accounts.google.com:444/o/oauth2/v2/auth"],
+      ["google", "https://user:pass@accounts.google.com/o/oauth2/v2/auth"],
+      ["google", "https://accounts.google.com/o/oauth2/v2/auth#fragment"],
+      ["google", "https://accounts.google.com/o/oauth2/v2/auth/../token"],
+      ["onedrive", "https://login.microsoftonline.com/common/extra/oauth2/v2.0/authorize"],
+      ["onedrive", "https://login.microsoftonline.com/common%2Fevil/oauth2/v2.0/authorize"],
+      ["onedrive", "https://login.microsoftonline.com/../common/oauth2/v2.0/authorize"],
+      ["onedrive", "https://login.microsoftonline.com//oauth2/v2.0/authorize"]
+    ] as const;
+    for (const [provider, authorizationUrl] of hostile) {
+      await expect(createAdminApi(vi.fn().mockResolvedValue(ok({ authorizationUrl }))).authorizeSource(provider)).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    }
+  });
+
   it("uses exact final routes and mutation bodies", async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(ok({ authenticated: false, revision: 8 }))

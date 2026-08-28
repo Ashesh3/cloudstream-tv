@@ -21,15 +21,15 @@ function workbenchApi(): AdminApi { return { login: vi.fn(), logout: vi.fn(), sn
 describe("source workbench", () => {
   it("renders the exact immediate-access workbench and closes from Escape", async () => {
     const close = vi.fn();
-    render(<SourceWorkbench source={source} roots={[]} api={workbenchApi()} onChanged={vi.fn().mockResolvedValue(undefined)} onClose={close} />);
+    render(<SourceWorkbench source={source} roots={[]} api={workbenchApi()} onRootAdded={vi.fn().mockResolvedValue(true)} onRootRemoved={vi.fn().mockResolvedValue(true)} onClose={close} />);
     const workbench = await screen.findByRole("region", { name: "Choose source folders" });
     expect(workbench).toHaveTextContent("Browse the provider live. Folders added to the household program are available to assigned televisions immediately.");
     fireEvent.keyDown(workbench, { key: "Escape" }); expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("updates the local program immediately, then performs one snapshot refresh", async () => {
-    const api = workbenchApi(); const changed = vi.fn().mockResolvedValue(undefined);
-    render(<SourceWorkbench source={source} roots={[]} devices={[device]} api={api} onChanged={changed} onClose={vi.fn()} />);
+    const api = workbenchApi(); const changed = vi.fn().mockResolvedValue(true);
+    render(<SourceWorkbench source={source} roots={[]} devices={[device]} api={api} onRootAdded={changed} onRootRemoved={vi.fn().mockResolvedValue(true)} onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Add Trips to household program" }));
     expect(await screen.findByText("Trips")).toBeVisible();
     expect(screen.getByRole("button", { name: "Trips is in the household program" })).toBeDisabled();
@@ -37,15 +37,28 @@ describe("source workbench", () => {
   });
 
   it("keeps an optimistic root available when the snapshot refresh fails", async () => {
-    const changed = vi.fn().mockRejectedValue(new Error("internal"));
-    render(<SourceWorkbench source={source} roots={[]} api={workbenchApi()} onChanged={changed} onClose={vi.fn()} />);
+    const changed = vi.fn().mockResolvedValue(false);
+    render(<SourceWorkbench source={source} roots={[]} api={workbenchApi()} onRootAdded={changed} onRootRemoved={vi.fn().mockResolvedValue(true)} onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Add Trips to household program" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Trips was added, but the household ledger could not refresh. The selection remains available.");
+    expect(await screen.findByText("Trips was added to the household program.")).toBeVisible();
+    expect(screen.getByText("Change saved, but the household ledger could not be refreshed. Refresh to confirm the latest state.")).toBeVisible();
+  });
+
+  it("preserves root removal and closes confirmation when its snapshot refresh fails", async () => {
+    const api = workbenchApi(); const changed = vi.fn().mockResolvedValue(false);
+    render(<SourceWorkbench source={source} roots={[tripsRoot]} devices={[device]} api={api} onRootAdded={vi.fn().mockResolvedValue(true)} onRootRemoved={changed} onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Review removal impact for Trips" }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Remove folder from household program" })).getByRole("button", { name: "Remove Trips" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove folder from household program" })).not.toBeInTheDocument());
+    expect(screen.getByText("No folders in the household program")).toBeVisible();
+    expect(screen.getByText("Trips was removed from the household program.")).toBeVisible();
+    expect(screen.getByText("Change saved, but the household ledger could not be refreshed. Refresh to confirm the latest state.")).toBeVisible();
   });
 
   it("loads explicit impact and says access is removed immediately", async () => {
-    const api = workbenchApi(); const changed = vi.fn().mockResolvedValue(undefined);
-    render(<SourceWorkbench source={source} roots={[tripsRoot]} devices={[device]} api={api} onChanged={changed} onClose={vi.fn()} />);
+    const api = workbenchApi(); const changed = vi.fn().mockResolvedValue(true);
+    render(<SourceWorkbench source={source} roots={[tripsRoot]} devices={[device]} api={api} onRootAdded={vi.fn().mockResolvedValue(true)} onRootRemoved={changed} onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Review removal impact for Trips" }));
     const dialog = await screen.findByRole("dialog", { name: "Remove folder from household program" });
     expect(dialog).toHaveTextContent("Access is removed immediately from every assigned television.");
@@ -57,7 +70,7 @@ describe("source workbench", () => {
   it("rejects stale out-of-order impact responses", async () => {
     const api = workbenchApi(); const first = deferred<Awaited<ReturnType<AdminApi["rootImpact"]>>>(); const second = deferred<Awaited<ReturnType<AdminApi["rootImpact"]>>>();
     vi.mocked(api.rootImpact).mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
-    render(<SourceWorkbench source={source} roots={[tripsRoot, archiveRoot]} devices={[device]} api={api} onChanged={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} />);
+    render(<SourceWorkbench source={source} roots={[tripsRoot, archiveRoot]} devices={[device]} api={api} onRootAdded={vi.fn().mockResolvedValue(true)} onRootRemoved={vi.fn().mockResolvedValue(true)} onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Review removal impact for Trips" }));
     fireEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }));
     fireEvent.click(screen.getByRole("button", { name: "Review removal impact for Archive" }));

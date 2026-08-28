@@ -78,7 +78,7 @@ export async function installAdminFixture(page: Page, scenario: AdminFixtureScen
     window.__CLOUDFRAME_TEST_ADMIN_API__ = {
       login: async () => ({ authenticated: true }), logout: async () => ({ authenticated: false }), snapshot: async () => snapshot(),
       updateSettings: async body => { Object.assign(household, body); revision += 1; return { revision }; }, rotatePassphrase: async () => ({ authenticated: false, revision: ++revision }),
-      authorizeSource: async () => ({ authorizationUrl: "https://example.test/oauth" }), sourceImpact: async () => ({ roots, devices }), removeSource: async () => ({ removed: true, roots, devices }),
+      authorizeSource: async provider => ({ authorizationUrl: provider === "google" ? "https://accounts.google.com/o/oauth2/v2/auth?client_id=test" : "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test" }), sourceImpact: async () => ({ roots, devices }), removeSource: async () => ({ removed: true, roots, devices }),
       providerFolders: async (_id, input) => {
         const assigned = folder => ({ ...folder, assignedRootId: document.documentElement.dataset[`root${folder.providerNodeId}`] ?? null });
         if (input.providerFolderId === photos.providerNodeId) return { source, current: assigned(photos), breadcrumbs: [assigned(providerRoot), assigned(photos)], folders: [assigned(trips)], nextCursor: null };

@@ -12,6 +12,7 @@ const request = (id: string, name: string, createdAt: string): ControlRequestDto
 const root: ControlRootDto = { id: "root-1", sourceId: "source-1", displayName: "Family Photos", enabled: true, createdAt: "2026-08-20T00:00:00.000Z" };
 const device: ControlDeviceDto = { id: "device-1", name: "Living Room", enabled: true, assignedRootIds: [root.id], mediaOrder: null, slideshowSeconds: null, createdAt: "2026-08-20T00:00:00.000Z", approvedAt: "2026-08-20T00:00:00.000Z", revokedAt: null };
 const source: ControlSourceDto = { id: "source-1", provider: "google", accountLabel: "Home Drive", status: "healthy", createdAt: "2026-08-20T00:00:00.000Z" };
+const refreshFailure = new AdminApiError(503, "REQUEST_FAILED", "Cloudframe is temporarily unavailable. Try again.");
 const snapshot: AdminSnapshotResponse = {
   revision: 7,
   household: { allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8 },
@@ -27,7 +28,7 @@ function api(initial = snapshot): AdminApi {
     denyRequest: vi.fn().mockResolvedValue({ request: { ...initial.pendingRequests[0]!, status: "denied" } }),
     updateDevice: vi.fn().mockResolvedValue({ device }), revokeDevice: vi.fn().mockResolvedValue({ revoked: true }),
     updateSettings: vi.fn().mockResolvedValue({ revision: 8 }), rotatePassphrase: vi.fn().mockResolvedValue({ authenticated: false, revision: 8 }),
-    authorizeSource: vi.fn().mockResolvedValue({ authorizationUrl: "https://accounts.example/authorize" }),
+    authorizeSource: vi.fn(async provider => ({ authorizationUrl: provider === "google" ? "https://accounts.google.com/o/oauth2/v2/auth?client_id=test" : "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test" })),
     sourceImpact: vi.fn().mockResolvedValue({ roots: [root], devices: [device] }), removeSource: vi.fn().mockResolvedValue({ removed: true, roots: [root], devices: [device] }),
     providerFolders: vi.fn().mockResolvedValue({ source, current: providerRoot, breadcrumbs: [providerRoot], folders: [], nextCursor: null }),
     createRoot: vi.fn().mockResolvedValue({ root }), rootImpact: vi.fn().mockResolvedValue({ roots: [root], devices: [device] }), removeRoot: vi.fn().mockResolvedValue({ removed: true, roots: [root], devices: [device] })
@@ -120,6 +121,74 @@ describe("admin snapshot workflows", () => {
     await waitFor(() => expect(client.snapshot).toHaveBeenCalledTimes(3));
   });
 
+  it("preserves an approved device and closes approval when its snapshot refresh fails", async () => {
+    const client = api();
+    vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockRejectedValueOnce(refreshFailure);
+    await login(client);
+    fireEvent.click(within(screen.getAllByTestId("request-card")[0]!).getByRole("button", { name: "Approve Den TV" }));
+    const dialog = screen.getByRole("dialog", { name: "Approve device" });
+    fireEvent.click(within(dialog).getByLabelText("Family Photos"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Approve device" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Approve device" })).not.toBeInTheDocument());
+    expect(screen.queryByText("Den TV")).not.toBeInTheDocument();
+    expect(screen.getByText("Den TV was approved.")).toBeVisible();
+    expect(screen.getByText("Change saved, but the household ledger could not be refreshed. Refresh to confirm the latest state.")).toBeVisible();
+    expect(screen.queryByText("Action could not be completed")).not.toBeInTheDocument();
+  });
+
+  it("preserves denial when its snapshot refresh fails", async () => {
+    const client = api();
+    vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockRejectedValueOnce(refreshFailure);
+    await login(client);
+    const kitchen = screen.getAllByTestId("request-card").find(card => within(card).queryByText("Kitchen"))!;
+    fireEvent.click(within(kitchen).getByRole("button", { name: "Deny Kitchen" }));
+
+    await waitFor(() => expect(screen.queryByText("Kitchen")).not.toBeInTheDocument());
+    expect(screen.getByText("Kitchen was denied.")).toBeVisible();
+    expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
+  });
+
+  it("preserves device edits and closes the editor when its snapshot refresh fails", async () => {
+    const client = api();
+    vi.mocked(client.updateDevice).mockResolvedValueOnce({ device: { ...device, name: "Family TV" } });
+    vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockRejectedValueOnce(refreshFailure);
+    await login(client); go("Devices");
+    fireEvent.click(screen.getByRole("button", { name: "Edit Living Room" }));
+    fireEvent.change(within(screen.getByRole("dialog", { name: "Edit device" })).getByLabelText("Device name"), { target: { value: "Family TV" } });
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Edit device" })).getByRole("button", { name: "Save device" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit device" })).not.toBeInTheDocument());
+    expect(screen.getByRole("heading", { name: "Family TV" })).toBeVisible();
+    expect(screen.getByText("Device updated.")).toBeVisible();
+    expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
+  });
+
+  it("preserves revocation and closes confirmation when its snapshot refresh fails", async () => {
+    const client = api();
+    vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockRejectedValueOnce(refreshFailure);
+    await login(client); go("Devices");
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Living Room" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "Revoke device" })).getByRole("button", { name: "Revoke permanently" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "Revoke device" })).not.toBeInTheDocument());
+    expect(screen.getByText("No approved devices")).toBeVisible();
+    expect(screen.getByText("Living Room was revoked.")).toBeVisible();
+    expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
+  });
+
+  it("preserves settings when its snapshot refresh fails", async () => {
+    const client = api();
+    vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockRejectedValueOnce(refreshFailure);
+    await login(client); go("Settings");
+    fireEvent.click(screen.getByLabelText("Allow new device requests"));
+    fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+
+    expect(await screen.findByText("Household defaults saved.")).toBeVisible();
+    expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
+    expect(screen.getByLabelText("Allow new device requests")).not.toBeChecked();
+  });
+
   it("keeps the live provider workbench in layout with exact immediate-access copy", async () => {
     await login(api()); go("Sources");
     const trigger = screen.getByRole("button", { name: "Browse & choose folders" }); fireEvent.click(trigger);
@@ -136,7 +205,7 @@ describe("admin snapshot workflows", () => {
     fireEvent.change(screen.getByLabelText("Admin passphrase"), { target: { value: "a very long household passphrase" } }); fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
     await screen.findByRole("heading", { name: "Device requests" }); go("Sources");
     fireEvent.click(screen.getByRole("button", { name: "Connect OneDrive" }));
-    await waitFor(() => expect(navigate).toHaveBeenCalledWith("https://accounts.example/authorize"));
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith("https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test"));
     expect(client.snapshot).toHaveBeenCalledTimes(2);
   });
 
@@ -149,6 +218,19 @@ describe("admin snapshot workflows", () => {
     await waitFor(() => expect(client.removeSource).toHaveBeenCalledWith(source.id));
     expect(client.snapshot).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove source" })).not.toBeInTheDocument());
+  });
+
+  it("preserves source removal and closes confirmation when its snapshot refresh fails", async () => {
+    const client = api();
+    vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockRejectedValueOnce(refreshFailure);
+    await login(client); go("Sources");
+    fireEvent.click(screen.getByRole("button", { name: "Remove Home Drive" }));
+    fireEvent.click(within(await screen.findByRole("dialog", { name: "Remove source" })).getByRole("button", { name: "Remove source permanently" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove source" })).not.toBeInTheDocument());
+    expect(screen.getByText("No cloud sources")).toBeVisible();
+    expect(screen.getByText("Source removed. Television access was removed immediately.")).toBeVisible();
+    expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
   });
 
   it("ignores stale snapshot responses and updates after unmount", async () => {

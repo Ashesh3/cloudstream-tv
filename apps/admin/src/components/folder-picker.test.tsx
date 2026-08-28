@@ -16,14 +16,14 @@ function pickerApi(): AdminApi { return { login: vi.fn(), logout: vi.fn(), snaps
 
 describe("folder picker compatibility wrapper", () => {
   it("browses live provider folders and adds a provider folder", async () => {
-    const api = pickerApi(); const changed = vi.fn().mockResolvedValue(undefined);
-    render(<FolderPicker source={source} roots={[root]} api={api} onChanged={changed} onClose={vi.fn()} />);
+    const api = pickerApi(); const changed = vi.fn().mockResolvedValue(true);
+    render(<FolderPicker source={source} roots={[root]} api={api} onRootAdded={changed} onRootRemoved={vi.fn().mockResolvedValue(true)} onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Add Trips to household program" }));
     await waitFor(() => expect(api.createRoot).toHaveBeenCalledWith(source.id, { providerNodeId: trips.providerNodeId }));
     expect(changed).toHaveBeenCalledTimes(1);
   });
   it("loads impact and confirms root removal without nesting dialogs", async () => {
-    const api = pickerApi(); render(<FolderPicker source={source} roots={[root]} devices={[device]} api={api} onChanged={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} />);
+    const api = pickerApi(); render(<FolderPicker source={source} roots={[root]} devices={[device]} api={api} onRootAdded={vi.fn().mockResolvedValue(true)} onRootRemoved={vi.fn().mockResolvedValue(true)} onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Review removal impact for Albums" }));
     const dialog = await screen.findByRole("dialog", { name: "Remove folder from household program" });
     expect(screen.getAllByRole("dialog")).toHaveLength(1); expect(within(dialog).getByText("Living Room")).toBeVisible();

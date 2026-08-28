@@ -16,12 +16,12 @@ function apiWithProviderFolders(providerFolders: AdminApi["providerFolders"]): A
 
 describe("provider folder stage", () => {
   it("shows provider-empty only after a successful live empty response", async () => {
-    render(<ProviderFolderStage api={apiWithProviderFolders(vi.fn().mockResolvedValue(page()))} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderFolderStage api={apiWithProviderFolders(vi.fn().mockResolvedValue(page()))} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} />);
     expect(await screen.findByText("This provider folder is empty")).toBeVisible();
   });
 
   it("uses a fixed safe transient error without persisting a fourth source state", async () => {
-    render(<ProviderFolderStage api={apiWithProviderFolders(vi.fn().mockRejectedValue(new AdminApiError(503, "PROVIDER_UNAVAILABLE", "Provider temporarily unavailable. Try again.")))} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderFolderStage api={apiWithProviderFolders(vi.fn().mockRejectedValue(new AdminApiError(503, "PROVIDER_UNAVAILABLE", "Provider temporarily unavailable. Try again.")))} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Provider temporarily unavailable");
     expect(screen.queryByText("This provider folder is empty")).not.toBeInTheDocument();
     expect(source.status).toBe("healthy");
@@ -34,7 +34,7 @@ describe("provider folder stage", () => {
       if (signals.length === 1) return Promise.resolve(page({ folders: [trips] }));
       return new Promise<AdminProviderFolderPage>(() => undefined);
     });
-    render(<ProviderFolderStage api={apiWithProviderFolders(providerFolders)} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderFolderStage api={apiWithProviderFolders(providerFolders)} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Open Trips" }));
     await waitFor(() => expect(signals).toHaveLength(2));
     expect(signals[0]!.aborted).toBe(true);
@@ -42,7 +42,7 @@ describe("provider folder stage", () => {
 
   it("creates a root immediately and keeps the provider id only in the authenticated workbench callback", async () => {
     const api = apiWithProviderFolders(vi.fn().mockResolvedValue(page({ folders: [trips] })));
-    const added = vi.fn();
+    const added = vi.fn().mockResolvedValue(undefined);
     render(<ProviderFolderStage api={api} source={source} selectedProviderNodeIds={new Set()} onRootAdded={added} onClose={vi.fn()} />);
     fireEvent.click(await screen.findByRole("button", { name: "Add Trips to household program" }));
     await waitFor(() => expect(added).toHaveBeenCalledWith(expect.objectContaining({ id: "root-trips", displayName: "Trips" }), trips.providerNodeId));
@@ -52,7 +52,7 @@ describe("provider folder stage", () => {
   it("does not update after unmount", async () => {
     let resolve!: (value: AdminProviderFolderPage) => void;
     const api = apiWithProviderFolders(vi.fn().mockReturnValue(new Promise(value => { resolve = value; })));
-    const view = render(<ProviderFolderStage api={api} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn()} onClose={vi.fn()} />);
+    const view = render(<ProviderFolderStage api={api} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} />);
     view.unmount();
     await act(async () => { resolve(page()); await Promise.resolve(); });
   });

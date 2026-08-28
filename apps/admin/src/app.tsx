@@ -12,7 +12,7 @@ import { Sources } from "./components/sources";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AlertCircleIcon, CheckCircle2Icon, CloudIcon, FolderOpenIcon, MonitorIcon, RefreshCwIcon, ShieldCheckIcon, Trash2Icon } from "lucide-react";
+import { AlertCircleIcon, AlertTriangleIcon, CheckCircle2Icon, CloudIcon, FolderOpenIcon, MonitorIcon, RefreshCwIcon, ShieldCheckIcon, Trash2Icon } from "lucide-react";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { DIRECTION_SEED } from "./design/ledger";
@@ -25,6 +25,7 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
   const [section, setSection] = useState<AdminSection>(initial.section);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [recoveryWarning, setRecoveryWarning] = useState("");
   const [notice, setNotice] = useState(initial.oauthMessage);
   const [approval, setApproval] = useState<ControlRequestDto | null>(null);
   const [denying, setDenying] = useState<string | null>(null);
@@ -53,24 +54,40 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
       throw cause;
     }
   };
-  const refresh = async () => {
+  const refresh = async (surfaceError = true) => {
     const generation = ++refreshGeneration.current;
     if (mounted.current) { setLoading(true); setError(""); }
     try {
       const next = await guard(() => api.snapshot());
       if (!mounted.current || generation !== refreshGeneration.current) return;
-      setSnapshot(next); setAuthenticated(true);
+      setSnapshot(next); setAuthenticated(true); setRecoveryWarning("");
     } catch (cause) {
-      if (mounted.current && generation === refreshGeneration.current && !isStatus(cause, 401)) setError(messageFor(cause));
+      if (surfaceError && mounted.current && generation === refreshGeneration.current && !isStatus(cause, 401)) setError(messageFor(cause));
       throw cause;
     } finally {
       if (mounted.current && generation === refreshGeneration.current) setLoading(false);
     }
   };
   const login = async (passphrase: string) => { await api.login(passphrase); if (mounted.current) setAuthenticated(true); await refresh(); };
-  const mutate = async (operation: () => Promise<unknown>, success: string) => {
-    try { await guard(operation); await refresh(); if (mounted.current) setNotice(success); }
-    catch (cause) { if (mounted.current && isStale(cause)) await refresh().catch(() => undefined); throw cause; }
+  const refreshCommittedChange = async (surfaceWarning = true): Promise<boolean> => {
+    try { await refresh(false); }
+    catch (cause) {
+      if (surfaceWarning && !isStatus(cause, 401) && mounted.current) setRecoveryWarning(COMMITTED_REFRESH_WARNING);
+      if (isStatus(cause, 401)) throw cause;
+      return false;
+    }
+    return true;
+  };
+  const mutate = async <T,>(operation: () => Promise<T>, success: string, apply: (result: T) => void): Promise<T> => {
+    let result: T;
+    try { result = await guard(operation); }
+    catch (cause) {
+      if (mounted.current && isStale(cause)) await refresh().catch(() => undefined);
+      throw cause;
+    }
+    if (mounted.current) { apply(result); setNotice(success); setError(""); setRecoveryWarning(""); }
+    await refreshCommittedChange();
+    return result;
   };
   const authorize = async (provider: "google" | "onedrive", reconnect?: string) => {
     const result = await guard(() => api.authorizeSource(provider, reconnect));
@@ -93,14 +110,15 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
         <LedgerOverview snapshot={snapshot} compact={section === "sources"} />
         {loading && <p className="sr-only" role="status">Refreshing household ledger…</p>}
         {notice && <Alert className="notice success" role="status"><CheckCircle2Icon /><AlertTitle>Completed</AlertTitle><AlertDescription>{notice}</AlertDescription></Alert>}
+        {recoveryWarning && <Alert className="ledger-warning" role="status"><AlertTriangleIcon /><AlertTitle>Ledger refresh needed</AlertTitle><AlertDescription>{recoveryWarning}</AlertDescription></Alert>}
         {error && <Alert variant="destructive"><AlertCircleIcon /><AlertTitle>Action could not be completed</AlertTitle><AlertDescription>{error}</AlertDescription><AlertAction><Button variant="outline" onClick={() => void refresh().catch(() => undefined)}><RefreshCwIcon data-icon="inline-start" />Try again</Button></AlertAction></Alert>}
-        {section === "requests" && <Requests requests={snapshot.pendingRequests} roots={snapshot.roots} sources={snapshot.sources} disabled={!snapshot.household.allowNewDeviceRequests} pendingId={denying} onApprove={setApproval} onDeny={request => { setDenying(request.id); setError(""); void mutate(() => api.denyRequest(request.id), `${request.requestedName} was denied.`).catch(cause => setError(messageFor(cause))).finally(() => { if (mounted.current) setDenying(null); }); }} />}
-        {section === "devices" && <Devices devices={snapshot.devices.filter(device => !device.revokedAt)} roots={snapshot.roots} onUpdate={(id, body: UpdateDeviceBody) => mutate(() => api.updateDevice(id, body), "Device updated.")} onRevoke={setRevoke} />}
-        {section === "sources" && <Sources sources={snapshot.sources} roots={snapshot.roots} devices={snapshot.devices} api={api} onRefresh={refresh} onAuthorize={authorize} />}
-        {section === "settings" && <Settings household={snapshot.household} snapshot={snapshot} onSave={value => mutate(() => api.updateSettings(value), "Household defaults saved.")} onRotate={async (current, next) => { await guard(() => api.rotatePassphrase(current, next)); unauthenticate(); }} onLogout={async () => { await guard(() => api.logout()); unauthenticate(); }} />}
+        {section === "requests" && <Requests requests={snapshot.pendingRequests} roots={snapshot.roots} sources={snapshot.sources} disabled={!snapshot.household.allowNewDeviceRequests} pendingId={denying} onApprove={setApproval} onDeny={request => { setDenying(request.id); setError(""); void mutate(() => api.denyRequest(request.id), `${request.requestedName} was denied.`, () => setSnapshot(current => current ? { ...current, pendingRequests: current.pendingRequests.filter(item => item.id !== request.id) } : current)).catch(cause => setError(messageFor(cause))).finally(() => { if (mounted.current) setDenying(null); }); }} />}
+        {section === "devices" && <Devices devices={snapshot.devices.filter(device => !device.revokedAt)} roots={snapshot.roots} onUpdate={(id, body: UpdateDeviceBody) => mutate(() => api.updateDevice(id, body), "Device updated.", result => setSnapshot(current => current ? { ...current, devices: current.devices.map(item => item.id === id ? result.device : item) } : current)).then(() => undefined)} onRevoke={setRevoke} />}
+        {section === "sources" && <Sources sources={snapshot.sources} roots={snapshot.roots} devices={snapshot.devices} api={api} onRootAdded={async root => { setSnapshot(current => current ? { ...current, roots: [...current.roots.filter(item => item.id !== root.id), root] } : current); setRecoveryWarning(""); return refreshCommittedChange(false); }} onRootRemoved={async rootId => { setSnapshot(current => current ? { ...current, roots: current.roots.filter(item => item.id !== rootId), devices: current.devices.map(device => ({ ...device, assignedRootIds: device.assignedRootIds.filter(id => id !== rootId) })) } : current); setRecoveryWarning(""); return refreshCommittedChange(false); }} onRemoveSource={sourceId => mutate(() => api.removeSource(sourceId), "Source removed. Television access was removed immediately.", result => { const removedRootIds = new Set(result.roots.map(root => root.id)); setSnapshot(current => current ? { ...current, sources: current.sources.filter(item => item.id !== sourceId), roots: current.roots.filter(root => root.sourceId !== sourceId), devices: current.devices.map(device => ({ ...device, assignedRootIds: device.assignedRootIds.filter(id => !removedRootIds.has(id)) })) } : current); }).then(() => undefined)} onAuthorize={authorize} />}
+        {section === "settings" && <Settings household={snapshot.household} snapshot={snapshot} onSave={value => mutate(() => api.updateSettings(value), "Household defaults saved.", () => setSnapshot(current => current ? { ...current, household: { ...current.household, ...value } } : current)).then(() => undefined)} onRotate={async (current, next) => { await guard(() => api.rotatePassphrase(current, next)); unauthenticate(); }} onLogout={async () => { await guard(() => api.logout()); unauthenticate(); }} />}
       </div>
-      {approval && <ApprovalSheet request={approval} roots={snapshot.roots} sources={snapshot.sources} onClose={() => setApproval(null)} onApprove={async body => { await mutate(() => api.approveRequest(approval.id, body), `${body.name} was approved.`); if (mounted.current) setApproval(null); }} />}
-      {revoke && <AlertDialog open onOpenChange={open => { if (!open && !revokePending) setRevoke(null); }}><AlertDialogContent aria-label="Revoke device"><AlertDialogHeader><div className="flex items-center gap-2"><Trash2Icon className="size-5 text-destructive" /><AlertDialogTitle>Revoke device</AlertDialogTitle></div><AlertDialogDescription><strong className="text-foreground">{revoke.name}</strong> will be signed out and lose access on its next request. This cannot be undone; the television must request access again.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={revokePending}>Cancel</AlertDialogCancel><AlertDialogAction disabled={revokePending} onClick={event => { event.preventDefault(); setRevokePending(true); void mutate(() => api.revokeDevice(revoke.id), `${revoke.name} was revoked.`).then(() => setRevoke(null)).catch(cause => setError(messageFor(cause))).finally(() => { if (mounted.current) setRevokePending(false); }); }}>{revokePending ? "Revoking…" : "Revoke permanently"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
+      {approval && <ApprovalSheet request={approval} roots={snapshot.roots} sources={snapshot.sources} onClose={() => setApproval(null)} onApprove={async body => { const requestId = approval.id; await mutate(() => api.approveRequest(requestId, body), `${body.name} was approved.`, result => setSnapshot(current => current ? { ...current, pendingRequests: current.pendingRequests.filter(item => item.id !== requestId), devices: [...current.devices.filter(item => item.id !== result.device.id), result.device] } : current)); if (mounted.current) setApproval(null); }} />}
+      {revoke && <AlertDialog open onOpenChange={open => { if (!open && !revokePending) setRevoke(null); }}><AlertDialogContent aria-label="Revoke device"><AlertDialogHeader><div className="flex items-center gap-2"><Trash2Icon className="size-5 text-destructive" /><AlertDialogTitle>Revoke device</AlertDialogTitle></div><AlertDialogDescription><strong className="text-foreground">{revoke.name}</strong> will be signed out and lose access on its next request. This cannot be undone; the television must request access again.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={revokePending}>Cancel</AlertDialogCancel><AlertDialogAction disabled={revokePending} onClick={event => { event.preventDefault(); const revoked = revoke; setRevokePending(true); void mutate(() => api.revokeDevice(revoked.id), `${revoked.name} was revoked.`, () => setSnapshot(current => current ? { ...current, devices: current.devices.filter(item => item.id !== revoked.id) } : current)).then(() => setRevoke(null)).catch(cause => setError(messageFor(cause))).finally(() => { if (mounted.current) setRevokePending(false); }); }}>{revokePending ? "Revoking…" : "Revoke permanently"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
     </Shell>
   </div></TooltipProvider>;
 }
@@ -141,6 +159,7 @@ function initialNavigation() {
 function isStatus(value: unknown, status: number): value is { status: number } { return Boolean(value && typeof value === "object" && "status" in value && (value as { status: unknown }).status === status); }
 function isStale(value: unknown) { return Boolean(value && typeof value === "object" && "code" in value && ["DEVICE_STALE", "DEVICE_NOT_FOUND", "DEVICE_REQUEST_RESOLVED", "SOURCE_NOT_FOUND", "ROOT_NOT_FOUND"].includes(String((value as { code: unknown }).code))); }
 function messageFor(value: unknown) { return value instanceof AdminApiError ? value.message : "The request could not be completed."; }
+const COMMITTED_REFRESH_WARNING = "Change saved, but the household ledger could not be refreshed. Refresh to confirm the latest state.";
 
 const DIRECTION_CONTRACT = `
 THESIS: Cloud media is programmed like a private screening; refuse generic SaaS dashboard composition.

@@ -9,19 +9,20 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 
-export function Sources({ sources, roots, devices, api, onRefresh, onAuthorize }: {
+export function Sources({ sources, roots, devices, api, onRootAdded, onRootRemoved, onRemoveSource, onAuthorize }: {
   sources: ControlSourceDto[];
   roots: ControlRootDto[];
   devices: ControlDeviceDto[];
   api: AdminApi;
-  onRefresh(): Promise<void>;
+  onRootAdded(root: ControlRootDto): Promise<boolean>;
+  onRootRemoved(rootId: string): Promise<boolean>;
+  onRemoveSource(sourceId: string): Promise<void>;
   onAuthorize(provider: "google" | "onedrive", reconnect?: string): Promise<void>;
 }) {
   const [pickerId, setPicker] = useState<string | null>(null);
   const [removing, setRemoving] = useState<ControlSourceDto | null>(null);
   const [impact, setImpact] = useState<AdminImpact | null>(null);
   const [pending, setPending] = useState<string | null>(null);
-  const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const pickerTrigger = useRef<HTMLButtonElement | null>(null);
   const openedPickerId = useRef<string | null>(null);
@@ -40,14 +41,14 @@ export function Sources({ sources, roots, devices, api, onRefresh, onAuthorize }
   const remove = async () => {
     if (!removing) return;
     setPending(`remove-${removing.id}`); setError("");
-    try { await api.removeSource(removing.id); impactGeneration.current += 1; setRemoving(null); setImpact(null); setMessage("Source removed. Television access was removed immediately."); await onRefresh(); }
+    try { await onRemoveSource(removing.id); impactGeneration.current += 1; setRemoving(null); setImpact(null); }
     catch (cause) { setError(safeFailure(cause, "Source could not be removed.")); }
     finally { setPending(null); }
   };
   const pickerSource = pickerId ? sources.find(source => source.id === pickerId) : undefined;
-  if (pickerSource) return <section className="source-task-layout"><FolderPicker source={pickerSource} roots={roots.filter(root => root.sourceId === pickerSource.id)} devices={devices} api={api} onChanged={onRefresh} onClose={() => setPicker(null)} /></section>;
+  if (pickerSource) return <section className="source-task-layout"><FolderPicker source={pickerSource} roots={roots.filter(root => root.sourceId === pickerSource.id)} devices={devices} api={api} onRootAdded={onRootAdded} onRootRemoved={onRootRemoved} onClose={() => setPicker(null)} /></section>;
   return <section className="flex flex-col gap-5"><PageHeader context="Cloud library" title="Sources" description="Connect accounts, browse folders live, and expose only the roots you approve." action={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={() => void onAuthorize("google")}><CloudIcon data-icon="inline-start" />Connect Google Drive</Button><Button onClick={() => void onAuthorize("onedrive")}><CloudIcon data-icon="inline-start" />Connect OneDrive</Button></div>} />
-    {message && <p className="notice success" role="status">{message}</p>}{error && <p className="error-banner" role="alert">{error}</p>}
+    {error && <p className="error-banner" role="alert">{error}</p>}
     {!sources.length ? <Empty title="No cloud sources" body="Connect Google Drive or OneDrive to browse and choose household folders." icon={<CloudIcon />} /> : <div className="source-ledger">{sources.map(source => {
       const sourceRoots = roots.filter(root => root.sourceId === source.id);
       return <Card className="source-entry" key={source.id} data-source-status={source.status}>
