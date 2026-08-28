@@ -7,6 +7,7 @@ import {
   buildControlPlaneMigrationPlan,
   createMigrationFirestoreReader,
   loadOperatorCredentials,
+  loadProviderTokenKeys,
   restoreControlPlane,
   runControlPlaneMigration,
   type LegacyControlPlaneReader
@@ -455,12 +456,77 @@ describe("control-plane operations", () => {
     expect(durable.writeAttempts).toBe(0);
   });
 
+  it("migration detects same-logical and different-body ETag races", async () => {
+    for (const changed of [false, true]) {
+      const firestore = migrationReader();
+      const plan = await buildControlPlaneMigrationPlan(firestore, "h1", TEST_NOW, providerKeys());
+      const concurrent = structuredClone(plan.document);
+      if (changed) concurrent.household.allowNewDeviceRequests = false;
+      const durable = new MemoryControlDurableStore({
+        envelope: (await import("@cloudframe/server")).encryptControlPlaneDocument(plan.document, testAeadKeyring()),
+        etag: "etag-1"
+      }, 0, testAeadKeyring().keys);
+      const originalRead = durable.read.bind(durable);
+      let reads = 0;
+      durable.read = async (...args) => {
+        reads += 1;
+        if (reads === 2) durable.replaceOutOfBand(concurrent);
+        return originalRead(...args);
+      };
+      await expect(runControlPlaneMigration({
+        apply: true, environment: "preview", householdId: "h1", now: TEST_NOW,
+        firestore, durable, cache: createMemoryControlHotCache(),
+        keyring: testAeadKeyring(), providerTokenKeys: providerKeys()
+      })).rejects.toThrow("CONTROL_PLANE_CONFLICT");
+    }
+  });
+
+  it("restore detects same-logical and different-body ETag races", async () => {
+    for (const changed of [false, true]) {
+      const recovery = migratedControlDocument();
+      const durable = new MemoryControlDurableStore(null, 0, testAeadKeyring().keys);
+      const originalRead = durable.read.bind(durable);
+      const originalCreate = durable.create.bind(durable);
+      durable.create = async (envelope) => {
+        const committed = await originalCreate(envelope);
+        const concurrent = structuredClone(recovery);
+        if (changed) concurrent.household.allowNewDeviceRequests = false;
+        durable.replaceOutOfBand(concurrent);
+        return committed;
+      };
+      durable.read = async (...args) => {
+        return originalRead(...args);
+      };
+      await expect(restoreControlPlane({
+        apply: true, environment: "preview", householdId: "h1",
+        firestore: recoveryReader(recovery), durable,
+        cache: createMemoryControlHotCache(), keyring: testAeadKeyring(), providerTokenKeys: providerKeys()
+      })).rejects.toThrow("CONTROL_PLANE_CONFLICT");
+    }
+  });
+
+  it("refuses same-revision recovery when active content differs", async () => {
+    const recovery = migratedControlDocument();
+    const active = structuredClone(recovery);
+    active.household.allowNewDeviceRequests = !active.household.allowNewDeviceRequests;
+    const durable = new MemoryControlDurableStore({
+      envelope: (await import("@cloudframe/server")).encryptControlPlaneDocument(active, testAeadKeyring()),
+      etag: "etag-1"
+    }, 0, testAeadKeyring().keys);
+
+    await expect(restoreControlPlane({
+      apply: true, environment: "preview", householdId: "h1",
+      firestore: recoveryReader(recovery), durable,
+      cache: createMemoryControlHotCache(), keyring: testAeadKeyring(), providerTokenKeys: providerKeys()
+    })).rejects.toThrow("CONTROL_PLANE_OVERWRITE_REFUSED");
+  });
+
   it("requires a dedicated matching operator credential file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "cloudframe-operator-"));
     try {
       const email = "operator@example.test";
       const service = join(directory, "service.json");
-      await writeFile(service, JSON.stringify({ type: "service_account", client_email: email }));
+      await writeFile(service, JSON.stringify(validServiceCredential(email)));
       await expect(loadOperatorCredentials({ operatorEmail: email, credentialFile: service }))
         .resolves.toEqual({ keyFilename: service });
       await expect(loadOperatorCredentials({
@@ -469,13 +535,12 @@ describe("control-plane operations", () => {
       await expect(loadOperatorCredentials({
         operatorEmail: "other@example.test", credentialFile: service
       })).rejects.toThrow("OPERATOR_CREDENTIALS_INVALID");
+      await expect(loadOperatorCredentials({
+        operatorEmail: "OPERATOR@EXAMPLE.TEST", credentialFile: service
+      })).resolves.toEqual({ keyFilename: service });
 
       const external = join(directory, "external.json");
-      await writeFile(external, JSON.stringify({
-        type: "external_account",
-        service_account_impersonation_url:
-          `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(email)}:generateAccessToken`
-      }));
+      await writeFile(external, JSON.stringify(validExternalCredential(email)));
       await expect(loadOperatorCredentials({ operatorEmail: email, credentialFile: external }))
         .resolves.toEqual({ keyFilename: external });
       await expect(loadOperatorCredentials({ operatorEmail: undefined, credentialFile: external }))
@@ -483,6 +548,65 @@ describe("control-plane operations", () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it("rejects unusable and mixed-case-reused operator credentials", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "cloudframe-operator-invalid-"));
+    const email = "operator@example.test";
+    try {
+      const missing = join(directory, "missing.json");
+      await writeFile(missing, JSON.stringify({ type: "service_account", client_email: email }));
+      await expect(loadOperatorCredentials({ operatorEmail: email, credentialFile: missing }))
+        .rejects.toThrow("OPERATOR_CREDENTIALS_INVALID");
+
+      const malformedPem = join(directory, "pem.json");
+      await writeFile(malformedPem, JSON.stringify({
+        type: "service_account", project_id: "project-1", private_key_id: "key-1",
+        private_key: "not-a-pem", client_email: email,
+        client_id: "123", token_uri: "https://oauth2.googleapis.com/token"
+      }));
+      await expect(loadOperatorCredentials({ operatorEmail: email, credentialFile: malformedPem }))
+        .rejects.toThrow("OPERATOR_CREDENTIALS_INVALID");
+
+      const wif = join(directory, "wif.json");
+      await writeFile(wif, JSON.stringify(validExternalCredential(email, { credential_source: {} })));
+      await expect(loadOperatorCredentials({ operatorEmail: email, credentialFile: wif }))
+        .rejects.toThrow("OPERATOR_CREDENTIALS_INVALID");
+
+      const mixed = join(directory, "mixed.json");
+      await writeFile(mixed, JSON.stringify(validServiceCredential("Operator@Example.Test")));
+      await expect(loadOperatorCredentials({
+        operatorEmail: "Operator@Example.Test", credentialFile: mixed,
+        runtimeWriterEmail: "operator@example.test"
+      })).rejects.toThrow("OPERATOR_IDENTITY_INVALID");
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("loads provider keys using the exact declared version identity", () => {
+    const keys = loadProviderTokenKeys({
+      PROVIDER_TOKEN_KEY_VERSION: "MiXeD",
+      "PROVIDER_TOKEN_KEY_MiXeD": Buffer.alloc(32, 1).toString("base64url"),
+      "PROVIDER_TOKEN_KEY_OLD": Buffer.alloc(32, 2).toString("base64url")
+    });
+    expect(Object.keys(keys)).toEqual(["MiXeD", "OLD"]);
+    expect(keys.MiXeD).toEqual(Buffer.alloc(32, 1));
+  });
+
+  it("rejects missing current provider keys and ambiguous version aliases", () => {
+    expect(() => loadProviderTokenKeys({
+      PROVIDER_TOKEN_KEY_V1: Buffer.alloc(32, 1).toString("base64url")
+    })).toThrow("PROVIDER_TOKEN_KEYS_INVALID");
+    expect(() => loadProviderTokenKeys({
+      PROVIDER_TOKEN_KEY_VERSION: "v1",
+      "PROVIDER_TOKEN_KEY_V1": Buffer.alloc(32, 1).toString("base64url")
+    })).toThrow("PROVIDER_TOKEN_KEYS_INVALID");
+    expect(() => loadProviderTokenKeys({
+      PROVIDER_TOKEN_KEY_VERSION: "V1",
+      "PROVIDER_TOKEN_KEY_V1": Buffer.alloc(32, 1).toString("base64url"),
+      "PROVIDER_TOKEN_KEY_v1": Buffer.alloc(32, 2).toString("base64url")
+    })).toThrow("PROVIDER_TOKEN_KEYS_INVALID");
   });
 
   it("rejects unapproved namespaces before any operation", async () => {
@@ -703,6 +827,34 @@ function stableEncrypted(value: string, version: "v1" | "v2") {
 
 function timestampLike(value: Date) {
   return { toDate: () => new Date(value) };
+}
+
+function validServiceCredential(email: string) {
+  return {
+    type: "service_account",
+    project_id: "project-1",
+    private_key_id: "key-1",
+    private_key: "-----BEGIN PRIVATE KEY-----\nQUJDRA==\n-----END PRIVATE KEY-----\n",
+    client_email: email,
+    client_id: "123456789",
+    token_uri: "https://oauth2.googleapis.com/token"
+  };
+}
+
+function validExternalCredential(
+  email: string,
+  patch: Record<string, unknown> = {}
+) {
+  return {
+    type: "external_account",
+    audience: "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/provider",
+    subject_token_type: "urn:ietf:params:oauth:token-type:jwt",
+    token_url: "https://sts.googleapis.com/v1/token",
+    credential_source: { file: "C:/secure/oidc-token" },
+    service_account_impersonation_url:
+      `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(email.toLowerCase())}:generateAccessToken`,
+    ...patch
+  };
 }
 
 function recordingMigrationFirestore() {

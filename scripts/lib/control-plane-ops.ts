@@ -202,19 +202,24 @@ export async function runControlPlaneMigration(
 
   const preflight = await inspectDurable(options.durable);
   let alreadyActive = false;
+  let expectedEtag: string;
   if (preflight.status === "present") {
     const current = await readDurable(options.durable);
     if (!current || current.etag !== preflight.etag) throw conflict();
     const currentDocument = openCurrent(current, options.keyring);
     refuseUnsafeReplacement(currentDocument, plan.document, plan.checksum);
     alreadyActive = logicalChecksum(currentDocument) === plan.checksum;
+    expectedEtag = current.etag;
+  } else {
+    expectedEtag = "";
   }
 
   if (!alreadyActive) {
     const committed = await commitEnvelope(options.durable, preflight, plan.document, options.keyring);
     await cacheBestEffort(options.cache, committed);
+    expectedEtag = committed.etag;
   }
-  await verifyActiveSnapshot(options, plan.document, plan.checksum);
+  await verifyActiveSnapshot(options, plan.document, plan.checksum, expectedEtag);
   try {
     await writeAndVerifyRecovery(options.firestore, plan.document, plan.checksum);
   } catch {
@@ -250,8 +255,12 @@ export async function restoreControlPlane(
       if (currentDocument.revision > recovery.revision) {
         throw new ControlPlaneOperationError("CONTROL_PLANE_OVERWRITE_REFUSED");
       }
-      if (currentDocument.revision === recovery.revision && logicalChecksum(currentDocument) === checksum) {
+      if (currentDocument.revision === recovery.revision) {
+        if (logicalChecksum(currentDocument) !== checksum) {
+          throw new ControlPlaneOperationError("CONTROL_PLANE_OVERWRITE_REFUSED");
+        }
         await cacheBestEffort(options.cache, current);
+        await verifyActiveSnapshot(options, recovery, checksum, current.etag);
         return result(true, recovery, checksum);
       }
     } catch (error) {
@@ -261,7 +270,7 @@ export async function restoreControlPlane(
   }
   const committed = await commitEnvelope(options.durable, preflight, recovery, options.keyring);
   await cacheBestEffort(options.cache, committed);
-  await verifyActiveSnapshot(options, recovery, checksum);
+  await verifyActiveSnapshot(options, recovery, checksum, committed.etag);
   return result(true, recovery, checksum);
 }
 
@@ -279,9 +288,12 @@ export function requireControlPlaneEnvironment(value: string): ControlPlaneEnvir
 export async function loadOperatorCredentials(
   options: OperatorCredentialOptions
 ): Promise<OperatorCredentials> {
-  const email = requiredCredentialValue(options.operatorEmail);
+  const email = canonicalServiceAccountEmail(options.operatorEmail);
   const filename = requiredCredentialValue(options.credentialFile);
-  if (email === options.runtimeWriterEmail || email === options.legacyReaderEmail) {
+  if (
+    samePrincipal(email, options.runtimeWriterEmail) ||
+    samePrincipal(email, options.legacyReaderEmail)
+  ) {
     throw new Error("OPERATOR_IDENTITY_INVALID");
   }
   let parsed: unknown;
@@ -294,28 +306,78 @@ export async function loadOperatorCredentials(
     throw new Error("OPERATOR_CREDENTIALS_INVALID");
   }
   const credential = parsed as Record<string, unknown>;
-  const exactServiceAccount =
-    credential.type === "service_account" && credential.client_email === email;
+  const exactServiceAccount = validServiceAccountCredential(credential, email);
   const impersonation = credential.service_account_impersonation_url;
   const exactExternalAccount =
-    credential.type === "external_account" &&
+    validExternalAccountCredential(credential) &&
     typeof impersonation === "string" &&
-    impersonation === `https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/${encodeURIComponent(email)}:generateAccessToken`;
+    impersonationTarget(impersonation) === email;
   if (!exactServiceAccount && !exactExternalAccount) {
     throw new Error("OPERATOR_CREDENTIALS_INVALID");
   }
   return { keyFilename: filename };
 }
 
+function validServiceAccountCredential(
+  credential: Record<string, unknown>,
+  email: string
+): boolean {
+  const privateKey = credential.private_key;
+  return credential.type === "service_account" &&
+    canonicalCredentialEmail(credential.client_email) === email &&
+    validBoundedString(credential.project_id, 1, 128) &&
+    validBoundedString(credential.private_key_id, 1, 256) &&
+    typeof privateKey === "string" &&
+    /^-----BEGIN PRIVATE KEY-----\r?\n[A-Za-z0-9+/=\r\n]+\r?\n-----END PRIVATE KEY-----\r?\n?$/.test(privateKey) &&
+    validBoundedString(credential.client_id, 1, 128) &&
+    credential.token_uri === "https://oauth2.googleapis.com/token";
+}
+
+function validExternalAccountCredential(credential: Record<string, unknown>): boolean {
+  const source = credential.credential_source;
+  return credential.type === "external_account" &&
+    validBoundedString(credential.audience, 1, 2048) &&
+    credential.subject_token_type === "urn:ietf:params:oauth:token-type:jwt" &&
+    credential.token_url === "https://sts.googleapis.com/v1/token" &&
+    !!source && typeof source === "object" && !Array.isArray(source) &&
+    Object.keys(source).length > 0 &&
+    Object.values(source).some((value) => validBoundedString(value, 1, 4096));
+}
+
+function impersonationTarget(value: string): string | null {
+  const prefix = "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/";
+  const suffix = ":generateAccessToken";
+  if (!value.startsWith(prefix) || !value.endsWith(suffix)) return null;
+  try {
+    return canonicalServiceAccountEmail(
+      decodeURIComponent(value.slice(prefix.length, -suffix.length))
+    );
+  } catch {
+    return null;
+  }
+}
+
 export function loadProviderTokenKeys(environment: NodeJS.ProcessEnv): Record<string, Uint8Array> {
+  const currentVersion = environment.PROVIDER_TOKEN_KEY_VERSION;
+  if (!currentVersion || !/^[A-Za-z0-9_-]{1,64}$/.test(currentVersion)) {
+    throw new Error("PROVIDER_TOKEN_KEYS_INVALID");
+  }
   const keys: Record<string, Uint8Array> = Object.create(null) as Record<string, Uint8Array>;
+  const caseFolded = new Map<string, string>();
   for (const [name, value] of Object.entries(environment)) {
-    const match = /^PROVIDER_TOKEN_KEY_([A-Z0-9_-]+)$/.exec(name);
-    if (!match || !value || name === "PROVIDER_TOKEN_KEY_VERSION") continue;
+    if (name === "PROVIDER_TOKEN_KEY_VERSION") continue;
+    const match = /^PROVIDER_TOKEN_KEY_([A-Za-z0-9_-]+)$/.exec(name);
+    if (!match || !value) continue;
+    const version = match[1]!;
+    const folded = version.toLowerCase();
+    const previous = caseFolded.get(folded);
+    if (previous && previous !== version) throw new Error("PROVIDER_TOKEN_KEYS_INVALID");
+    caseFolded.set(folded, version);
     const decoded = canonicalBase64Url(value);
     if (decoded.length !== 32) throw new Error("PROVIDER_TOKEN_KEYS_INVALID");
-    keys[match[1]!.toLowerCase()] = decoded;
+    keys[version] = decoded;
   }
+  if (!keys[currentVersion]) throw new Error("PROVIDER_TOKEN_KEYS_INVALID");
   return keys;
 }
 
@@ -612,10 +674,12 @@ async function cacheBestEffort(cache: ControlHotCache, value: StoredControlEnvel
 async function verifyActiveSnapshot(
   options: CommonOperationOptions,
   expected: ControlPlaneDocumentV2,
-  checksum: string
+  checksum: string,
+  expectedEtag: string
 ): Promise<void> {
   const stored = await readDurable(options.durable);
   if (!stored) throw new ControlPlaneOperationError("CONTROL_PLANE_VERIFY_FAILED");
+  if (stored.etag !== expectedEtag) throw conflict();
   let opened: ControlPlaneDocumentV2;
   try { opened = decryptControlPlaneEnvelope(stored.envelope, options.keyring.keys); }
   catch { throw new ControlPlaneOperationError("CONTROL_PLANE_VERIFY_FAILED"); }
@@ -829,6 +893,30 @@ function canonicalBase64Url(value: string): Buffer {
 function requiredCredentialValue(value: string | undefined): string {
   if (!value || value !== value.trim()) throw new Error("OPERATOR_IDENTITY_INVALID");
   return value;
+}
+
+function canonicalServiceAccountEmail(value: string | undefined): string {
+  const email = requiredCredentialValue(value).toLowerCase();
+  if (
+    email.length > 254 ||
+    !/^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?@[a-z0-9](?:[a-z0-9.-]{0,125}[a-z0-9])?$/.test(email) ||
+    email.includes("..")
+  ) throw new Error("OPERATOR_IDENTITY_INVALID");
+  return email;
+}
+
+function canonicalCredentialEmail(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  try { return canonicalServiceAccountEmail(value); } catch { return null; }
+}
+
+function samePrincipal(email: string, candidate: string | undefined): boolean {
+  if (!candidate) return false;
+  try { return canonicalServiceAccountEmail(candidate) === email; } catch { return false; }
+}
+
+function validBoundedString(value: unknown, minimum: number, maximum: number): value is string {
+  return typeof value === "string" && value.length >= minimum && value.length <= maximum;
 }
 
 function isConflictError(error: unknown): boolean {

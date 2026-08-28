@@ -149,6 +149,8 @@ describe("operations scripts", () => {
     const environment = {
       HOUSEHOLD_ID: "h1",
       CONTROL_PLANE_ENV: "preview",
+      PROVIDER_TOKEN_KEY_VERSION: "V1",
+      PROVIDER_TOKEN_KEY_V1: Buffer.alloc(32, 7).toString("base64url"),
       CONTROL_PLANE_KEY_VERSION: "",
       CONTROL_PLANE_KEY_V1: "",
       BLOB_STORE_ID: ""
