@@ -83,7 +83,11 @@ export function createVercelBlobControlStore(
       }
 
       const envelope = await new Response(result.stream).json() as ControlPlaneEnvelopeV1;
-      return { envelope, etag: conditionalWriteEtag(result.blob.etag) };
+      return {
+        envelope,
+        etag: conditionalWriteEtag(result.blob.etag),
+        revalidationEtag: result.blob.etag
+      };
     },
 
     async create(envelope) {

@@ -20,6 +20,7 @@ const MAX_MIRROR_ATTEMPTS = 3;
 export interface StoredControlEnvelope {
   envelope: ControlPlaneEnvelopeV1;
   etag: string;
+  revalidationEtag?: string;
 }
 
 export interface ControlDurableStore {
@@ -230,7 +231,7 @@ export function createControlPlaneStore(
 
     let durableResult: StoredControlEnvelope | { notModified: true } | null;
     try {
-      durableResult = await durable.read(cached.etag);
+      durableResult = await durable.read(cached.revalidationEtag ?? cached.etag);
       emit({ level: "info", event: "control_plane_blob_read", requestId: requestId(), householdId, count: 1 });
     } catch {
       throw unavailable();

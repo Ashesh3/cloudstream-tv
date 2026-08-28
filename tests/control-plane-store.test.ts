@@ -496,7 +496,11 @@ describe("Vercel control-plane adapters", () => {
     });
 
     await expect(durable.read("etag-1")).resolves.toEqual({ notModified: true });
-    await expect(durable.read()).resolves.toEqual({ envelope, etag: '"etag-2"' });
+    await expect(durable.read()).resolves.toEqual({
+      envelope,
+      etag: '"etag-2"',
+      revalidationEtag: 'W/"etag-2"'
+    });
     expect(blobSdk.get).toHaveBeenNthCalledWith(
       1,
       "cloudframe/control-plane/preview/h1.json.enc",
@@ -521,6 +525,35 @@ describe("Vercel control-plane adapters", () => {
         addRandomSuffix: false,
         allowOverwrite: true,
         ifMatch: '"etag-2"',
+        storeId: "store-1"
+      }
+    );
+
+    blobSdk.get.mockResolvedValueOnce({
+      statusCode: 304,
+      stream: null,
+      blob: { etag: "" }
+    });
+    const cache = createMemoryControlHotCache();
+    cache.replaceOutOfBand({
+      envelope,
+      etag: '"etag-2"',
+      revalidationEtag: 'W/"etag-2"'
+    });
+    const store = createControlPlaneStore({
+      durable,
+      cache,
+      mirror: new MemoryRecoveryMirror(),
+      deferred: new MemoryDeferredTasks(),
+      keyring: testAeadKeyring()
+    });
+    await store.load();
+    expect(blobSdk.get).toHaveBeenLastCalledWith(
+      "cloudframe/control-plane/preview/h1.json.enc",
+      {
+        access: "private",
+        useCache: false,
+        ifNoneMatch: 'W/"etag-2"',
         storeId: "store-1"
       }
     );
