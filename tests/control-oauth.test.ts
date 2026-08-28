@@ -277,6 +277,36 @@ function setup(options: { replaceFailures?: number } = {}) {
 }
 
 describe("sealed control OAuth", () => {
+  it("preserves safe provider error identity while normalizing OAuth completion", async () => {
+    const harness = setup();
+    harness.provider.adapter.beginAuthorization = async input => ({
+      authorizationUrl: `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?state=${encodeURIComponent(input.state)}`
+    });
+    const started = await harness.oauth.beginAuthorization({
+      admin: harness.admin,
+      context: harness.context(),
+      provider: "onedrive"
+    });
+    const providerError = Object.assign(new Error("secret Microsoft response"), {
+      name: "ProviderError",
+      code: "PROVIDER_BAD_RESPONSE"
+    });
+    harness.provider.adapter.completeAuthorization = async () => {
+      throw providerError;
+    };
+
+    const error = await harness.oauth.completeAuthorization({
+      admin: harness.admin,
+      context: harness.context(),
+      provider: "onedrive",
+      state: stateFromAuthorizationUrl(started.authorizationUrl),
+      stateCookie: started.stateCookie,
+      code: "provider-code"
+    }).catch(value => value);
+
+    expect(error).toMatchObject({ code: "OAUTH_PROVIDER_ERROR", cause: providerError });
+  });
+
   it("rejects off-provider authorization URLs before returning them", async () => {
     const hostile = [
       "https://evil.test/o/oauth2/v2/auth",

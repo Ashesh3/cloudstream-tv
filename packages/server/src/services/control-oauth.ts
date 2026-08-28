@@ -258,7 +258,11 @@ async function providerCall<T>(operation: () => Promise<T>): Promise<T> {
     return await operation();
   } catch (error) {
     if (error instanceof ControlOAuthServiceError) throw error;
-    providerInvalid();
+    const normalized = new ControlOAuthServiceError("OAUTH_PROVIDER_ERROR");
+    if (error instanceof Error) {
+      normalized.cause = error;
+    }
+    throw normalized;
   }
 }
 
