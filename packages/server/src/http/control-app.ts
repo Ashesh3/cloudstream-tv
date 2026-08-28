@@ -819,6 +819,7 @@ function parseOAuthCallbackQuery(
           scope: 4096,
           authuser: 128,
           prompt: 128,
+          iss: 128,
           error_description: 2048,
           error_uri: 2048
         }
@@ -851,7 +852,15 @@ function parseOAuthCallbackQuery(
   const state = url.searchParams.get("state");
   const code = url.searchParams.get("code");
   const providerError = url.searchParams.get("error");
-  if (!state || (code === null) === (providerError === null)) {
+  const issuer = url.searchParams.get("iss");
+  if (
+    !state ||
+    (code === null) === (providerError === null) ||
+    (provider === "google" &&
+      issuer !== null &&
+      issuer !== "https://accounts.google.com" &&
+      issuer !== "accounts.google.com")
+  ) {
     throw new ControlOAuthServiceError("OAUTH_STATE_INVALID");
   }
   return { state, code, providerError };

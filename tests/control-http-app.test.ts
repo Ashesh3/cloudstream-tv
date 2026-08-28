@@ -749,7 +749,7 @@ describe("final control HTTP API", () => {
     const google = await googleHarness.oauthCallbackRequest("google");
     const googleResponse = await googleHarness.app(
       jsonRequest(
-        `${google.path}&scope=drive&authuser=0&prompt=consent`,
+        `${google.path}&scope=drive&authuser=0&prompt=consent&iss=https%3A%2F%2Faccounts.google.com`,
         "GET",
         undefined,
         {
@@ -761,6 +761,23 @@ describe("final control HTTP API", () => {
       )
     );
     expect(googleResponse.headers.get("location")).toContain("oauth=connected");
+
+    const invalidIssuerHarness = await createControlApiHarness();
+    const invalidIssuer = await invalidIssuerHarness.oauthCallbackRequest("google");
+    const invalidIssuerResponse = await invalidIssuerHarness.app(
+      jsonRequest(
+        `${invalidIssuer.path}&iss=https%3A%2F%2Fevil.example`,
+        "GET",
+        undefined,
+        {
+          cookie: cookieHeader(
+            ["admin_session", invalidIssuerHarness.adminCookie],
+            ["oauth_state", invalidIssuer.oauthCookie]
+          )
+        }
+      )
+    );
+    expect(invalidIssuerResponse.headers.get("location")).toContain("oauth=invalid");
 
     const oneDriveHarness = await createControlApiHarness();
     const oneDrive = await oneDriveHarness.oauthCallbackRequest("onedrive");
