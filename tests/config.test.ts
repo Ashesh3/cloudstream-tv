@@ -53,7 +53,7 @@ describe("deployment configuration", () => {
     expect(contract.routes[0]).toEqual({ handle: "filesystem" });
   });
 
-  it("lists the final environment contract and enables the bounded legacy cutover", async () => {
+  it("lists the final post-cutover environment contract", async () => {
     const content = await readFile(".env.example", "utf8");
     const entries = new Map(
       content.split(/\r?\n/)
@@ -73,13 +73,12 @@ describe("deployment configuration", () => {
       "CONTROL_PLANE_ENV", "CONTROL_PLANE_KEY_VERSION", "CONTROL_PLANE_KEY_V1",
       "SESSION_KEY_VERSION", "SESSION_KEY_V1", "BROWSE_HANDLE_KEY_VERSION",
       "BROWSE_HANDLE_KEY_V1", "BROWSE_ID_SECRET", "ROOT_ID_SECRET",
-      "RATE_LIMIT_SECRET", "ENABLE_LEGACY_SESSION_EXCHANGE",
-      "GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL", "PROVIDER_TOKEN_KEY_VERSION",
+      "RATE_LIMIT_SECRET", "PROVIDER_TOKEN_KEY_VERSION",
       "PROVIDER_TOKEN_KEY_V1",
     ];
     expect([...entries.keys()]).toEqual(expect.arrayContaining(required));
     required.forEach(name => expect(["", "v1", "1"], name).toContain(entries.get(name)));
-    expect(entries.get("ENABLE_LEGACY_SESSION_EXCHANGE")).toBe("1");
+    expect(content).not.toMatch(/ENABLE_LEGACY_SESSION_EXCHANGE|GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL/);
     expect(content).not.toMatch(/KV_REST|ACCESS_CODE|NEXT_PUBLIC_GOOGLE|NEXT_PUBLIC_ONEDRIVE|CRON_SECRET|WORKFLOW_QUEUE_NAMESPACE|BROWSE_CURSOR_SECRET/);
   });
 

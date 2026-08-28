@@ -63,11 +63,10 @@ audience: https://vercel.com/ashsec
 provider: projects/7371742203/locations/global/workloadIdentityPools/vercel/providers/vercel-ashsec
 ```
 
-Bind the expected Vercel preview/production subjects only. Configure three separate principals:
+Bind the expected Vercel preview/production subjects only. Configure two separate principals:
 
 1. **Permanent runtime writer (`GCP_SERVICE_ACCOUNT_EMAIL`)**: custom role with exactly `datastore.entities.create` and `datastore.entities.update`; no get/list permission. Add an IAM Condition for the exact `controlPlaneBackups/{householdId}` document resource where supported. This client is passed only to the recovery mirror.
-2. **Temporary legacy reader (`GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL`)**: read-only access limited to the legacy admin/device session lookups and household/device records needed for cookie exchange. It has no write permission and exists only during the cutover window.
-3. **Operator (`GCP_OPERATOR_SERVICE_ACCOUNT_EMAIL`)**: migration/recovery identity kept outside the deployed runtime. Export its external-account credential configuration to a local protected file referenced by `GCP_OPERATOR_CREDENTIALS_FILE`. The scripts reject credentials that impersonate either runtime identity.
+2. **Operator (`GCP_OPERATOR_SERVICE_ACCOUNT_EMAIL`)**: migration/recovery identity kept outside the deployed runtime. Export its external-account credential configuration to a local protected file referenced by `GCP_OPERATOR_CREDENTIALS_FILE`. The scripts reject credentials that impersonate the runtime writer.
 
 The permanent writer should fail a direct `get`/list probe. Verify its write path with a controlled application mutation and the `control_plane_mirror_write` event; do not run an out-of-band probe that could overwrite the recovery document. Do not claim least privilege from browser rules alone; server IAM bypasses those rules.
 
@@ -78,7 +77,6 @@ Use `.env.example` as the canonical name list. Do not print values. Important co
 - `APP_ORIGIN` is one exact HTTPS origin with no path, query, fragment, or credentials.
 - `CONTROL_PLANE_ENV` is exactly `preview` or `production`.
 - `FIRESTORE_EMULATOR_HOST` is local only.
-- `ENABLE_LEGACY_SESSION_EXCHANGE` is enabled only by the exact string `1`.
 - `GCP_OPERATOR_SERVICE_ACCOUNT_EMAIL` and `GCP_OPERATOR_CREDENTIALS_FILE` belong on the operator workstation/CI job, not in the Vercel runtime.
 - `CONTROL_PLANE_KEY_VERSION`, `SESSION_KEY_VERSION`, `BROWSE_HANDLE_KEY_VERSION`, and `PROVIDER_TOKEN_KEY_VERSION` use canonical lowercase `v1`; matching environment suffixes are uppercase `*_V1`.
 - `ROOT_ID_SECRET`, `BROWSE_ID_SECRET`, `RATE_LIMIT_SECRET`, `CSRF_SECRET`, and `ADMIN_PASSPHRASE_PEPPER` are independent server-only secrets.
@@ -155,27 +153,6 @@ The first command is a dry run. Review only the redacted `householdId`, `revisio
 
 Do not move the production alias until apply has verified both copies. Preview must use fully separate state and secrets.
 
-## Bounded legacy session exchange
-
-For the short cutover window, configure:
-
-```text
-ENABLE_LEGACY_SESSION_EXCHANGE=1
-GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL=<separate read-only principal>
-```
-
-Only exact `ENABLE_LEGACY_SESSION_EXCHANGE=1` enables the reader. Each existing admin and TV cookie may perform the bounded legacy Firestore lookup once, then receives a sealed version-2 cookie. New sessions never use this reader.
-
-After confirming the one active admin browser and TV hold version-2 cookies:
-
-1. Set the flag to `0` or remove it and redeploy.
-2. Confirm ordinary admin/TV use still succeeds with no Firestore reads.
-3. Remove the legacy reader WIF binding and Vercel variable.
-4. Disable/delete the read-capable service account only after the binding is removed and rollback is no longer needed.
-5. Remove the compatibility code in a separate tested change. Do not delete a service account or binding merely as part of application deployment; treat identity cleanup as an explicit, reviewed infrastructure change.
-
-Do not reuse the legacy reader for migration, recovery, or runtime writes.
-
 ## Explicit recovery: dry run and apply
 
 Use this only when the authoritative Blob is missing or corrupt and public requests are failing closed.
@@ -213,7 +190,7 @@ Never log passphrases, cookies, OAuth codes, access/refresh tokens, provider URL
 
 ## Prove zero Firestore reads
 
-Run an authenticated observation window only after migration and cookie exchange are complete:
+Run an authenticated observation window after migration is complete:
 
 1. Record the exact UTC start time and current Firestore read metric/counter.
 2. Continuously reload admin state, browse nested Google/OneDrive folders, request thumbnails, play and seek media, renew one expired media URL, and exercise local resume history.
@@ -222,7 +199,7 @@ Run an authenticated observation window only after migration and cookie exchange
 5. Confirm Cloud Monitoring reports a zero delta for Firestore document reads for the exact project/database and time window. Account for metric ingestion delay before concluding.
 6. Save only timestamps, aggregate counters, commit/deployment IDs, and pass/fail evidence. Do not save URLs, document bodies, provider IDs, or credentials.
 
-Expected result: zero steady-state Firestore reads. A legacy-cookie exchange or operator migration/recovery invalidates the observation window and must be measured separately.
+Expected result: zero steady-state Firestore reads. Operator migration/recovery invalidates the observation window and must be measured separately.
 
 ## Rollback and retention
 

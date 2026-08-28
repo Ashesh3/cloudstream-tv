@@ -33,8 +33,7 @@ async function main(): Promise<void> {
           ...await loadOperatorCredentials({
             operatorEmail: process.env.GCP_OPERATOR_SERVICE_ACCOUNT_EMAIL,
             credentialFile: process.env.GCP_OPERATOR_CREDENTIALS_FILE,
-            runtimeWriterEmail: process.env.GCP_SERVICE_ACCOUNT_EMAIL,
-            legacyReaderEmail: process.env.GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL
+            runtimeWriterEmail: process.env.GCP_SERVICE_ACCOUNT_EMAIL
           })
         }));
     const providerTokenKeys = loadProviderTokenKeys(process.env);

@@ -10,11 +10,10 @@ import {
 import { createProductionApi } from "../deploy/api-entry";
 
 describe("production control-plane composition", () => {
-  it("builds separate request-bound Firestore writer and optional legacy reader identities", async () => {
+  it("builds only the request-bound write-only Firestore identity", async () => {
     const source = await readFile("deploy/api-entry.ts", "utf8");
     expect(source).toContain('serviceAccountEmail: required(environment, "GCP_SERVICE_ACCOUNT_EMAIL")');
-    expect(source).toContain('"GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL"');
-    expect(source).toContain('ENABLE_LEGACY_SESSION_EXCHANGE !== "1"');
+    expect(source).not.toMatch(/GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL|ENABLE_LEGACY_SESSION_EXCHANGE/);
     expect(source).toContain("requestOidcTokenSupplier(request)");
     expect(source).toContain("createFirestoreRecoveryMirror(writer, householdId)");
     expect(source).not.toContain("input.controlStore.load()");
@@ -78,27 +77,13 @@ describe("production control-plane composition", () => {
     )).toThrow(/production.*workload identity/i);
   });
 
-  it("does not construct the legacy reader unless the exact feature flag is enabled", async () => {
-    const source = await readFile("deploy/api-entry.ts", "utf8");
-    const legacyFactory = vi.fn();
-    const exactEnabled = source.includes('ENABLE_LEGACY_SESSION_EXCHANGE !== "1"');
-
-    for (const value of [undefined, "", "0", "true", "01", " 1"]) {
-      if (value === "1") legacyFactory();
-    }
-
-    expect(exactEnabled).toBe(true);
-    expect(legacyFactory).not.toHaveBeenCalled();
-  });
-
   it("keeps the deployed app dependencies free of read-capable Firestore types", async () => {
     const source = await readFile("packages/server/src/http/control-app.ts", "utf8");
     const dependencies = source.slice(
       source.indexOf("export interface ControlApiDependencies"),
       source.indexOf("const DEFAULT_RATE_LIMITS")
     );
-    expect(dependencies).not.toMatch(/Firestore|Repository|LegacySessionReader/);
-    expect(dependencies).toContain("legacySessionExchange?: LegacySessionExchange");
+    expect(dependencies).not.toMatch(/Firestore|Repository|LegacySession/);
   });
 
   it("maps documented uppercase env suffixes to canonical lowercase versions", () => {
@@ -136,15 +121,12 @@ describe("production control-plane composition", () => {
     }, "SESSION_KEY")).toThrow("SESSION_KEY_INVALID");
   });
 
-  it.each([
-    ["disabled", "0", 1],
-    ["enabled", "1", 2]
-  ])("constructs the documented production environment with legacy mode %s", (_name, flag, expectedClients) => {
+  it("constructs the documented production environment with one Firestore writer", () => {
     const calls: Array<{ config: import("@cloudframe/server").FirestoreClientConfig; client: Record<string, unknown> }> = [];
     const request = new Request("https://app.test/api/bootstrap", {
       headers: { "x-vercel-oidc-token": "request-oidc" }
     });
-    const app = createProductionApi(request, documentedEnvironment(flag), {
+    const app = createProductionApi(request, documentedEnvironment(), {
       createFirestoreClient(config) {
         const client = firestoreClient();
         calls.push({ config, client });
@@ -155,12 +137,8 @@ describe("production control-plane composition", () => {
     });
 
     expect(app).toBeTypeOf("function");
-    expect(calls).toHaveLength(expectedClients);
+    expect(calls).toHaveLength(1);
     expect(calls[0]!.config.serviceAccountEmail).toBe("writer@cloudframe-prod.iam.gserviceaccount.com");
-    if (flag === "1") {
-      expect(calls[1]!.config.serviceAccountEmail).toBe("reader@cloudframe-prod.iam.gserviceaccount.com");
-      expect(calls[1]!.client).not.toBe(calls[0]!.client);
-    }
     for (const call of calls) {
       expect(call.config.oidcTokenSupplier).toBeTypeOf("function");
       expect(call.config.oidcTokenSupplier!()).resolves.toBe("request-oidc");
@@ -168,7 +146,7 @@ describe("production control-plane composition", () => {
   });
 });
 
-function documentedEnvironment(flag: string): NodeJS.ProcessEnv {
+function documentedEnvironment(): NodeJS.ProcessEnv {
   const key = Buffer.alloc(32, 7).toString("base64url");
   return {
     VERCEL_ENV: "production",
@@ -180,8 +158,6 @@ function documentedEnvironment(flag: string): NodeJS.ProcessEnv {
     FIRESTORE_DATABASE_ID: "(default)",
     GCP_WORKLOAD_IDENTITY_PROVIDER: "projects/1/locations/global/workloadIdentityPools/vercel/providers/vercel",
     GCP_SERVICE_ACCOUNT_EMAIL: "writer@cloudframe-prod.iam.gserviceaccount.com",
-    GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL: "reader@cloudframe-prod.iam.gserviceaccount.com",
-    ENABLE_LEGACY_SESSION_EXCHANGE: flag,
     GOOGLE_CLIENT_ID: "google-client",
     GOOGLE_CLIENT_SECRET: "google-secret",
     ONEDRIVE_CLIENT_ID: "onedrive-client",
