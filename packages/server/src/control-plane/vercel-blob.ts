@@ -24,6 +24,10 @@ function pathname(options: VercelBlobControlStoreOptions): string {
   return `cloudframe/control-plane/${options.environment}/${options.householdId}.json.enc`;
 }
 
+function conditionalWriteEtag(etag: string): string {
+  return etag.startsWith("W/") ? etag.slice(2) : etag;
+}
+
 function blobIdentityOptions(
   storeId: string | undefined
 ): Pick<GetCommandOptions, "storeId"> {
@@ -79,7 +83,7 @@ export function createVercelBlobControlStore(
       }
 
       const envelope = await new Response(result.stream).json() as ControlPlaneEnvelopeV1;
-      return { envelope, etag: result.blob.etag };
+      return { envelope, etag: conditionalWriteEtag(result.blob.etag) };
     },
 
     async create(envelope) {

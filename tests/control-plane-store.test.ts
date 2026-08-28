@@ -487,7 +487,7 @@ describe("Vercel control-plane adapters", () => {
       .mockResolvedValueOnce({
         statusCode: 200,
         stream: new Response(JSON.stringify(envelope)).body,
-        blob: { etag: "etag-2" }
+        blob: { etag: 'W/"etag-2"' }
       });
     const durable = createVercelBlobControlStore({
       environment: "preview",
@@ -496,7 +496,7 @@ describe("Vercel control-plane adapters", () => {
     });
 
     await expect(durable.read("etag-1")).resolves.toEqual({ notModified: true });
-    await expect(durable.read()).resolves.toEqual({ envelope, etag: "etag-2" });
+    await expect(durable.read()).resolves.toEqual({ envelope, etag: '"etag-2"' });
     expect(blobSdk.get).toHaveBeenNthCalledWith(
       1,
       "cloudframe/control-plane/preview/h1.json.enc",
@@ -506,6 +506,23 @@ describe("Vercel control-plane adapters", () => {
       2,
       "cloudframe/control-plane/preview/h1.json.enc",
       { access: "private", useCache: false, ifNoneMatch: undefined, storeId: "store-1" }
+    );
+
+    blobSdk.put.mockResolvedValueOnce({ etag: '"etag-3"' });
+    await expect(durable.replace(envelope, '"etag-2"')).resolves.toEqual({
+      etag: '"etag-3"'
+    });
+    expect(blobSdk.put).toHaveBeenLastCalledWith(
+      "cloudframe/control-plane/preview/h1.json.enc",
+      JSON.stringify(envelope),
+      {
+        access: "private",
+        contentType: "application/json",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        ifMatch: '"etag-2"',
+        storeId: "store-1"
+      }
     );
   });
 
