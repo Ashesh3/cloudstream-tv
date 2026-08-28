@@ -153,6 +153,32 @@ describe("sealed control authentication", () => {
     expect(harness.loadCount).toBe(0);
   });
 
+  it.each([
+    ["disabled", (harness: Awaited<ReturnType<typeof authHarness>>) => { harness.document.devices["device-1"]!.enabled = false; }],
+    ["revoked", (harness: Awaited<ReturnType<typeof authHarness>>) => { harness.document.devices["device-1"]!.revokedAt = TEST_NOW.toISOString(); }],
+    ["stale session", (harness: Awaited<ReturnType<typeof authHarness>>) => { harness.document.devices["device-1"]!.sessionVersion = 2; }]
+  ])("classifies a current %s device claim as revoked", async (_scenario, arrange) => {
+    const harness = await authHarness();
+    arrange(harness);
+    await expect(harness.auth.device(
+      requestWithCookie("device_session", harness.codec.issueDevice(deviceClaims())),
+      harness.context,
+      TEST_NOW
+    )).rejects.toMatchObject({ code: "DEVICE_UNAUTHORIZED", reason: "revoked" });
+  });
+
+  it.each([
+    ["unknown device", { deviceId: "missing-device" }],
+    ["wrong household", { householdId: "other-household" }]
+  ])("does not classify %s claims as revoked", async (_scenario, patch) => {
+    const harness = await authHarness();
+    await expect(harness.auth.device(
+      requestWithCookie("device_session", harness.codec.issueDevice({ ...deviceClaims(), ...patch })),
+      harness.context,
+      TEST_NOW
+    )).rejects.toMatchObject({ code: "DEVICE_UNAUTHORIZED", reason: "invalid" });
+  });
+
   it("requires the optional root check to be enabled and assigned to the device", async () => {
     const harness = await authHarness();
     const request = requestWithCookie(

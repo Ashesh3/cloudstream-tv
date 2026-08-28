@@ -9,6 +9,7 @@ import {
   jsonRequest
 } from "./helpers/api";
 
+
 describe("final control HTTP API", () => {
   it("serves the final route table with no sync or server-history endpoints", async () => {
     const harness = await createControlApiHarness();
@@ -158,6 +159,47 @@ describe("final control HTTP API", () => {
     expect(duplicateRequest.headers.getSetCookie().join("\n")).toMatch(
       /device_request=;.*Max-Age=0/
     );
+  });
+
+  it.each(["disabled", "revoked", "stale-session"] as const)(
+    "returns revoked from bootstrap for a valid current %s device cookie while protected routes remain unauthorized",
+    async scenario => {
+      const harness = await createControlApiHarness();
+      if (scenario === "disabled") harness.document.devices["device-1"]!.enabled = false;
+      if (scenario === "revoked") harness.document.devices["device-1"]!.revokedAt = harness.now.toISOString();
+      if (scenario === "stale-session") harness.document.devices["device-1"]!.sessionVersion += 1;
+      harness.document.revision += 1;
+      harness.replaceDocument(harness.document);
+
+      const bootstrap = await harness.app(jsonRequest("/api/bootstrap", "GET", undefined, harness.deviceHeaders()));
+      expect(bootstrap.status).toBe(200);
+      expect(await bootstrap.json()).toEqual({ ok: true, data: { enrollment: { state: "revoked" } } });
+      expect(bootstrap.headers.getSetCookie().join("\n")).toMatch(/device_session=;.*Max-Age=0/);
+      expect((await harness.app(jsonRequest("/api/tv/home", "GET", undefined, harness.deviceHeaders()))).status).toBe(401);
+    }
+  );
+
+  it.each([
+    ["malformed", "malformed"],
+    ["unknown-device", "unknown-device"],
+    ["wrong-household", "wrong-household"],
+    ["expired", "expired"]
+  ] as const)("clears a %s V2 cookie without reporting revocation", async (scenario, cookieKind) => {
+    const harness = await createControlApiHarness();
+    const cookie = cookieKind === "malformed"
+      ? `${harness.deviceCookie.slice(0, -1)}${harness.deviceCookie.endsWith("A") ? "B" : "A"}`
+      : cookieKind === "unknown-device"
+        ? harness.issueDeviceCookie({ deviceId: "missing-device" })
+        : cookieKind === "wrong-household"
+          ? harness.issueDeviceCookie({ deviceId: "device-1", householdId: "other-household" })
+          : harness.issueDeviceCookie({ deviceId: "device-1", expiresAt: harness.now.getTime() + 1_000 });
+    if (cookieKind === "expired") harness.now.setTime(harness.now.getTime() + 2_000);
+    const bootstrap = await harness.app(jsonRequest("/api/bootstrap", "GET", undefined, {
+      cookie: cookieHeader(["device_session", cookie])
+    }));
+    expect(bootstrap.status).toBe(200);
+    expect(await bootstrap.json()).toEqual({ ok: true, data: { enrollment: { state: "unenrolled" } } });
+    expect(bootstrap.headers.getSetCookie().join("\n")).toMatch(/device_session=;.*Max-Age=0/);
   });
 
   it.each(["admin", "device"] as const)(

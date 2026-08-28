@@ -53,6 +53,8 @@ export interface ControlApiHarness {
   adminCsrf: string;
   deviceCookie: string;
   requestCookie: string;
+  replaceDocument(document: ControlPlaneDocumentV2): void;
+  issueDeviceCookie(input: { deviceId: string; householdId?: string; sessionVersion?: number; expiresAt?: number }): string;
   controlStore: { loadCount: number; mutateCount: number };
   durable: {
     readCount: number;
@@ -384,6 +386,20 @@ export async function createControlApiHarness(
     adminCsrf,
     deviceCookie,
     requestCookie,
+    replaceDocument(nextDocument) {
+      durable.replaceOutOfBand(nextDocument, controlKeyring);
+      cache.replaceOutOfBand({ envelope: encryptControlPlaneDocument(nextDocument, controlKeyring), etag: durable.currentEtag! });
+    },
+    issueDeviceCookie(input) {
+      return sessionCodec.issueDevice({
+        version: 2,
+        householdId: input.householdId ?? document.householdId,
+        deviceId: input.deviceId,
+        sessionVersion: input.sessionVersion ?? 1,
+        issuedAt: now.getTime(),
+        expiresAt: input.expiresAt ?? now.getTime() + 60 * 60_000
+      });
+    },
     controlStore: {
       get loadCount() {
         return loadCount;

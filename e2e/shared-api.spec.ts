@@ -53,12 +53,26 @@ test("shared final API promotes enrollment, enforces reassignment, clears revoke
   expect((await harness.app(jsonRequest("/api/tv/home", "GET", undefined, deviceHeaders))).status).toBe(401);
   const revokedRefresh = await harness.app(jsonRequest("/api/bootstrap", "GET", undefined, deviceHeaders));
   expect(revokedRefresh.status).toBe(200);
-  expect(await revokedRefresh.json()).toEqual({ ok: true, data: { enrollment: { state: "unenrolled" } } });
+  expect(await revokedRefresh.json()).toEqual({ ok: true, data: { enrollment: { state: "revoked" } } });
   expect(revokedRefresh.headers.getSetCookie().join("\n")).toMatch(/device_session=;.*Max-Age=0/);
 
-  for (const path of ["/api/tv/watch-history", "/api/tv/watch-history/item_video", "/api/admin/sync", "/api/admin/sources/source-1/sync"]) {
-    const response = await harness.app(jsonRequest(path, "GET"));
-    expect(response.status, path).toBe(404);
+  for (const [path, method, body] of [
+    ["/api/tv/watch-history", "GET", undefined],
+    ["/api/tv/watch-history", "POST", { itemId: "item_video" }],
+    ["/api/tv/watch-history", "PUT", { itemId: "item_video" }],
+    ["/api/tv/watch-history/item_video", "PUT", { positionSeconds: 10 }],
+    ["/api/internal/sync-due-sources", "GET", undefined],
+    ["/api/internal/sync-due-sources", "POST", {}],
+    ["/api/admin/sources/source-1/sync", "POST", {}],
+    ["/api/admin/sync", "POST", {}]
+  ] as const) {
+    const writesBefore = harness.durable.writeAttempts;
+    const mutationsBefore = harness.controlStore.mutateCount;
+    const response = await harness.app(jsonRequest(path, method, body));
+    expect(response.status, `${method} ${path}`).toBe(404);
+    expect(await response.json(), `${method} ${path}`).toMatchObject({ code: "NOT_FOUND" });
+    expect(harness.durable.writeAttempts, `${method} ${path}`).toBe(writesBefore);
+    expect(harness.controlStore.mutateCount, `${method} ${path}`).toBe(mutationsBefore);
   }
 });
 

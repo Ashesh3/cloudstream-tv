@@ -39,6 +39,20 @@ test("live source folders are immediately available with explicit removal impact
   await page.getByRole("button", { name: "Browse & choose folders" }).click();
   await expect(page.getByRole("region", { name: "Choose source folders" }).getByText("Trips", { exact: true }).last()).toBeVisible();
 
+  await page.getByRole("button", { name: "Review removal impact for Trips" }).click();
+  let confirmation = page.getByRole("dialog", { name: "Remove folder from household program" });
+  await expect(confirmation).toContainText("No televisions currently use this folder.");
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await page.getByRole("button", { name: "Close folder workbench" }).click();
+  await page.getByRole("button", { name: "Devices", exact: true }).click();
+  await page.getByRole("button", { name: "Edit Living Room" }).click();
+  await page.getByRole("checkbox", { name: "Trips" }).check();
+  await page.getByRole("button", { name: "Save device" }).click();
+  await expect(page.getByRole("dialog", { name: "Edit device" })).toBeHidden();
+  await page.getByRole("button", { name: "Sources", exact: true }).click();
+  await page.getByRole("button", { name: "Browse & choose folders" }).click();
+  await expect(page.getByRole("region", { name: "Choose source folders" }).getByText("Trips", { exact: true }).last()).toBeVisible();
+
   if (testInfo.project.name === "admin-mobile") {
     const viewport = page.viewportSize(); const bounds = await region.boundingBox();
     expect(viewport).not.toBeNull(); expect(bounds).not.toBeNull();
@@ -47,7 +61,7 @@ test("live source folders are immediately available with explicit removal impact
   }
 
   await page.getByRole("button", { name: "Review removal impact for Trips" }).click();
-  const confirmation = page.getByRole("dialog", { name: "Remove folder from household program" });
+  confirmation = page.getByRole("dialog", { name: "Remove folder from household program" });
   await expect(confirmation).toContainText("Access is removed immediately from every assigned television.");
   await expect(confirmation.getByText("Living Room")).toBeVisible();
   const removeControl = confirmation.getByRole("button", { name: "Remove Trips" });

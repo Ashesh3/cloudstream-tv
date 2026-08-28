@@ -18,6 +18,12 @@ test("folder browse opens a unified image and video viewer", async ({ page }) =>
   await expect(video).toBeVisible();
   await expect(video).toHaveAttribute("src", media.video);
   expect(new URL(await video.getAttribute("src")!).pathname).not.toMatch(/^\/api\//);
+  const calls = await tvApiCalls(page);
+  expect(calls.folder).toEqual([{ handle: "sealed-folder", cursor: null }]);
+  expect(calls.thumbnails.length).toBeGreaterThan(0);
+  expect(calls.thumbnails.flat()).toEqual(expect.arrayContaining(["sealed-image", "sealed-video"]));
+  expect(calls.thumbnails.flat()).not.toEqual(expect.arrayContaining(["item_image", "item_video"]));
+  expect(calls.media).toEqual(expect.arrayContaining(["sealed-image", "sealed-video"]));
 });
 
 test("viewer saves and restores a nonzero video position", async ({ page }) => {
@@ -55,6 +61,36 @@ test("viewer saves and restores a nonzero video position", async ({ page }) => {
   await expect.poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime)).toBeGreaterThan(0);
 });
 
+test("TV fixture rejects public, duplicate, and unknown navigation handles", async ({ page }) => {
+  await installTvFixture(page, "ready");
+  await page.goto("/");
+  const result = await page.evaluate(async () => {
+    const api = (window as Window & { __CLOUDFRAME_TEST_TV_API__: {
+      folder(handle: string, cursor?: string | null): Promise<unknown>;
+      thumbnailUrls(handles: string[]): Promise<unknown>;
+      mediaUrl(handle: string): Promise<unknown>;
+    } }).__CLOUDFRAME_TEST_TV_API__;
+    const rejected: string[] = [];
+    for (const [label, call] of [
+      ["public-folder", () => api.folder("item_folder")],
+      ["unknown-folder", () => api.folder("sealed-unknown")],
+      ["bad-cursor", () => api.folder("sealed-folder", "cursor-unknown")],
+      ["public-thumbnails", () => api.thumbnailUrls(["item_image"])],
+      ["duplicate-thumbnails", () => api.thumbnailUrls(["sealed-image", "sealed-image"])],
+      ["unknown-thumbnails", () => api.thumbnailUrls(["sealed-unknown"])],
+      ["public-media", () => api.mediaUrl("item_video")],
+      ["unknown-media", () => api.mediaUrl("sealed-unknown")]
+    ] as Array<[string, () => Promise<unknown>]>) {
+      try { await call(); } catch { rejected.push(label); }
+    }
+    return rejected;
+  });
+  expect(result).toEqual([
+    "public-folder", "unknown-folder", "bad-cursor", "public-thumbnails",
+    "duplicate-thumbnails", "unknown-thumbnails", "public-media", "unknown-media"
+  ]);
+});
+
 test("explicit local resume seed restores without persisting navigation secrets", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("cloudframe.tv.watch-history.v1:device-1", JSON.stringify({
     version: 1,
@@ -83,3 +119,11 @@ test("explicit local resume seed restores without persisting navigation secrets"
   expect(serialized).toContain("item_video");
   expect(serialized).not.toMatch(/sealed-|provider|https?:|token/i);
 });
+
+async function tvApiCalls(page: import("@playwright/test").Page) {
+  return page.evaluate(() => (window as Window & { __CLOUDFRAME_TEST_TV_CALLS__: {
+    folder: Array<{ handle: string; cursor: string | null }>;
+    thumbnails: string[][];
+    media: string[];
+  } }).__CLOUDFRAME_TEST_TV_CALLS__);
+}

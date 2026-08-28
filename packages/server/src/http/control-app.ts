@@ -509,6 +509,9 @@ async function bootstrap(
         throw error;
       }
       if (error.clearCookie) headers.append("set-cookie", error.clearCookie);
+      if (error.reason === "revoked") {
+        return ok({ enrollment: { state: "revoked" } }, { headers });
+      }
     }
   }
   if (requestCookie) {

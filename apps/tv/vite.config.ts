@@ -15,7 +15,7 @@ export default defineConfig({
     })
   ],
   build: {
-    sourcemap: true,
+    sourcemap: process.env.CLOUDFRAME_E2E_BUILD === "1",
     cssMinify: false
   }
 });

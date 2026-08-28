@@ -25,10 +25,13 @@ export type ControlAuthErrorCode =
   | "DEVICE_UNAUTHORIZED"
   | "INVALID_CREDENTIALS";
 
+export type ControlAuthFailureReason = "invalid" | "revoked";
+
 export class ControlAuthError extends Error {
   constructor(
     readonly code: ControlAuthErrorCode,
-    readonly clearCookie?: string
+    readonly clearCookie?: string,
+    readonly reason: ControlAuthFailureReason = "invalid"
   ) {
     super(code);
     this.name = "ControlAuthError";
@@ -99,10 +102,11 @@ function unauthorizedAdmin(): ControlAuthError {
   );
 }
 
-function unauthorizedDevice(): ControlAuthError {
+function unauthorizedDevice(reason: ControlAuthFailureReason = "invalid"): ControlAuthError {
   return new ControlAuthError(
     "DEVICE_UNAUTHORIZED",
-    clearSessionCookie("device")
+    clearSessionCookie("device"),
+    reason
   );
 }
 
@@ -173,12 +177,16 @@ export function authenticateControlDevice(
     claims.householdId !== dependencies.householdId ||
     claims.householdId !== context.document.householdId ||
     claims.expiresAt <= now.getTime() ||
-    !device ||
+    !device
+  ) {
+    throw unauthorizedDevice();
+  }
+  if (
     !device.enabled ||
     device.revokedAt !== null ||
     claims.sessionVersion !== device.sessionVersion
   ) {
-    throw unauthorizedDevice();
+    throw unauthorizedDevice("revoked");
   }
   const root = rootId === undefined ? undefined : context.document.roots[rootId];
   if (
