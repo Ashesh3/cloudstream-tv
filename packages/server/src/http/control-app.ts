@@ -11,7 +11,7 @@ import type {
 } from "@cloudframe/shared";
 import { ProviderError } from "@cloudframe/providers";
 
-import { clearSessionCookie } from "../auth/cookies";
+import { clearSessionCookie, createSessionCookie } from "../auth/cookies";
 import {
   ControlMutationError,
   type ControlMutationErrorCode
@@ -20,6 +20,12 @@ import {
   ControlPlaneStoreError,
   type ControlPlaneStore
 } from "../control-plane/store";
+import { AsyncLocalStorage } from "node:async_hooks";
+
+import type {
+  LegacySessionExchange,
+  LegacySessionExchangeResult
+} from "../control-plane/legacy-session-exchange";
 import {
   ControlAdminServiceError,
   type ControlAdminService
@@ -104,6 +110,7 @@ export interface ControlApiDependencies {
   browse: LiveBrowseService;
   directMedia: DirectMediaService;
   rateLimiter: RuntimeRateLimiter;
+  legacySessionExchange?: LegacySessionExchange;
   config: ControlApiConfig;
   now?: () => Date;
   requestSubject?: (request: Request) => string;
@@ -127,6 +134,17 @@ interface ActiveDependencies extends ControlApiDependencies {
   now: () => Date;
   requestSubject: (request: Request) => string;
   logger: ControlApiLogger;
+  upgradedCookies: AsyncLocalStorage<{ cookies: string[]; originalRequest: Request }>;
+}
+
+interface ProtectedAdminResult {
+  admin: AuthenticatedControlAdmin;
+  context: ControlRequestContext;
+}
+
+interface ProtectedDeviceResult {
+  device: AuthenticatedControlDevice;
+  context: ControlRequestContext;
 }
 
 export function createControlApiApp(input: ControlApiDependencies) {
@@ -134,7 +152,8 @@ export function createControlApiApp(input: ControlApiDependencies) {
     ...input,
     now: input.now ?? (() => new Date()),
     requestSubject: input.requestSubject ?? requestSubject,
-    logger: input.logger ?? consoleControlApiLogger
+    logger: input.logger ?? consoleControlApiLogger,
+    upgradedCookies: new AsyncLocalStorage<{ cookies: string[]; originalRequest: Request }>()
   };
 
   return async (request: Request): Promise<Response> => {
@@ -143,9 +162,15 @@ export function createControlApiApp(input: ControlApiDependencies) {
     const startedAt = Date.now();
     const routeTemplate = classifyRoute(request);
     try {
-      const response = await dependencies.requestContext.runRequest(() =>
-        routeRequest(request, dependencies)
-      );
+      const { response, upgradedCookies } = await dependencies.upgradedCookies.run(
+        { cookies: [], originalRequest: request },
+        async () => ({
+        response: await dependencies.requestContext.runRequest(() =>
+          routeRequest(request, dependencies)
+        ),
+        upgradedCookies: [...(dependencies.upgradedCookies.getStore()?.cookies ?? [])]
+      }));
+      for (const cookie of upgradedCookies) response.headers.append("set-cookie", cookie);
       secureResponse(response, requestId);
       dependencies.logger.info(
         requestEvent(
@@ -421,13 +446,24 @@ async function bootstrap(
   } catch {
     throw invalidDeviceRequest();
   }
-  const context = await loadControlRequestContext(
-    dependencies.controlStore,
-    dependencies.requestContext
-  );
+  const context = await currentOrLoadControlRequestContext(dependencies);
   const headers = new Headers();
 
   if (deviceCookie) {
+    const exchanged = await exchangeLegacyCookie(
+      "device",
+      deviceCookie,
+      dependencies,
+      now
+    );
+    if (exchanged) {
+      deviceCookie = exchanged.sealedCookie;
+      request = requestWithCookie(request, "device_session", exchanged.sealedCookie);
+      headers.append(
+        "set-cookie",
+        createSessionCookie("device", exchanged.sealedCookie, exchanged.expiresAt)
+      );
+    }
     try {
       const authenticated = await dependencies.auth.device(request, context, now);
       return ok(
@@ -501,7 +537,8 @@ async function adminLogout(
 ): Promise<Response> {
   const body = await readBoundedJsonObject(request);
   assertOnlyKeys(body, [], "INVALID_REQUEST");
-  const { admin } = await protectedAdmin(request, dependencies, now);
+  const protectedResult = await protectedAdmin(request, dependencies, now);
+  const { admin } = protectedResult;
   verifyAdminMutation(request, admin, dependencies.config.allowedOrigin);
   await enforceRateLimit(
     dependencies,
@@ -519,7 +556,8 @@ async function adminSnapshot(
   dependencies: ActiveDependencies,
   now: Date
 ): Promise<Response> {
-  const { admin, context } = await protectedAdmin(request, dependencies, now);
+  const protectedResult = await protectedAdmin(request, dependencies, now);
+  const { admin, context } = protectedResult;
   const snapshot = await snapshotFromContext(context, dependencies.admin, now);
   return ok(snapshot, { headers: csrfHeaders(admin) });
 }
@@ -999,10 +1037,7 @@ async function deviceRequestStatus(
     now
   );
   if (!raw) throw invalidDeviceRequest();
-  const context = await loadControlRequestContext(
-    dependencies.controlStore,
-    dependencies.requestContext
-  );
+  const context = await currentOrLoadControlRequestContext(dependencies);
   return enrollmentResponse(
     await dependencies.enrollment.status(raw, now, context)
   );
@@ -1013,8 +1048,8 @@ async function tvHome(
   dependencies: ActiveDependencies,
   now: Date
 ): Promise<Response> {
-  const { device } = await protectedDevice(request, dependencies, now);
-  return ok(await dependencies.browse.home(device));
+  const protectedResult = await protectedDevice(request, dependencies, now);
+  return ok(await dependencies.browse.home(protectedResult.device));
 }
 
 async function tvFolder(
@@ -1106,16 +1141,27 @@ async function protectedAdmin(
   request: Request,
   dependencies: ActiveDependencies,
   now: Date
-): Promise<{ admin: AuthenticatedControlAdmin; context: ControlRequestContext }> {
+): Promise<ProtectedAdminResult> {
+  let token: string | null;
   try {
-    if (!readUniqueCookie(request, "admin_session")) throw new Error("MISSING");
+    token = readUniqueCookie(request, "admin_session");
+    if (!token) throw new Error("MISSING");
   } catch {
     throw unauthorizedAdmin();
   }
-  const context = await loadControlRequestContext(
-    dependencies.controlStore,
-    dependencies.requestContext
-  );
+  const context = await currentOrLoadControlRequestContext(dependencies);
+  const exchanged = await exchangeLegacyCookie("admin", token, dependencies, now);
+  if (exchanged) {
+    request = requestWithCookie(
+      dependencies.upgradedCookies.getStore()?.originalRequest ?? request,
+      "admin_session",
+      exchanged.sealedCookie
+    );
+    recordUpgradedCookie(
+      dependencies,
+      createSessionCookie("admin", exchanged.sealedCookie, exchanged.expiresAt)
+    );
+  }
   return {
     admin: await dependencies.auth.admin(request, context, now),
     context
@@ -1126,23 +1172,78 @@ async function protectedDevice(
   request: Request,
   dependencies: ActiveDependencies,
   now: Date
-): Promise<{
-  device: AuthenticatedControlDevice;
-  context: ControlRequestContext;
-}> {
+): Promise<ProtectedDeviceResult> {
+  let token: string | null;
   try {
-    if (!readUniqueCookie(request, "device_session")) throw new Error("MISSING");
+    token = readUniqueCookie(request, "device_session");
+    if (!token) throw new Error("MISSING");
   } catch {
     throw unauthorizedDevice();
   }
-  const context = await loadControlRequestContext(
-    dependencies.controlStore,
-    dependencies.requestContext
-  );
+  const context = await currentOrLoadControlRequestContext(dependencies);
+  const exchanged = await exchangeLegacyCookie("device", token, dependencies, now);
+  if (exchanged) {
+    request = requestWithCookie(
+      dependencies.upgradedCookies.getStore()?.originalRequest ?? request,
+      "device_session",
+      exchanged.sealedCookie
+    );
+    recordUpgradedCookie(
+      dependencies,
+      createSessionCookie("device", exchanged.sealedCookie, exchanged.expiresAt)
+    );
+  }
   return {
     device: await dependencies.auth.device(request, context, now),
     context
   };
+}
+
+async function exchangeLegacyCookie(
+  kind: "admin" | "device",
+  token: string,
+  dependencies: ActiveDependencies,
+  now: Date
+): Promise<LegacySessionExchangeResult | null> {
+  if (!dependencies.legacySessionExchange || token.includes(".")) return null;
+  const exchange = kind === "admin"
+    ? dependencies.legacySessionExchange.exchangeAdmin
+    : dependencies.legacySessionExchange.exchangeDevice;
+  return exchange(token, now);
+}
+
+async function currentOrLoadControlRequestContext(
+  dependencies: ActiveDependencies
+): Promise<ControlRequestContext> {
+  try {
+    return dependencies.requestContext.current();
+  } catch {
+    return loadControlRequestContext(
+      dependencies.controlStore,
+      dependencies.requestContext
+    );
+  }
+}
+
+function recordUpgradedCookie(
+  dependencies: ActiveDependencies,
+  cookie: string
+): void {
+  dependencies.upgradedCookies.getStore()?.cookies.push(cookie);
+}
+
+function requestWithCookie(request: Request, name: string, token: string): Request {
+  const headers = new Headers(request.headers);
+  const retained: string[] = [];
+  for (const pair of (headers.get("cookie") ?? "").split(";")) {
+    const separator = pair.indexOf("=");
+    if (separator < 0 || pair.slice(0, separator).trim() === name) continue;
+    const trimmed = pair.trim();
+    if (trimmed) retained.push(trimmed);
+  }
+  retained.push(`${name}=${encodeURIComponent(token)}`);
+  headers.set("cookie", retained.join("; "));
+  return new Request(request, { headers });
 }
 
 async function authorizeAdminMutation(

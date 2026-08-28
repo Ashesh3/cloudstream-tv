@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { createVercelBlobControlStore } from "../packages/server/src/control-plane/vercel-blob.ts";
 import { createVercelRuntimeControlCache } from "../packages/server/src/control-plane/runtime-cache.ts";
 import type { ControlPlaneDocumentV2 } from "../packages/shared/src/control-plane.ts";
+import { versionedAeadKeyringFromEnv } from "../packages/server/src/runtime/keyrings.ts";
 import {
   createMigrationFirestoreReader,
   loadOperatorCredentials,
@@ -83,12 +84,10 @@ function fixtureAdapter(value: unknown): LegacyControlPlaneReader {
 
 function activeStoreDependencies(environment: string, householdId: string) {
   const storeId = required("BLOB_STORE_ID");
-  const keyVersion = process.env.CONTROL_PLANE_KEY_VERSION ?? "v1";
-  const key = decodeKey(required(`CONTROL_PLANE_KEY_${keyVersion.toUpperCase()}`));
   return {
     durable: createVercelBlobControlStore({ environment, householdId, storeId }),
     cache: createVercelRuntimeControlCache({ environment, householdId }),
-    keyring: { currentVersion: keyVersion, keys: { [keyVersion]: key } }
+    keyring: versionedAeadKeyringFromEnv(process.env, "CONTROL_PLANE_KEY")
   };
 }
 
@@ -99,12 +98,6 @@ function unusedStoreDependencies() {
     cache: { get: fail, set: fail, delete: fail, getMirrorStatus: fail, setMirrorStatus: fail },
     keyring: { currentVersion: "unused", keys: {} }
   };
-}
-
-function decodeKey(value: string): Uint8Array {
-  const key = Buffer.from(value, "base64url");
-  if (key.length !== 32 || key.toString("base64url") !== value) throw new Error("CONTROL_PLANE_KEY_INVALID");
-  return key;
 }
 
 function required(name: string): string {

@@ -34,26 +34,25 @@ describe("browser acceptance harness", () => {
     expect(enrollment).toMatch(/request.*approve.*cookie.*reassign.*revoke/is);
     expect(browse).toMatch(/folder.*image.*video.*viewer/is);
     const viewer = await readFile("apps/tv/src/components/viewer.tsx", "utf8");
-    expect(viewer).toContain("saveHistory");
+    expect(viewer).toContain("history.save");
     expect(viewer).toContain("saveElementHistory(active.id");
     expect(`${enrollment}\n${browse}`).toContain("toHaveScreenshot");
   });
 
-  it("includes a shared real API/repository acceptance journey", async () => {
+  it("includes a shared final control API acceptance journey", async () => {
     const source = await readFile("e2e/shared-api.spec.ts", "utf8");
-    expect(source).toContain("createApiApp");
-    expect(source).toContain("MemoryRepository");
+    expect(source).toContain("createControlApiHarness");
     expect(source).toMatch(/device_request.*device_session/is);
     expect(source).toContain("/approve");
     expect(source).toContain("/api/tv/home");
     expect(source).toContain("assignedRootIds");
-    expect(source).toContain('method: "DELETE"');
+    expect(source).toMatch(/"DELETE"/);
   });
 
-  it("covers live nested folders, index recovery, responsive composition, and removal impact", async () => {
+  it("covers live nested folders, responsive composition, and removal impact", async () => {
     const source = await readFile("e2e/source-workbench.spec.ts", "utf8");
     expect(source).toMatch(/My Drive[\s\S]*Photos[\s\S]*Trips/);
-    expect(source).toMatch(/queued[\s\S]*indexing[\s\S]*quota-exhausted/);
+    expect(source).not.toMatch(/queued[\s\S]*indexing|quota-exhausted/i);
     expect(source).toMatch(/admin-mobile[\s\S]*boundingBox/);
     expect(source).toMatch(/removal impact[\s\S]*Remove Trips/i);
   });

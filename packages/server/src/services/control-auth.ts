@@ -13,7 +13,7 @@ import type {
 import type { ControlPlaneStore } from "../control-plane/store";
 import { readUniqueCookie } from "../http/request";
 import type { ControlRequestContext } from "../http/request-context";
-import { csrfToken } from "./admin-auth";
+import { csrfToken } from "../auth/csrf";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 export const CONTROL_SESSION_LIFETIME_MS = 365 * DAY_MS;

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   cookieHeader,
+  cookieValue,
   createControlApiHarness,
   jsonRequest
 } from "./helpers/api";
@@ -156,6 +157,116 @@ describe("final control HTTP API", () => {
     expect(duplicateRequest.status).toBe(401);
     expect(duplicateRequest.headers.getSetCookie().join("\n")).toMatch(
       /device_request=;.*Max-Age=0/
+    );
+  });
+
+  it.each(["admin", "device"] as const)(
+    "exchanges one legacy %s cookie and subsequent requests use V2 without another read",
+    async (kind) => {
+      const legacyToken = kind === "admin" ? "A".repeat(43) : "B".repeat(43);
+      const exchanges: string[] = [];
+      const harness = await createControlApiHarness({
+        legacySessionExchange: {
+          async exchangeAdmin(rawToken) {
+            exchanges.push(`admin:${rawToken}`);
+            return {
+              sealedCookie: harness.adminCookie,
+              expiresAt: new Date(harness.now.getTime() + 60_000)
+            };
+          },
+          async exchangeDevice(rawToken) {
+            exchanges.push(`device:${rawToken}`);
+            return {
+              sealedCookie: harness.deviceCookie,
+              expiresAt: new Date(harness.now.getTime() + 60_000)
+            };
+          }
+        }
+      });
+      const path = kind === "admin" ? "/api/admin/snapshot" : "/api/tv/home";
+      const cookieName = kind === "admin" ? "admin_session" : "device_session";
+
+      const upgraded = await harness.app(
+        jsonRequest(path, "GET", undefined, {
+          cookie: cookieHeader([cookieName, legacyToken])
+        })
+      );
+
+      expect(upgraded.status).toBe(200);
+      const v2Cookie = cookieValue(upgraded, cookieName);
+      expect(v2Cookie).toBe(kind === "admin" ? harness.adminCookie : harness.deviceCookie);
+      expect(exchanges).toEqual([`${kind}:${legacyToken}`]);
+
+      const followUp = await harness.app(
+        jsonRequest(path, "GET", undefined, {
+          cookie: cookieHeader([cookieName, v2Cookie!])
+        })
+      );
+
+      expect(followUp.status).toBe(200);
+      expect(exchanges).toEqual([`${kind}:${legacyToken}`]);
+    }
+  );
+
+  it("fails closed and clears a rejected legacy cookie without retry loops", async () => {
+    let attempts = 0;
+    const harness = await createControlApiHarness({
+      legacySessionExchange: {
+        async exchangeAdmin() {
+          attempts += 1;
+          return null;
+        },
+        async exchangeDevice() {
+          attempts += 1;
+          return null;
+        }
+      }
+    });
+
+    const response = await harness.app(
+      jsonRequest("/api/tv/home", "GET", undefined, {
+        cookie: cookieHeader(["device_session", "B".repeat(43)])
+      })
+    );
+
+    expect(response.status).toBe(401);
+    expect(attempts).toBe(1);
+    expect(response.headers.getSetCookie().join("\n")).toMatch(
+      /device_session=;.*Max-Age=0/
+    );
+  });
+
+  it("preserves OAuth state and CSRF semantics while upgrading an admin cookie", async () => {
+    const legacyToken = "A".repeat(43);
+    const harness = await createControlApiHarness({
+      legacySessionExchange: {
+        async exchangeAdmin() {
+          return {
+            sealedCookie: harness.adminCookie,
+            expiresAt: new Date(harness.now.getTime() + 60_000)
+          };
+        },
+        async exchangeDevice() {
+          return null;
+        }
+      }
+    });
+    const callback = await harness.oauthCallbackRequest("google");
+
+    const response = await harness.app(
+      jsonRequest(callback.path, "GET", undefined, {
+        cookie: cookieHeader(
+          ["admin_session", legacyToken],
+          ["oauth_state", callback.oauthCookie]
+        )
+      })
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get("location")).toContain("oauth=connected");
+    expect(cookieValue(response, "admin_session")).toBe(harness.adminCookie);
+    expect(response.headers.getSetCookie().join("\n")).toMatch(
+      /oauth_state=;.*Max-Age=0/
     );
   });
 

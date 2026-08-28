@@ -4,8 +4,7 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./runtime/sync-runner": "./src/runtime/sync-runner.ts"
+    ".": "./src/index.ts"
   },
   "dependencies": {
     "@cloudframe/shared": "*",

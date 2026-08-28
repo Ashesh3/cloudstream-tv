@@ -1,6 +1,5 @@
 import type {
-  ControlPlaneDocumentV2,
-  Household
+  ControlPlaneDocumentV2
 } from "@cloudframe/shared";
 import type {
   ProviderAdapter,
@@ -8,8 +7,6 @@ import type {
   ProviderRegistry
 } from "@cloudframe/providers";
 import {
-  MemoryRepository,
-  createApiApp,
   createBrowseHandleCodec,
   createControlAdminService,
   createControlApiApp,
@@ -30,13 +27,12 @@ import {
   hashPassphrase,
   type ControlApiLogger,
   type ControlApiLoggerEvent,
+  type LegacySessionExchange,
   type ControlMutationReducer,
   type ControlPlaneStore,
   MemoryControlDurableStore,
   MemoryControlHotCache,
   MemoryDeferredTasks,
-  type ApiAppDependencies,
-  type RateLimitPolicy
 } from "@cloudframe/server";
 
 import {
@@ -45,28 +41,7 @@ import {
   testControlDocument
 } from "./control-plane";
 
-const DEFAULT_NOW = new Date("2026-08-26T12:00:00.000Z");
 const DEFAULT_ORIGIN = "https://dev.cloudframe.example";
-
-export interface TestApi {
-  app: ReturnType<typeof createApiApp>;
-  repository: MemoryRepository;
-  now: Date;
-  origin: string;
-  householdId: string;
-  pepper: string;
-  csrfSecret: string;
-}
-
-export interface TestApiOptions {
-  allowNewDeviceRequests?: boolean;
-  bootstrapHousehold?: boolean;
-  now?: Date;
-  initialPassphrase?: string;
-  storedPassphrase?: string;
-  rateLimits?: Partial<Record<string, RateLimitPolicy>>;
-  requestSubject?: (request: Request) => string;
-}
 
 export interface ControlApiHarness {
   app: ReturnType<typeof createControlApiApp>;
@@ -106,75 +81,13 @@ export interface ControlApiHarness {
   failOAuthComplete(error: unknown): void;
 }
 
-export async function createTestApi(
-  options: TestApiOptions = {}
-): Promise<TestApi> {
-  const repository = new MemoryRepository();
-  const now = options.now ?? DEFAULT_NOW;
-  const origin = DEFAULT_ORIGIN;
-  const householdId = "household-test";
-  const pepper = "test-passphrase-pepper";
-  const csrfSecret = "test-csrf-secret-that-is-long-enough";
-
-  if (options.bootstrapHousehold !== false) {
-    const household: Household = {
-      id: householdId,
-      createdAt: now,
-      allowNewDeviceRequests: options.allowNewDeviceRequests ?? true,
-      defaultMediaOrder: "captured-desc",
-      defaultSlideshowSeconds: 8,
-      adminPassphraseHash: await hashPassphrase(
-        options.storedPassphrase ??
-          options.initialPassphrase ??
-          "correct horse battery staple",
-        pepper
-      ),
-      adminPassphraseVersion: 1
-    };
-    await repository.putHousehold(household);
-  }
-
-  let id = 0;
-  let token = 0;
-  const dependencies: ApiAppDependencies = {
-    repository,
-    config: {
-      householdId,
-      adminInitialPassphrase: Object.prototype.hasOwnProperty.call(
-        options,
-        "initialPassphrase"
-      )
-        ? options.initialPassphrase
-        : "correct horse battery staple",
-      passphrasePepper: pepper,
-      csrfSecret,
-      allowedOrigin: origin,
-      rateLimits: options.rateLimits
-    },
-    now: () => new Date(now),
-    createId: prefix => `${prefix}-${++id}`,
-    issueToken: () => {
-      const raw = Buffer.alloc(32, ++token).toString("base64url");
-      return {
-        raw,
-        hash: hashOpaqueToken(raw)
-      };
-    },
-    requestSubject: options.requestSubject
-  };
-
-  return {
-    app: createApiApp(dependencies),
-    repository,
-    now,
-    origin,
-    householdId,
-    pepper,
-    csrfSecret
-  };
+export interface ControlApiHarnessOptions {
+  legacySessionExchange?: LegacySessionExchange;
 }
 
-export async function createControlApiHarness(): Promise<ControlApiHarness> {
+export async function createControlApiHarness(
+  options: ControlApiHarnessOptions = {}
+): Promise<ControlApiHarness> {
   const origin = DEFAULT_ORIGIN;
   const now = new Date(TEST_NOW);
   const document = testControlDocument();
@@ -250,7 +163,14 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
   };
 
   const provider = new ControlProviderHarness(now);
-  const providers: ProviderRegistry = { get: () => provider.adapter };
+  const providers: ProviderRegistry = {
+    get: (kind) => ({
+      ...provider.adapter,
+      beginAuthorization: async ({ state }) => ({
+        authorizationUrl: `${kind === "onedrive" ? "https://login.microsoftonline.com/common/oauth2/v2.0/authorize" : "https://accounts.google.com/o/oauth2/v2/auth"}?state=${encodeURIComponent(state)}`
+      })
+    })
+  };
   const sessionCodec = createSealedSessionCodec(testAeadKeyring(), () => now);
   const browseCodec = createBrowseHandleCodec(
     testAeadKeyring(),
@@ -367,6 +287,9 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
     browse,
     directMedia,
     rateLimiter,
+    ...(options.legacySessionExchange
+      ? { legacySessionExchange: options.legacySessionExchange }
+      : {}),
     config: { householdId: document.householdId, allowedOrigin: origin },
     now: () => new Date(now),
     requestSubject: () => "203.0.113.7",
@@ -544,6 +467,9 @@ export async function createControlApiHarness(): Promise<ControlApiHarness> {
         ok: true;
         data: { authorizationUrl: string };
       };
+      if (!payload.data?.authorizationUrl) {
+        throw new Error(`OAuth authorize failed: ${response.status} ${JSON.stringify(payload)}`);
+      }
       const oauthCookie = cookieValue(response, "oauth_state")!;
       const state = new URL(payload.data.authorizationUrl).searchParams.get(
         "state"
@@ -601,7 +527,7 @@ class ControlProviderHarness {
     const video = providerNode("video-1", "Video.mp4", "provider-trips", "video");
     this.adapter = {
       beginAuthorization: async ({ state }) => ({
-        authorizationUrl: `https://accounts.example.test/oauth?state=${encodeURIComponent(state)}`
+        authorizationUrl: `https://accounts.google.com/o/oauth2/v2/auth?state=${encodeURIComponent(state)}`
       }),
       completeAuthorization: async () => ({
         accountId: "account-created",

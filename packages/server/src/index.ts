@@ -1,4 +1,5 @@
 export * from "./auth/cookies";
+export * from "./auth/csrf";
 export * from "./auth/browse-handles";
 export * from "./auth/passphrase";
 export * from "./auth/sealed-sessions";
@@ -14,15 +15,11 @@ export * from "./control-plane/firestore-mirror";
 export * from "./control-plane/memory";
 export * from "./control-plane/mutations";
 export * from "./control-plane/legacy-session-exchange";
-export * from "./firestore/memory-repository";
-export * from "./firestore/decode";
-export * from "./firestore/repository";
 export * from "./firestore/client";
-export * from "./http/app";
 export * from "./http/errors";
 export * from "./http/request-context";
 export * from "./http/control-app";
-export * from "./services/admin-auth";
+export * from "./runtime/keyrings";
 export * from "./services/control-auth";
 export * from "./services/control-admin";
 export * from "./services/control-enrollment";
@@ -32,16 +29,6 @@ export * from "./services/direct-media";
 export * from "./services/live-provider-folders";
 export * from "./services/live-browse";
 export * from "./services/runtime-rate-limit";
-export * from "./services/bootstrap";
-export * from "./services/device-auth";
-export * from "./services/device-enrollment";
-export * from "./services/sources";
-export * from "./services/oauth";
-export * from "./services/browse";
-export * from "./services/media-urls";
-export * from "./services/indexing";
-export * from "./services/provider-folders";
-export * from "./runtime/sync-runner";
 export type {
   ProviderAdapter,
   ProviderCredentials,

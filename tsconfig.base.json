@@ -21,8 +21,6 @@
       "@cloudframe/server/*": ["packages/server/src/*"],
       "@cloudframe/providers": ["packages/providers/src/index.ts"],
       "@cloudframe/providers/*": ["packages/providers/src/*"],
-      "@cloudframe/indexer": ["packages/indexer/src/index.ts"],
-      "@cloudframe/indexer/*": ["packages/indexer/src/*"],
       "@cloudframe/tv-core": ["packages/tv-core/src/index.ts"],
       "@cloudframe/tv-core/*": ["packages/tv-core/src/*"]
     }

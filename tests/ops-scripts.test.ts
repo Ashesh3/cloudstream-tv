@@ -40,55 +40,6 @@ describe("operations scripts", () => {
     expect(result.stdout).not.toContain("test-only-pepper");
   });
 
-  it("migration is dry-run by default, honors tombstones and split-token precedence", async () => {
-    const directory = await temp();
-    const fixture = join(directory, "legacy.json");
-    const secret = "split-refresh-secret";
-    await writeFile(fixture, JSON.stringify({
-      sessions: {
-        "session-a": {
-          aggregate: [{
-            id: "google-1", provider: "google", email: "family@example.test",
-            refreshToken: "aggregate-refresh", accessToken: "aggregate-access",
-            tokenExpiry: 0, folders: [{ id: "root", name: "Photos" }]
-          }, {
-            id: "deleted", provider: "onedrive", email: "deleted@example.test",
-            refreshToken: "deleted-secret", accessToken: "deleted-access",
-            tokenExpiry: 0, folders: []
-          }],
-          split: {
-            "google-1": {
-              metadata: { id: "google-1", provider: "google", email: "family@example.test", folders: [{ id: "root", name: "Photos" }], createdAt: 1 },
-              tokens: { refreshToken: secret, accessToken: "split-access", tokenExpiry: 2 }
-            }
-          },
-          tombstones: { deleted: { deletedAt: 3 } }
-        }
-      }
-    }));
-
-    const result = await runNode("scripts/migrate-vercel-blob.mjs", ["--fixture", fixture], {
-      PROVIDER_TOKEN_KEY_VERSION: "v1",
-      PROVIDER_TOKEN_KEY_V1: Buffer.alloc(32, 7).toString("base64url"),
-      HOUSEHOLD_ID: "household-test"
-    });
-    expect(result.code, result.stderr).toBe(0);
-    expect(result.stdout).toContain('"apply":false');
-    expect(result.stdout).toContain('"sourceCount":1');
-    expect(result.stdout).toContain('"status":"reauth-required"');
-    expect(result.stdout).not.toContain(secret);
-    expect(result.stdout).not.toContain("aggregate-refresh");
-    expect(result.stdout).not.toContain("deleted-secret");
-  });
-
-  it("migration requires explicit --apply and refuses to invent provider account ids", async () => {
-    const source = await readFile("scripts/migrate-vercel-blob.mjs", "utf8");
-    expect(source).toContain("--apply");
-    expect(source).toContain("providerAccountId: null");
-    expect(source).not.toMatch(/providerAccountId:\s*(connection\.)?email/);
-    expect(source).not.toMatch(/localStorage|sessionStorage/);
-  });
-
   it("declares the live Vercel Blob reader used outside fixture mode", async () => {
     const root = JSON.parse(await readFile("package.json", "utf8"));
     expect(root.dependencies["@vercel/blob"]).toBe("2.8.0");
@@ -215,7 +166,10 @@ describe("operations scripts", () => {
       const source = await readFile(file, "utf8");
       if (source.includes("legacy-session-exchange")) importers.push(file.replaceAll("\\", "/"));
     }
-    expect(importers).toEqual(["packages/server/src/index.ts"]);
+    expect(importers).toEqual([
+      "packages/server/src/http/control-app.ts",
+      "packages/server/src/index.ts"
+    ]);
   });
 
   it("TV bundle checker enforces legacy syntax and compressed budgets", async () => {
