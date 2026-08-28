@@ -329,3 +329,47 @@ Tests       16 passed (16)
 ```
 
 Coverage includes early oversize cancellation, raw multibyte UTF-8 byte counting, null and failing streams, sync/async cancellation failures, malformed UTF-8/JSON, and the existing decoder/security cases.
+
+## Review fix round 4
+
+### Finding addressed
+
+Every response-stream value is now branded as an actual `Uint8Array` before byte accounting or retention. The guard uses captured ArrayBuffer-view and typed-array intrinsic operations, so a hostile object cannot execute a `byteLength` getter. A non-byte chunk is cancelled after the first pull and returns through the existing `AdminApiError(INVALID_RESPONSE)` path rather than leaking a raw getter, type, or range error. Retained chunks are revalidated during bounded concatenation so later mutation also fails closed.
+
+### RED evidence
+
+The new Response-backed regression originally escaped with the hostile chunk's raw `Error: non-byte chunk getter executed`; cancellation and safe admin error mapping were never reached.
+
+### Final verification evidence
+
+```text
+npx vitest run apps/admin/src/api/client.test.ts
+Test Files  1 passed (1)
+Tests       17 passed (17)
+```
+
+The focused suite proves the non-byte stream is pulled once, cancelled once, never reads the hostile getter, and rejects as status-200 `AdminApiError(INVALID_RESPONSE)`. It also keeps the oversized/read/cancel/malformed regressions green.
+
+```text
+npx vitest run --project admin
+Test Files  10 passed (10)
+Tests       63 passed (63)
+```
+
+```text
+npm run typecheck
+Exit code: 0
+```
+
+```text
+npm run lint
+Exit code: 0
+```
+
+```text
+npm run build -w @cloudframe/admin
+1951 modules transformed
+build completed successfully
+```
+
+No Playwright or design-detector rerun was needed because this round changes only the response decoder and its unit regression; admin UI markup, styling, focus, and interaction behavior are unchanged.

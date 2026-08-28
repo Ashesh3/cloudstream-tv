@@ -162,6 +162,40 @@ describe("admin API browser boundary", () => {
     expect(cancelled).toBe(1);
   });
 
+  it("rejects and cancels a streamed response that yields a non-byte chunk", async () => {
+    let pulls = 0;
+    let cancelled = 0;
+    let arbitraryReads = 0;
+    const nonByteChunk = Object.defineProperty({}, "byteLength", {
+      get() {
+        arbitraryReads += 1;
+        throw new Error("non-byte chunk getter executed");
+      }
+    });
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) {
+          (controller as unknown as ReadableStreamDefaultController<unknown>).enqueue(nonByteChunk);
+          return;
+        }
+        controller.enqueue(new Uint8Array([0x7b]));
+        if (pulls === 8) controller.close();
+      },
+      cancel() { cancelled += 1; }
+    }, { highWaterMark: 0 });
+    const response = new Response(stream, { status: 200, headers: { "content-type": "application/json" } });
+
+    await expect(createAdminApi(vi.fn().mockResolvedValue(response)).snapshot()).rejects.toEqual(expect.objectContaining<Partial<AdminApiError>>({
+      status: 200,
+      code: "INVALID_RESPONSE",
+      message: "The server returned an unexpected response."
+    }));
+    expect(pulls).toBe(1);
+    expect(cancelled).toBe(1);
+    expect(arbitraryReads).toBe(0);
+  });
+
   it("counts multibyte UTF-8 response bytes rather than decoded string length", async () => {
     const fourByteCharacter = "😀";
     const body = `{"ok":true,"data":"${fourByteCharacter.repeat(1024 * 1024)}"}`;

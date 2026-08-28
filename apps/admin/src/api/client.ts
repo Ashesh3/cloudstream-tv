@@ -63,6 +63,10 @@ type Fetcher = typeof fetch;
 type Decoder<T> = (value: unknown) => T;
 const parseJson = JSON.parse;
 const MAX_ADMIN_RESPONSE_BYTES = 4 * 1024 * 1024;
+const isArrayBufferView = ArrayBuffer.isView;
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype) as object;
+const typedArrayName = Object.getOwnPropertyDescriptor(typedArrayPrototype, Symbol.toStringTag)?.get;
+const typedArrayByteLength = Object.getOwnPropertyDescriptor(typedArrayPrototype, "byteLength")?.get;
 
 export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
   let csrfToken: string | null = null;
@@ -145,20 +149,38 @@ async function safeJson(response: Response): Promise<unknown> {
       try { read = await reader.read(); }
       catch { cancelReaderBestEffort(reader); return null; }
       if (read.done) break;
-      totalBytes += read.value.byteLength;
+      const chunk = responseByteChunk(read.value);
+      if (!chunk) { cancelReaderBestEffort(reader); return null; }
+      totalBytes += chunk.byteLength;
       if (totalBytes > MAX_ADMIN_RESPONSE_BYTES) { cancelReaderBestEffort(reader); return null; }
-      chunks.push(read.value);
+      chunks.push(chunk.value);
     }
   } finally {
     try { reader.releaseLock(); } catch { /* Lock release is cleanup only. */ }
   }
   if (totalBytes < 1) return null;
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   try {
+    const bytes = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      const validated = responseByteChunk(chunk);
+      if (!validated || validated.byteLength > totalBytes - offset) return null;
+      bytes.set(validated.value, offset);
+      offset += validated.byteLength;
+    }
+    if (offset !== totalBytes) return null;
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     return parseJson(text) as unknown;
+  } catch { return null; }
+}
+
+function responseByteChunk(value: unknown): { value: Uint8Array; byteLength: number } | null {
+  if (!isArrayBufferView(value) || !typedArrayName || !typedArrayByteLength) return null;
+  try {
+    if (Reflect.apply(typedArrayName, value, []) !== "Uint8Array") return null;
+    const byteLength = Reflect.apply(typedArrayByteLength, value, []) as unknown;
+    if (typeof byteLength !== "number" || !Number.isSafeInteger(byteLength) || byteLength < 0) return null;
+    return { value: value as Uint8Array, byteLength };
   } catch { return null; }
 }
 
