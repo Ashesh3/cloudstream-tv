@@ -74,7 +74,9 @@ components:
 
 ## Overview
 
-**Creative North Star: "Screening Room Ledger."** Cloudframe programs household media like a private screening, not a generic SaaS dashboard. Projection black carries the room; warm program stock carries the household's approved selection; a single cue orange marks action, motion, and attention. The result should feel like a precise projection-booth cue sheet that still makes source, indexing, and access truth easy to read.
+**Creative North Star: "Screening Room Ledger."** Cloudframe programs household media like a private screening, not a generic SaaS dashboard. Projection black carries the room; warm program stock carries the household's approved selection; a single cue orange marks action, motion, and attention. The result should feel like a precise projection-booth cue sheet that still makes live-source, access, and recovery truth easy to read.
+
+The visual story follows the runtime truth: private Vercel Blob is the active control ledger, Firestore is an explicit recovery copy only, live Google Drive and OneDrive metadata supplies the program, direct provider media fills the projection, and local TV watch history never appears as a server-side admin fact.
 
 The admin surface keeps the visible source truth above quiet navigation, then places the live provider stage beside the household program so a folder's move into the program remains legible. The TV surface enlarges the same hierarchy for a remote and viewing distance: collection first, program status attached, chrome only when it serves the moment. The locally generated program-stock raster supplies paper fiber, registration marks, perforation dots, and sparse cue geometry without becoming a decorative background.
 
@@ -92,7 +94,7 @@ The palette is a restrained projection booth: almost-black room, tactile stock, 
 
 ### Primary
 
-- **Cue Orange:** Marks primary action, selected movement into the household program, active indexing, progress, and the few structural registration details that need attention.
+- **Cue Orange:** Marks primary action, selected movement into the household program, provider loading, progress, and the few structural registration details that need attention.
 
 ### Secondary
 
@@ -129,7 +131,7 @@ The palette is a restrained projection booth: almost-black room, tactile stock, 
 - **Display:** Uppercase, tightly led ledger titles, projection titles, state panels, and collection names.
 - **Headline:** Large condensed program language that can hold the screen without adding visual noise.
 - **Title:** Condensed section labels for rows, drawers, and cards where the item name is the primary read.
-- **Body:** Plain sans explanation for provider state, indexing truth, recovery direction, and form help.
+- **Body:** Plain sans explanation for provider state, root access, recovery direction, and form help.
 - **Label:** Compact uppercase sans with tracking for rails, counts, and structural annotations.
 
 ### Named Rules
@@ -138,7 +140,7 @@ The palette is a restrained projection booth: almost-black room, tactile stock, 
 
 ## Layout
 
-Admin is a two-plane operating composition. Source health and index truth stay visible at the top; the source workbench then gives roughly two-thirds of its stage to live provider folders and one-third to the household program. The program is the consequence of browsing, not a disconnected settings list. Hairline seams, shared edges, and a short taskbar create the ledger without a stack of floating cards.
+Admin is a two-plane operating composition. Source connection and recovery-copy truth stay visible at the top; the source workbench then gives roughly two-thirds of its stage to live provider folders and one-third to the household program. The program is the consequence of browsing, not a disconnected settings list. Hairline seams, shared edges, and a short taskbar create the ledger without a stack of floating cards.
 
 At narrower admin widths, the truth strip, figures, source planes, device ledger, and settings grid collapse to one readable sequence. The active source-health strip remains near the work without obscuring its contents. Standard admin controls maintain the touch-ready control height.
 
@@ -190,17 +192,17 @@ The system is square by default: ledger entries, inputs, controls, badges where 
 
 ### Source Workbench
 
-**Character:** A live provider stage and a fixed household program on one continuous ledger. Provider folders are browsed live on the dark stage; selected roots enter the stock program plane with their indexing truth and television impact still attached. The header's horizontal rule, rotated cue diamond, and program count make the movement directional without simulating a dashboard workflow.
+**Character:** A live provider stage and a fixed household program on one continuous ledger. Provider folders are browsed live on the dark stage; selected roots enter the stock program plane with their access state and television impact still attached. The header's horizontal rule, rotated cue diamond, and program count make the movement directional without simulating a dashboard job system.
 
 ### Program Projection
 
-**Character:** The TV's oversized first read. Collection imagery or stock art fills the projection field while the adjacent program ledger names readiness, count, and recovery. Ready, preparing, and blocked states remain visibly distinct; preparing uses a pulsing cue, while blocked uses danger rather than a falsely empty collection.
+**Character:** The TV's oversized first read. Collection imagery or stock art fills the projection field while the adjacent program ledger names availability, count, and recovery. Ready, loading, provider-failed, storage-disabled, and revoked states remain visibly distinct; loading uses a pulsing cue, while blocked uses danger rather than a falsely empty collection.
 
 ## Do's and Don'ts
 
 ### Do:
 
-- **Do** keep provider, index, quota, and recovery truth adjacent to the source or household program entry it describes.
+- **Do** keep provider, root-access, and recovery-copy truth adjacent to the source or household program entry it describes.
 - **Do** use the real program-stock material only as a purposeful selected or reading plane, with its cue geometry quiet enough for the information to lead.
 - **Do** preserve the admin relationship of visible source truth, live provider stage, and household program.
 - **Do** preserve television-scale type, safe insets, and an unmistakable focused card for remote operation.
@@ -208,7 +210,7 @@ The system is square by default: ledger entries, inputs, controls, badges where 
 
 ### Don't:
 
-- **Don't** collapse incomplete indexing, provider-empty, quota-exhausted, blocked, and healthy states into one generic empty presentation.
+- **Don't** collapse provider-loading, provider-empty, provider-failed, storage-disabled, revoked, and healthy states into one generic empty presentation.
 - **Don't** spend cue orange on inactive decoration, broad backgrounds, or multiple competing actions.
 - **Don't** replace the program relationship with generic SaaS metrics, floating dashboard cards, or an unrelated streaming clone.
 - **Don't** allow manual-only TV controls to take initial or automatic remote focus.

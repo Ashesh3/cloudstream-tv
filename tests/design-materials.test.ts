@@ -6,6 +6,14 @@ const root = fileURLToPath(new URL("../", import.meta.url));
 const adminCssPath = `${root}apps/admin/src/styles/app.css`;
 const tvCssPath = `${root}apps/tv/src/styles/app.css`;
 const stockPath = `${root}public/assets/program-stock.webp`;
+const activeDocumentationPaths = [
+  `${root}PRODUCT.md`,
+  `${root}README.md`,
+  `${root}DESIGN.md`,
+  `${root}docs/operations/firebase-vercel-setup.md`,
+  `${root}docs/operations/webos-acceptance.md`,
+  `${root}.env.example`
+];
 
 describe("screening room material contract", () => {
   it("uses the authored program stock raster without generated faux grain", () => {
@@ -24,6 +32,33 @@ describe("screening room material contract", () => {
     const dimensions = readWebpDimensions(asset);
     expect(dimensions.width).toBeGreaterThanOrEqual(1600);
     expect(dimensions.height).toBeGreaterThanOrEqual(1000);
+  });
+
+  it("documents the active Vercel control plane without retired runtime claims", () => {
+    const documentation = activeDocumentationPaths
+      .map(path => readFileSync(path, "utf8"))
+      .join("\n");
+
+    for (const required of [
+      "private Vercel Blob",
+      "zero steady-state Firestore reads",
+      "live Google Drive and OneDrive metadata",
+      "local TV watch history",
+      "direct provider media",
+      "explicit recovery"
+    ]) {
+      expect(documentation).toContain(required);
+    }
+    for (const retired of [
+      "Firestore-backed metadata index",
+      "Sync now",
+      "reconciliation schedule",
+      "indexed nodes",
+      "Firestore quota recovery",
+      "15-minute sync"
+    ]) {
+      expect(documentation).not.toContain(retired);
+    }
   });
 });
 

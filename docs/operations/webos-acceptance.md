@@ -1,51 +1,79 @@
 # LG webOS acceptance
 
-Automated compatibility proves the legacy bundle parses and stays within budgets; it is not real-TV proof. Production cutover remains blocked until a user performs this checklist on an LG webOS 5.0+ television.
+Automated compatibility proves that the legacy bundle parses and stays within budgets; it is not real-TV proof. Mark production acceptance complete only after a user performs this checklist on a supported LG webOS 5.0+ television.
 
 ## Before the run
 
-1. Deploy the exact candidate commit to the dev preview.
+1. Deploy the exact candidate commit to an isolated preview using production build output, not an E2E build.
 2. Confirm `node scripts/check-tv-bundle.mjs` passes.
-3. Confirm `npm run check:chromium68` executes the legacy entry in pinned Chromium 68 snapshot revision `555668`.
-4. Confirm the TV has no previously approved Cloudframe cookie, or revoke the old device first.
-5. Open the preview URL in the LG browser. Do not install a service worker or use Web Storage.
+3. Confirm `npm run check:chromium68` runs the legacy entry in pinned Chromium 68 snapshot revision `555668`.
+4. Connect one Google Drive source and one OneDrive source, each with a small approved folder containing an image and seekable video.
+5. Confirm the TV has no approved cookie, or revoke its old device first.
+6. Record the test TV model, webOS/browser version, network, commit, deployment URL, and UTC start time.
 
-## Enrollment
+## Enrollment and session
 
 - Enter a device name using the TV keyboard.
 - Confirm the waiting screen remains stable for at least one poll cycle.
-- On a phone, approve the request and assign one root.
-- Confirm the TV becomes usable without a code, QR scan, or reload.
-- Power-cycle/relaunch the browser and confirm the secure cookie restores access.
+- On a phone, approve the request and assign both provider roots.
+- Confirm the TV becomes usable without a code, QR scan, or manual reload.
+- Relaunch the browser and confirm the sealed cookie restores access.
 
-## Remote and focus
+## Live folder browsing, remote, and focus
 
-- Traverse every grid edge with Up/Down/Left/Right.
-- Move across an incomplete final row and a pagination boundary.
-- Open nested folders, go Back, and verify the exact item and scroll position restore.
-- Open/close the hidden Sources drawer with Menu and Back; focus must not leak.
-- Verify Home and breadcrumbs.
+- Open the Google root and the OneDrive root and confirm their current provider contents appear without a background refresh job.
+- Record first-page and nested-folder listing latency for each provider, including one page-boundary load.
+- Traverse every grid edge with Up/Down/Left/Right, including an incomplete final row.
+- Open nested folders, press Back, and verify the exact focused item and scroll position return.
+- Open and close the Sources drawer with Menu and Back; focus must not leak or move to a manual-only control.
+- Verify Home and breadcrumbs return to the expected collection and focus target.
+- While a provider is unavailable, confirm a bounded provider error appears rather than a false empty folder.
 
-## Viewer
+## Direct provider media and viewer
+
+Perform these checks once with Google Drive and once with OneDrive:
 
 - Open an image, move Right to a video, and Left back to the image.
-- Enter toggles image slideshow and video play/pause.
-- Up opens details/filmstrip; Down closes it.
-- Back returns to the exact grid card.
-- Seek with the LG playback keys and verify resume after reopening.
-- Confirm one failed/expired media URL is refreshed once, not looped.
-- Confirm an unsupported codec shows a bounded error without crashing the shell.
+- Confirm the browser fetches media from the provider host rather than the Vercel application host.
+- Play the video and seek forward/backward with LG playback keys; verify range seeking resumes playback at the selected position.
+- Enter toggles image slideshow or video play/pause; Up opens details/filmstrip; Down closes it.
+- Back returns focus to the exact grid card.
+- Cause or wait for a media URL to expire, then confirm the TV requests one renewed URL and playback recovers without a loop.
+- Confirm an unsupported codec produces a bounded error without crashing the shell.
 
-## Security and revocation
+Google's direct URL contains a short-lived access token as an accepted trade-off. Do not copy the URL into the acceptance record. Confirm Vercel application logs do not contain the URL, token, provider response body, or media bytes.
 
-- Reassign the device to a different root and confirm the removed root disappears on the next request.
+## Local TV watch history
+
+- Play a video beyond the resume threshold, close it, reopen it, and confirm the local resume position.
+- Reload/relaunch the TV browser and confirm the same device resumes locally.
+- Complete a video and confirm reopening starts from the beginning rather than the stored completed position.
+- Clear the LG browser's site data, reopen Cloudframe, and confirm no prior watch history remains. Re-enrollment may be required because cookies are cleared too.
+- Confirm history is not visible in the admin app and is not transferred to another TV.
+
+## Storage-denied fallback on Chromium 68
+
+Using a reproducible browser/site setting or a diagnostic preview that denies `localStorage`:
+
+- Launch the actual legacy bundle in Chromium 68-compatible mode.
+- Confirm browsing and playback continue.
+- Confirm the UI reports local resume history unavailable without repeated prompts or crashes.
+- Reload and confirm no resume position is expected or recovered.
+- Restore normal storage before continuing the production candidate run.
+
+## Security, assignment, and revocation
+
+- Remove one assigned root and confirm it disappears on the TV's next protected request.
+- Reassign a root and confirm it returns without re-enrollment.
 - Revoke the TV and confirm its next authenticated request transitions to the revoked screen.
-- Confirm provider URLs never appear in navigation history, referrers, application logs, or persisted browser storage.
+- Confirm provider URLs do not appear in navigation history, referrers sent to unrelated origins, Vercel application logs, or persisted browser storage. The active media element may temporarily hold the direct URL in memory.
 
-## Performance record
+## Performance and Firestore record
 
-Record TV model, webOS version, browser engine version, network, candidate commit, first focusable time, folder navigation latency, and any long input stalls. Target first focusable skeleton under 2 seconds warm and folder stability under 150 ms after indexed JSON arrives.
+Record first-focusable time, Google/OneDrive folder latency, page-boundary latency, media-start latency, seeking behavior, expired-URL recovery, and any long input stalls. Target a first focusable skeleton under two seconds on a warm launch; provider folder latency depends on the provider/network and must be recorded rather than compared with old cached-metadata targets.
+
+During a continuous browse/playback window after session migration, confirm Cloud Monitoring shows zero Firestore document reads. Do not perform admin mutations during that measurement; document any separately observed recovery mirror write.
 
 ## Result
 
-Mark **PASS** only when every item succeeds on the supported TV. Until then, report `REAL_WEBOS_ACCEPTANCE_PENDING`; desktop Chromium and synthetic Playwright evidence are not substitutes.
+Mark **PASS** only when every applicable item succeeds on the supported TV and attach secret-safe timestamps plus aggregate evidence. Otherwise report `REAL_WEBOS_ACCEPTANCE_PENDING` with the failed step. Desktop Chromium and synthetic Playwright results are not substitutes for the real-TV run.

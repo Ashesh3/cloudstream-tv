@@ -15,6 +15,27 @@ afterEach(async () => {
 });
 
 describe("operations scripts", () => {
+  it("documents dry-run-first migration, one-document recovery, and bounded legacy exchange", async () => {
+    const operations = await readFile("docs/operations/firebase-vercel-setup.md", "utf8");
+    const environment = await readFile(".env.example", "utf8");
+
+    expect(operations).toContain("node --experimental-strip-types scripts/migrate-vercel-control-plane.ts");
+    expect(operations).toContain("node --experimental-strip-types scripts/restore-vercel-control-plane.ts");
+    expect(operations).toContain("controlPlaneBackups/{householdId}");
+    expect(operations).toContain("reads exactly one recovery document");
+    expect(operations).toContain("ENABLE_LEGACY_SESSION_EXCHANGE=1");
+    expect(operations).toContain("zero steady-state Firestore reads");
+    expect(operations.toLowerCase()).toContain("no legacy firestore document or google cloud/firebase project is deleted");
+
+    for (const key of ["CONTROL_PLANE_KEY", "SESSION_KEY", "BROWSE_HANDLE_KEY", "PROVIDER_TOKEN_KEY"]) {
+      expect(environment).toContain(`${key}_VERSION=v1`);
+      expect(environment).toContain(`${key}_V1=`);
+    }
+    expect(environment).toContain("ROOT_ID_SECRET=");
+    expect(environment).toContain("GCP_OPERATOR_SERVICE_ACCOUNT_EMAIL=");
+    expect(environment).toContain("GCP_OPERATOR_CREDENTIALS_FILE=");
+  });
+
   it("seed-dev refuses missing or weak passphrases before writing", async () => {
     const missing = await runNode("scripts/seed-dev.mjs", [], { ADMIN_INITIAL_PASSPHRASE: "" });
     expect(missing.code).not.toBe(0);

@@ -1,5 +1,16 @@
 # Firebase and Vercel operations
 
+## Architecture and safety contract
+
+- The encrypted private Vercel Blob snapshot is authoritative active control state.
+- Vercel Runtime Cache is a five-minute hot copy; each protected request conditionally revalidates the cached Blob ETag.
+- Firestore stores one write-only recovery document at `controlPlaneBackups/{householdId}`. Ordinary TV, admin, and provider traffic performs zero steady-state Firestore reads.
+- Google Drive and OneDrive metadata is listed live through Vercel. Direct provider media bypasses Vercel.
+- Migration and explicit recovery are operator-only and dry-run-first. Restore reads exactly one recovery document.
+- No legacy Firestore document or Google Cloud/Firebase project is deleted by these procedures. Future cleanup requires separate approval, an exact inventory, and a dry run.
+
+Keep preview and production isolated with distinct `HOUSEHOLD_ID`, `CONTROL_PLANE_ENV`, Blob pathname, Runtime Cache key, key material, and recovery document.
+
 ## Current development resources
 
 | Resource | Value |
@@ -9,42 +20,42 @@
 | Vercel team/project | `ashsec` / `tv-video-ui` |
 | Vercel project ID | `prj_CFOxdTl9iBsESvS1sjnyWkh7MxEr` |
 | Vercel function region | `bom1` |
-| Service account | `cloudframe-vercel-dev@cloudframe-tv-dev.iam.gserviceaccount.com` |
 | WIF pool/provider | `vercel` / `vercel-ashsec` |
 
-Firestore currently reports `freeTier=true`. Linking billing account `01DA89-86590E-2EA187` failed with **Cloud billing quota exceeded** because that account has reached its linked-project quota. Do not unlink unrelated projects. Request a billing-project quota increase or link a different approved billing account before treating this as a Blaze project.
+These values describe the last verified development setup and may drift. Re-check them before deployment. Do not unlink unrelated billing projects or delete any project while configuring this control plane.
 
 ## Firebase configuration
 
-Only Firestore is enabled. Firebase Authentication, Storage, Hosting, and Functions are intentionally unused.
+Only Firestore is used; Firebase Authentication, Storage, Hosting, and Functions are intentionally absent. Browser rules deny every direct read and write, and the final composite-index set is empty.
 
 ```powershell
 firebase use dev
 firebase deploy --only firestore:rules,firestore:indexes
-```
-
-Validate after deployment:
-
-```powershell
 gcloud firestore databases describe --database='(default)' --project=cloudframe-tv-dev
 firebase firestore:indexes --project cloudframe-tv-dev
 ```
 
-`firestore.rules` denies all browser access. Server IAM bypasses client rules. The service account has only `roles/datastore.user` and `roles/serviceusage.serviceUsageConsumer`, and it has no user-managed keys.
-
-Current verified state: deny-all ruleset `f3abd42b...` is deployed, all five composite indexes are READY, and a live dev Vercel OIDC -> Google STS -> service-account impersonation -> Firestore exchange passed under the exact preview/development subject condition.
-
-For a disposable emulator smoke:
+For disposable local verification:
 
 ```powershell
 firebase emulators:exec --only firestore "npm test"
 ```
 
-Do not point tests at the live database unless documents use a disposable prefix and are removed in a `finally` block.
+Do not aim general tests at a live database.
 
-## Vercel OIDC to Google WIF
+## Create and bind private Vercel Blob
 
-Issuer and audience:
+1. Create a Blob store in the Vercel project and keep its access private.
+2. Bind the store to the intended Vercel environments.
+3. Copy only the store identifier into `BLOB_STORE_ID`; do not print or commit any store token.
+4. Set `CONTROL_PLANE_ENV=preview` for non-production and `CONTROL_PLANE_ENV=production` for production.
+5. Verify that the candidate writes `cloudframe/control-plane/{environment}/{householdId}.json.enc` with private access.
+
+The application uses server-side Blob access and stores an AES-256-GCM envelope. Runtime Cache uses the same encrypted envelope with a 300-second TTL and the tag `cloudframe-control:{environment}:{householdId}`.
+
+## Workload Identity Federation and exact identities
+
+Use Vercel OIDC to Google WIF; do not create a user-managed JSON key for either runtime identity.
 
 ```text
 issuer:   https://oidc.vercel.com/ashsec
@@ -52,71 +63,65 @@ audience: https://vercel.com/ashsec
 provider: projects/7371742203/locations/global/workloadIdentityPools/vercel/providers/vercel-ashsec
 ```
 
-Impersonation is limited to these exact Vercel subjects:
+Bind the expected Vercel preview/production subjects only. Configure three separate principals:
 
-```text
-owner:ashsec:project:tv-video-ui:environment:preview
-owner:ashsec:project:tv-video-ui:environment:development
-```
+1. **Permanent runtime writer (`GCP_SERVICE_ACCOUNT_EMAIL`)**: custom role with exactly `datastore.entities.create` and `datastore.entities.update`; no get/list permission. Add an IAM Condition for the exact `controlPlaneBackups/{householdId}` document resource where supported. This client is passed only to the recovery mirror.
+2. **Temporary legacy reader (`GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL`)**: read-only access limited to the legacy admin/device session lookups and household/device records needed for cookie exchange. It has no write permission and exists only during the cutover window.
+3. **Operator (`GCP_OPERATOR_SERVICE_ACCOUNT_EMAIL`)**: migration/recovery identity kept outside the deployed runtime. Export its external-account credential configuration to a local protected file referenced by `GCP_OPERATOR_CREDENTIALS_FILE`. The scripts reject credentials that impersonate either runtime identity.
 
-No JSON service-account key is permitted. Validate the deployed preview by calling an authenticated endpoint that reads Firestore and confirming Google IAM audit logs show service-account impersonation from the expected principal.
+The permanent writer should fail a direct `get`/list probe. Verify its write path with a controlled application mutation and the `control_plane_mirror_write` event; do not run an out-of-band probe that could overwrite the recovery document. Do not claim least privilege from browser rules alone; server IAM bypasses those rules.
 
 ## Environment inventory
 
-Configure Development and Preview (`dev` branch) without printing values:
+Use `.env.example` as the canonical name list. Do not print values. Important constraints:
 
-```text
-APP_ORIGIN
-NEXT_PUBLIC_APP_URL
-HOUSEHOLD_ID
-FIRESTORE_PROJECT_ID
-FIRESTORE_DATABASE_ID
-GCP_WORKLOAD_IDENTITY_PROVIDER
-GCP_SERVICE_ACCOUNT_EMAIL
-GOOGLE_CLIENT_ID
-GOOGLE_CLIENT_SECRET
-ONEDRIVE_CLIENT_ID
-ONEDRIVE_CLIENT_SECRET
-ONEDRIVE_TENANT
-ADMIN_INITIAL_PASSPHRASE
-ADMIN_PASSPHRASE_PEPPER
-CSRF_SECRET
-BROWSE_CURSOR_SECRET
-PROVIDER_TOKEN_KEY_VERSION
-PROVIDER_TOKEN_KEY_V1
-CRON_SECRET
+- `APP_ORIGIN` is one exact HTTPS origin with no path, query, fragment, or credentials.
+- `CONTROL_PLANE_ENV` is exactly `preview` or `production`.
+- `FIRESTORE_EMULATOR_HOST` is local only.
+- `ENABLE_LEGACY_SESSION_EXCHANGE` is enabled only by the exact string `1`.
+- `GCP_OPERATOR_SERVICE_ACCOUNT_EMAIL` and `GCP_OPERATOR_CREDENTIALS_FILE` belong on the operator workstation/CI job, not in the Vercel runtime.
+- `CONTROL_PLANE_KEY_VERSION`, `SESSION_KEY_VERSION`, `BROWSE_HANDLE_KEY_VERSION`, and `PROVIDER_TOKEN_KEY_VERSION` use canonical lowercase `v1`; matching environment suffixes are uppercase `*_V1`.
+- `ROOT_ID_SECRET`, `BROWSE_ID_SECRET`, `RATE_LIMIT_SECRET`, `CSRF_SECRET`, and `ADMIN_PASSPHRASE_PEPPER` are independent server-only secrets.
+
+### Generate initial secret material
+
+Generate each value independently. Versioned AES keys are 32 random bytes encoded as canonical base64url; HMAC/pepper secrets must contain at least 32 UTF-8 bytes.
+
+```powershell
+node -e "for (const n of ['CONTROL_PLANE_KEY_V1','SESSION_KEY_V1','BROWSE_HANDLE_KEY_V1','PROVIDER_TOKEN_KEY_V1']) console.log(n+'='+require('node:crypto').randomBytes(32).toString('base64url'))"
+node -e "for (const n of ['ADMIN_PASSPHRASE_PEPPER','CSRF_SECRET','BROWSE_ID_SECRET','ROOT_ID_SECRET','RATE_LIMIT_SECRET']) console.log(n+'='+require('node:crypto').randomBytes(32).toString('base64url'))"
 ```
 
-Keep `FIRESTORE_EMULATOR_HOST` local only. `WORKFLOW_QUEUE_NAMESPACE` must be absent in every Vercel environment while using stable Workflow SDK 4.8.5; the stable runtime publishes step messages to the default `__wkf_step_*` topic.
+Move generated values directly into an approved secret manager/Vercel environment. Do not save terminal output in git, tickets, or reports.
 
-The current dev bootstrap passphrase is stored with a user-only ACL at `C:\Users\Ashesh\.cloudframe-tv-dev-bootstrap.txt`. Rotate it after first login. Never paste it into tickets, logs, git, or chat.
+### Rotate versioned keys
 
-## OAuth redirects
+For one key family at a time:
 
-After the first `dev` deployment, verify its alias and configure both provider consoles with exactly:
+1. Generate a new 32-byte key as `*_V2`.
+2. Deploy with both `*_V1` and `*_V2` present while the `*_VERSION` selector still equals `v1`.
+3. Change the selector to lowercase `v2` and deploy.
+4. Exercise the relevant sessions/control/provider path and perform a real control mutation so new durable material uses `v2`.
+5. Keep `*_V1` until all still-valid encrypted values or cookies using it are expired, migrated, or deliberately invalidated; then remove it in a separate deployment.
+
+Rotate `ROOT_ID_SECRET` only with an explicit root-ID migration plan because derived root IDs change. Rotating `BROWSE_ID_SECRET` invalidates local history matching; rotating `RATE_LIMIT_SECRET` resets ephemeral buckets; rotating `CSRF_SECRET`/session keys invalidates active sessions. Record these consequences before changing them.
+
+## OAuth redirects and direct media
+
+Configure provider redirects to the exact `APP_ORIGIN`:
 
 ```text
-https://tv-video-ui-git-dev-ashsec.vercel.app/api/admin/oauth/google/callback
-https://tv-video-ui-git-dev-ashsec.vercel.app/api/admin/oauth/onedrive/callback
+https://<host>/api/admin/sources/google/callback
+https://<host>/api/admin/sources/onedrive/callback
 ```
 
-The callback host must equal `APP_ORIGIN`; do not accept an arbitrary redirect URI from the browser. Google needs Drive read-only/offline access. Microsoft needs `Files.Read`/`Files.Read.All` as approved plus `offline_access`. Provider-console redirect changes remain a manual external action until authenticated console access is available.
+Google uses Drive read-only offline access. Microsoft uses `Files.Read`, `offline_access`, and identity scopes. The callback host is derived server-side; the browser cannot supply an arbitrary redirect.
 
-## Source browsing and selected-root indexing
+Folder/media metadata is listed live through Vercel with no-store responses. Media URLs are vended only after current authorization. Google direct playback includes a short-lived access token in the query string; OneDrive returns its temporary download URL. Never log either URL. Range traffic and bytes must go from provider to TV, not through Vercel.
 
-Connecting or reconnecting a source verifies the provider account and records its provider-root identity. It does not create an enabled whole-drive root and does not launch a whole-drive crawl. A connected source with no selected roots remains in `unselected` state and can still be browsed in the admin app.
+## Build and preview deployment
 
-**Browse & choose folders** reads folder pages directly from Google Drive or OneDrive through the authenticated server endpoint. These live provider responses, like all JSON API responses, are sent with `Cache-Control: no-store`; they are not derived from Firestore's indexed nodes and return folders only. The TV app continues to browse indexed metadata and never receives provider credentials.
-
-Selecting a provider folder creates or re-enables that assigned root and launches an `initial` durable sync for the selected root. Additional selected roots reset the initial crawl so the enabled-root set is indexed consistently. **Sync now** resumes an unfinished initial crawl or starts an initial crawl when no completed cursor exists; otherwise it runs delta sync. Removing a root immediately removes it from device assignments, and reconciliation makes metadata outside all enabled roots unavailable.
-
-The admin index state is operational truth: `unselected`, `queued`, `indexing`, `reconciling`, `healthy`, `quota-exhausted`, `reauth-required`, or `provider-error`. A successful live provider response with no folders may say the folder is empty; an incomplete or failed index must not be presented as provider-empty.
-
-When Firestore returns `RESOURCE_EXHAUSTED`, the source becomes `quota-exhausted`. Reduce the selected library or obtain Firestore quota headroom, then choose **Sync now**. Reconnect only when authorization is also invalid. Cloudframe avoids unnecessary whole-drive work and preserves resumable checkpoints, but it cannot link a billing account or increase Firestore capacity. This project is currently free-tier and billing-disabled; sustained indexing may require a different approved billing account or a smaller selected program.
-
-## Build and deployment
-
-Vercel Framework Preset must be **Other** (not Next.js), with:
+Vercel Framework Preset is **Other**:
 
 ```text
 Build command: npm run build:vercel
@@ -125,49 +130,102 @@ Install command: npm install
 Node: 24.x
 ```
 
-The remote project was configured to **Other**, but a stale local `.vercel/project.json` may still say `nextjs`. Run `vercel pull --yes` after linking; if `vercel build` reports `NEXT_NO_VERSION`, recheck the remote preset and pull again.
-
-Then:
-
 ```powershell
 vercel pull --yes --environment=preview
 npm run build:vercel
 vercel deploy --prebuilt --target=preview
 ```
 
-Probe the returned URL:
+`npm run build:vercel` forces a clean production rebuild and packages exactly one API function. Never deploy output from `npm run build:e2e`.
+
+Use an authenticated browser session for preview/production smoke tests if direct PowerShell receives a Vercel Security Checkpoint. Verify both SPAs, static asset content types, API JSON, admin login, TV enrollment, live folder browsing, and direct provider playback.
+
+## Migration: dry run, apply, and verification
+
+The migration reads only legacy household, pending request, device, source, and root records needed for the compact document. It does not read provider-file, watch-history, rate-limit, or workflow collections.
+
+Set the operator-only environment without displaying values, then run:
 
 ```powershell
-Invoke-WebRequest "$url/" -UseBasicParsing
-Invoke-WebRequest "$url/admin/" -UseBasicParsing
-Invoke-WebRequest "$url/api/bootstrap" -UseBasicParsing
+node --experimental-strip-types scripts/migrate-vercel-control-plane.ts
+node --experimental-strip-types scripts/migrate-vercel-control-plane.ts --apply
 ```
 
-Expected: both SPAs return HTML and assets return their actual content types; `/api/bootstrap` returns a JSON application response rather than SPA HTML. A Firestore-backed call proves OIDC exchange. A source **Sync now** must return a run ID and Workflow observability must show flow/step execution.
+The first command is a dry run. Review only the redacted `householdId`, `revision`, entity counts, and checksum. Before `--apply`, verify the target environment, Blob store, household, control keyring, provider-token keyring, and operator identity. Apply creates or safely compares the encrypted Blob, verifies its ETag/checksum, writes the single recovery copy, and reads it back with the operator credential for verification. It refuses unsafe overwrites.
 
-### Workflow release gate
+Do not move the production alias until apply has verified both copies. Preview must use fully separate state and secrets.
 
-Exact pins are `workflow@4.8.5` and `@workflow/builders@4.1.10`, the latest stable versions checked on 2026-08-26. `npm audit` reports transitive advisories in the Workflow build/runtime tree; no newer stable release exists and npm's suggested downgrade is incompatible. The package is needed at runtime for Workflows, so production-omit audit does not eliminate it. Before production cutover, upgrade to a fixed stable release and rerun manifest/queue/deployment tests, or formally accept the bounded release risk after reviewing each advisory. Do not switch to the 5.0 prerelease solely to silence audit.
+## Bounded legacy session exchange
 
-## Scheduling
+For the short cutover window, configure:
 
-Hobby permits daily cron, so `vercel.json` runs reconciliation at `02:00 UTC`. Initial crawls and **Sync now** start Workflows immediately and do not depend on cron. To meet the approved 15-minute cadence, upgrade to Pro or use an external authenticated scheduler with `Authorization: Bearer $CRON_SECRET`.
+```text
+ENABLE_LEGACY_SESSION_EXCHANGE=1
+GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL=<separate read-only principal>
+```
 
-## Migration and rollback
+Only exact `ENABLE_LEGACY_SESSION_EXCHANGE=1` enables the reader. Each existing admin and TV cookie may perform the bounded legacy Firestore lookup once, then receives a sealed version-2 cookie. New sessions never use this reader.
 
-**External production gate — `STAGING_BACKUP_RESTORE_PENDING`.** Before moving the production alias, enable scheduled Firestore backups and complete one full restore into an isolated staging database/project. Verify household settings, encrypted source records, device revocations, roots, nodes, and watch history after restoration. This drill is not complete because the development project remains on the Firestore free tier and the attempted billing link is blocked by Cloud billing linked-project quota. Do not treat development deployment readiness as production-cutover approval.
+After confirming the one active admin browser and TV hold version-2 cookies:
 
-1. Run `node scripts/migrate-vercel-blob.mjs` and review the redacted counts.
-2. Run with `--apply` only after the destination and encryption key version are verified.
-3. Reconnect every `reauth-required` source and choose the desired replacement roots through **Browse & choose folders**.
-4. For an existing source with a legacy enabled whole-drive root, leave that root enabled while the selected roots index. Run **Sync now** if initial indexing did not start automatically.
-5. Reassign every affected TV from the legacy whole-drive root to the selected roots, verify the intended content is available, and only then remove the legacy whole-drive root. Removing it sooner revokes that access immediately.
-6. Complete the selected-root initial crawl and reconciliation in staging.
-7. Enroll a fresh TV; legacy browser sessions are not migrated.
-8. Keep the previous deployment available until one full reconciliation completes.
+1. Set the flag to `0` or remove it and redeploy.
+2. Confirm ordinary admin/TV use still succeeds with no Firestore reads.
+3. Remove the legacy reader WIF binding and Vercel variable.
+4. Disable/delete the read-capable service account only after the binding is removed and rollback is no longer needed.
+5. Remove the compatibility code in a separate tested change. Do not delete a service account or binding merely as part of application deployment; treat identity cleanup as an explicit, reviewed infrastructure change.
 
-Rollback the Vercel alias to the previous deployment. Do not delete new Firestore data during an application rollback. Export/backup metadata before destructive schema work; restore into staging first and verify devices, roots, sources, nodes, and watch history before production use.
+Do not reuse the legacy reader for migration, recovery, or runtime writes.
 
-## Observability
+## Explicit recovery: dry run and apply
 
-Monitor safe error codes, request/source/device/run IDs, repeated OAuth refresh failures, sync backlog, media URL-vending failures, Firestore quota, and Vercel function errors. Never log passphrases, cookies, OAuth codes/tokens, provider URLs, encrypted payload material, or full provider responses.
+Use this only when the authoritative Blob is missing or corrupt and public requests are failing closed.
+
+```powershell
+node --experimental-strip-types scripts/restore-vercel-control-plane.ts
+node --experimental-strip-types scripts/restore-vercel-control-plane.ts --apply
+```
+
+The dry run reads exactly one recovery document, `controlPlaneBackups/{householdId}`, validates schema and encrypted provider-token metadata, and prints only redacted counts, revision, and checksum. Apply writes and verifies the private Blob and refreshes Runtime Cache. It refuses to replace a valid active document with mismatched or older state.
+
+Perform a recovery drill in an isolated staging environment with separate state. Verify admin access, device assignments/revocations, sources, roots, and direct playback. Recovery does not restore local TV watch history because that history exists only in the TV browser.
+
+## Mirror-delay behavior and observability
+
+A successful private Blob commit is not rolled back if the asynchronous recovery write fails. The API:
+
+- exposes **Recovery copy delayed** from Runtime Cache status;
+- defers the same idempotent full-document write through `waitUntil()`; that task makes at most three total write attempts;
+- rewrites the entire latest document on the next successful control mutation;
+- never reads Firestore to repair the mirror.
+
+Monitor these secret-safe structured events/counters:
+
+| Event | Meaning | Safe fields |
+|---|---|---|
+| `control_plane_blob_read` | Authoritative Blob was read/revalidated | request ID, household ID, `count` |
+| `control_plane_cache_hit` | Runtime Cache contained a usable envelope | request ID, household ID, `count` |
+| `control_plane_cache_miss` | Runtime Cache did not contain a usable envelope | request ID, household ID, `count` |
+| `control_plane_mirror_write` | Recovery document write succeeded | request ID, household ID, revision, `count` |
+| `control_plane_mirror_failed` | Recovery write attempts ended delayed | request ID, household ID, revision, normalized error code, `count` |
+| `control_plane_restore_read` | Operator restore read the recovery document | request ID, household ID, `count` |
+
+Never log passphrases, cookies, OAuth codes, access/refresh tokens, provider URLs, provider response bodies, encrypted document bodies, hashes, or raw credentials.
+
+## Prove zero Firestore reads
+
+Run an authenticated observation window only after migration and cookie exchange are complete:
+
+1. Record the exact UTC start time and current Firestore read metric/counter.
+2. Continuously reload admin state, browse nested Google/OneDrive folders, request thumbnails, play and seek media, renew one expired media URL, and exercise local resume history.
+3. Make no control mutations during the measurement window; mutations should produce one recovery write, not a read.
+4. Confirm Vercel events show Blob/cache/provider activity and no recovery-read event.
+5. Confirm Cloud Monitoring reports a zero delta for Firestore document reads for the exact project/database and time window. Account for metric ingestion delay before concluding.
+6. Save only timestamps, aggregate counters, commit/deployment IDs, and pass/fail evidence. Do not save URLs, document bodies, provider IDs, or credentials.
+
+Expected result: zero steady-state Firestore reads. A legacy-cookie exchange or operator migration/recovery invalidates the observation window and must be measured separately.
+
+## Rollback and retention
+
+Rollback the Vercel alias to the previous deployment if the new control plane fails. Keep the new private Blob and recovery document intact while investigating; do not delete or rewrite legacy collections during application rollback.
+
+The deployment intentionally leaves legacy `nodes`, `watchHistory`, `rateLimits`, `adminSessions`, `deviceSessions`, `oauthStates`, source workflow fields, and workflow infrastructure data untouched. No operation here deletes a Google Cloud/Firebase project. Any future cleanup is a new destructive operation requiring explicit approval, an exact inventory, a dry run, and its own rollback plan.
