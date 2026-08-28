@@ -313,6 +313,27 @@ describe("sealed control OAuth", () => {
     }
   });
 
+  it("allows only documented Microsoft tenant forms", async () => {
+    for (const tenant of [
+      "common",
+      "organizations",
+      "consumers",
+      "01234567-89ab-cdef-0123-456789abcdef",
+      "tenant-name.onmicrosoft.com",
+      "example.com"
+    ]) {
+      const harness = setup();
+      const authorizationUrl = `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize`;
+      harness.provider.adapter.beginAuthorization = async () => ({ authorizationUrl });
+      await expect(harness.oauth.beginAuthorization({ admin: harness.admin, context: harness.context(), provider: "onedrive" })).resolves.toMatchObject({ authorizationUrl });
+    }
+    for (const tenant of ["common.", "tenant..name", "tenant_name", "tenant~name", "%63ommon", ".", "..", "-tenant", "tenant-"]) {
+      const harness = setup();
+      harness.provider.adapter.beginAuthorization = async () => ({ authorizationUrl: `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize` });
+      await expect(harness.oauth.beginAuthorization({ admin: harness.admin, context: harness.context(), provider: "onedrive" })).rejects.toMatchObject({ code: "OAUTH_PROVIDER_ERROR" });
+    }
+  });
+
   it("stores PKCE state only in a sealed ten-minute HttpOnly cookie", async () => {
     const harness = setup();
 

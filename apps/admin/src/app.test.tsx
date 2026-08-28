@@ -13,6 +13,7 @@ const root: ControlRootDto = { id: "root-1", sourceId: "source-1", displayName: 
 const device: ControlDeviceDto = { id: "device-1", name: "Living Room", enabled: true, assignedRootIds: [root.id], mediaOrder: null, slideshowSeconds: null, createdAt: "2026-08-20T00:00:00.000Z", approvedAt: "2026-08-20T00:00:00.000Z", revokedAt: null };
 const source: ControlSourceDto = { id: "source-1", provider: "google", accountLabel: "Home Drive", status: "healthy", createdAt: "2026-08-20T00:00:00.000Z" };
 const refreshFailure = new AdminApiError(503, "REQUEST_FAILED", "Cloudframe is temporarily unavailable. Try again.");
+const never = <T,>() => new Promise<T>(() => undefined);
 const snapshot: AdminSnapshotResponse = {
   revision: 7,
   household: { allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8 },
@@ -137,6 +138,20 @@ describe("admin snapshot workflows", () => {
     expect(screen.queryByText("Action could not be completed")).not.toBeInTheDocument();
   });
 
+  it("closes approval immediately while the committed refresh remains pending", async () => {
+    const client = api();
+    vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockReturnValueOnce(never());
+    await login(client);
+    fireEvent.click(within(screen.getAllByTestId("request-card")[0]!).getByRole("button", { name: "Approve Den TV" }));
+    const dialog = screen.getByRole("dialog", { name: "Approve device" });
+    fireEvent.click(within(dialog).getByLabelText("Family Photos"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Approve device" }));
+
+    await waitFor(() => expect(client.snapshot).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("dialog", { name: "Approve device" })).not.toBeInTheDocument();
+    expect(screen.getByText("Den TV was approved.")).toBeVisible();
+  });
+
   it("preserves denial when its snapshot refresh fails", async () => {
     const client = api();
     vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockRejectedValueOnce(refreshFailure);
@@ -164,6 +179,20 @@ describe("admin snapshot workflows", () => {
     expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
   });
 
+  it("closes device editing immediately while the committed refresh remains pending", async () => {
+    const client = api();
+    vi.mocked(client.updateDevice).mockResolvedValueOnce({ device: { ...device, name: "Family TV" } });
+    vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockReturnValueOnce(never());
+    await login(client); go("Devices");
+    fireEvent.click(screen.getByRole("button", { name: "Edit Living Room" }));
+    fireEvent.change(within(screen.getByRole("dialog", { name: "Edit device" })).getByLabelText("Device name"), { target: { value: "Family TV" } });
+    fireEvent.click(within(screen.getByRole("dialog", { name: "Edit device" })).getByRole("button", { name: "Save device" }));
+
+    await waitFor(() => expect(client.snapshot).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("dialog", { name: "Edit device" })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Family TV" })).toBeVisible();
+  });
+
   it("preserves revocation and closes confirmation when its snapshot refresh fails", async () => {
     const client = api();
     vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockRejectedValueOnce(refreshFailure);
@@ -175,6 +204,18 @@ describe("admin snapshot workflows", () => {
     expect(screen.getByText("No approved devices")).toBeVisible();
     expect(screen.getByText("Living Room was revoked.")).toBeVisible();
     expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
+  });
+
+  it("closes revocation immediately while the committed refresh remains pending", async () => {
+    const client = api();
+    vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockReturnValueOnce(never());
+    await login(client); go("Devices");
+    fireEvent.click(screen.getByRole("button", { name: "Revoke Living Room" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "Revoke device" })).getByRole("button", { name: "Revoke permanently" }));
+
+    await waitFor(() => expect(client.snapshot).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("alertdialog", { name: "Revoke device" })).not.toBeInTheDocument();
+    expect(screen.getByText("No approved devices")).toBeVisible();
   });
 
   it("preserves settings when its snapshot refresh fails", async () => {

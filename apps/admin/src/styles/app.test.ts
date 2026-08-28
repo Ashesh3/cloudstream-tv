@@ -10,5 +10,9 @@ describe("admin reduced motion", () => {
     expect(block).not.toContain("*, *::before, *::after");
     expect(block).toContain(".program-root");
     expect(block).toContain(".provider-folder-list > li");
+    expect(block).toContain(".animate-spin");
+    expect(block).toContain(".animate-pulse");
+    expect(block).toContain('[data-slot="dialog-content"] .animate-spin');
+    expect(block).toContain('[data-slot="alert-dialog-content"] .animate-spin');
   });
 });

@@ -61,6 +61,9 @@ export interface AdminApi {
 
 type Fetcher = typeof fetch;
 type Decoder<T> = (value: unknown) => T;
+const responseText = Response.prototype.text;
+const parseJson = JSON.parse;
+const MAX_ADMIN_RESPONSE_TEXT_LENGTH = 4 * 1024 * 1024;
 
 export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
   let csrfToken: string | null = null;
@@ -130,7 +133,11 @@ export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
 }
 
 async function safeJson(response: Response): Promise<unknown> {
-  try { return await response.json(); } catch { return null; }
+  try {
+    const text = await responseText.call(response);
+    if (text.length < 1 || text.length > MAX_ADMIN_RESPONSE_TEXT_LENGTH) return null;
+    return parseJson(text) as unknown;
+  } catch { return null; }
 }
 
 function decodeSuccessEnvelope(value: unknown, status: number): unknown {

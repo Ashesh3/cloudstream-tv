@@ -305,4 +305,5 @@
   .provider-folder-list > li, .approval-root-row, .admin-root [data-slot="button"], .admin-root [data-slot="checkbox"], .admin-root [data-slot="switch"] { transition: none; }
   .admin-root [data-slot="button"]:active { transform: none; }
   [data-slot="dialog-content"], [data-slot="alert-dialog-content"] { animation: none; }
+  .admin-root .animate-spin, .login-stage .animate-spin, [data-slot="dialog-content"] .animate-spin, [data-slot="alert-dialog-content"] .animate-spin, .admin-root .animate-pulse, .login-stage .animate-pulse { animation: none !important; }
 }

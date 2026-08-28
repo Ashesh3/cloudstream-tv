@@ -127,10 +127,26 @@ describe("admin API browser boundary", () => {
     }
   });
 
+  it("parses response text as inert JSON without calling an overridden json method or proxy trap", async () => {
+    let trapReads = 0;
+    const exotic = new Proxy({ ok: true, data: snapshot }, {
+      get(target, property, receiver) {
+        trapReads += 1;
+        return Reflect.get(target, property, receiver);
+      }
+    });
+    const response = ok(snapshot);
+    const jsonOverride = vi.spyOn(response, "json").mockResolvedValue(exotic);
+
+    await expect(createAdminApi(vi.fn().mockResolvedValue(response)).snapshot()).resolves.toEqual(snapshot);
+    expect(jsonOverride).not.toHaveBeenCalled();
+    expect(trapReads).toBe(0);
+  });
+
   it("accepts null-prototype data records", async () => {
     const data = Object.assign(Object.create(null), snapshot);
     const payload = Object.assign(Object.create(null), { ok: true, data });
-    const response = { ok: true, status: 200, headers: new Headers(), json: vi.fn().mockResolvedValue(payload) } as unknown as Response;
+    const response = new Response(JSON.stringify(payload), { status: 200, headers: { "content-type": "application/json" } });
     await expect(createAdminApi(vi.fn().mockResolvedValue(response)).snapshot()).resolves.toEqual(snapshot);
   });
 
@@ -155,6 +171,25 @@ describe("admin API browser boundary", () => {
     ] as const;
     for (const [provider, authorizationUrl] of hostile) {
       await expect(createAdminApi(vi.fn().mockResolvedValue(ok({ authorizationUrl }))).authorizeSource(provider)).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    }
+  });
+
+  it("allows only documented Microsoft tenant forms", async () => {
+    const validTenants = [
+      "common",
+      "organizations",
+      "consumers",
+      "01234567-89ab-cdef-0123-456789abcdef",
+      "tenant-name.onmicrosoft.com",
+      "example.com"
+    ];
+    for (const tenant of validTenants) {
+      const authorizationUrl = `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize?client_id=one`;
+      await expect(createAdminApi(vi.fn().mockResolvedValue(ok({ authorizationUrl }))).authorizeSource("onedrive")).resolves.toEqual({ authorizationUrl });
+    }
+    for (const tenant of ["common.", "tenant..name", "tenant_name", "tenant~name", "%63ommon", ".", "..", "-tenant", "tenant-"]) {
+      const authorizationUrl = `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize`;
+      await expect(createAdminApi(vi.fn().mockResolvedValue(ok({ authorizationUrl }))).authorizeSource("onedrive")).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
     }
   });
 

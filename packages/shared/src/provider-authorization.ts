@@ -3,7 +3,9 @@ import type { ProviderKind } from "./contracts";
 const GOOGLE_AUTHORIZATION_ORIGIN = "https://accounts.google.com";
 const GOOGLE_AUTHORIZATION_PATH = "/o/oauth2/v2/auth";
 const MICROSOFT_AUTHORIZATION_ORIGIN = "https://login.microsoftonline.com";
-const SAFE_TENANT = /^[A-Za-z0-9][A-Za-z0-9._~-]{0,127}$/;
+const MICROSOFT_TENANT_ALIASES = new Set(["common", "organizations", "consumers"]);
+const CANONICAL_GUID = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/;
+const DNS_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 
 export function isProviderAuthorizationUrl(provider: ProviderKind, value: string): boolean {
   if (!value.startsWith("https://")) return false;
@@ -21,8 +23,15 @@ export function isProviderAuthorizationUrl(provider: ProviderKind, value: string
   if (authority !== "login.microsoftonline.com") return false;
   if (url.origin !== MICROSOFT_AUTHORIZATION_ORIGIN) return false;
   const match = /^\/([^/]+)\/oauth2\/v2\.0\/authorize$/.exec(rawPath);
-  if (!match || !SAFE_TENANT.test(match[1]!)) return false;
-  return match[1] !== "." && match[1] !== ".." && url.pathname === rawPath;
+  if (!match || !validMicrosoftTenant(match[1]!)) return false;
+  return url.pathname === rawPath;
+}
+
+function validMicrosoftTenant(value: string): boolean {
+  if (MICROSOFT_TENANT_ALIASES.has(value) || CANONICAL_GUID.test(value)) return true;
+  if (value.length > 253 || !value.includes(".")) return false;
+  const labels = value.split(".");
+  return labels.every(label => label.length <= 63 && DNS_LABEL.test(label));
 }
 
 export function assertProviderAuthorizationUrl(provider: ProviderKind, value: string): string {

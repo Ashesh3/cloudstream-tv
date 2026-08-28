@@ -219,3 +219,91 @@ Re-read the hardening and craft-floor guidance, preserved the Screening Room Led
 node F:\Projects\tv-video-ui\.agents\skills\impeccable\scripts\detect.mjs --json <changed admin UI targets>
 []
 ```
+
+## Review fix round 2
+
+### Findings addressed
+
+- Committed approval, device-edit, and revocation dialogs now close and clear their mutation pending state immediately after the focused server operation resolves. The single snapshot refresh starts in the background, so a never-settling refresh cannot retain a dialog or spinner. Refresh rejection and 401 handling remain on the existing recovery path.
+- Admin HTTP decoding no longer invokes `Response.json()`. It reads the actual response body through the captured intrinsic `Response.prototype.text`, bounds text to 4 MiB, and parses it with captured intrinsic `JSON.parse` before structural validation. Exotic objects and transparent proxies cannot enter from an overridden JSON method or execute traps during decoding.
+- Scoped reduced-motion CSS now also disables runtime `animate-spin` and `animate-pulse` classes under the admin/login surfaces while preserving visible status text.
+- Microsoft tenant validation now allows only `common`, `organizations`, `consumers`, canonical GUIDs, or bounded DNS-style names with nonempty labels, alphanumeric boundaries, and internal hyphens. Trailing dots, consecutive dots, underscores, tildes, percent encodings, separators, and dot segments are rejected by the shared client/server boundary.
+
+### RED evidence
+
+The focused pre-fix run failed six admin regressions and one server OAuth regression:
+
+- approval, device edit, and revocation stayed open with pending controls while a post-commit refresh never settled;
+- the client invoked an overridden `Response.json()`;
+- reduced-motion CSS omitted `animate-spin` and `animate-pulse`;
+- `common.` was accepted as a Microsoft tenant in both client and server validation.
+
+### GREEN evidence
+
+```text
+npx vitest run --config apps/admin/vitest.config.ts src/app.test.tsx src/api/client.test.ts src/styles/app.test.ts
+Test Files  3 passed (3)
+Tests       39 passed (39)
+```
+
+```text
+npx vitest run tests/control-oauth.test.ts
+Test Files  1 passed (1)
+Tests       27 passed (27)
+```
+
+The final full-suite/build/lint/typecheck evidence for this round follows in the commit verification record.
+
+## Review fix round 2
+
+### Findings addressed
+
+- Focused mutation completion no longer waits for the snapshot refresh. Approval, device edit, and revocation apply local truth and resolve their close callbacks immediately, then start the single refresh in the background. Never-settling refresh regressions prove dialogs and spinners do not remain open.
+- Admin response decoding now ignores overridden `Response.json()` methods. It reads response bytes through captured intrinsic `Response.prototype.text`, rejects empty or greater-than-4-MiB bodies, and parses with captured intrinsic `JSON.parse` before validating the inert graph. A transparent side-effecting proxy supplied by a mocked `json()` override is never called or observed.
+- Reduced-motion CSS now stops continuous `animate-spin` and `animate-pulse` runtime classes in the admin, login, and portaled dialog contexts while retaining visible loading labels and avoiding a global selector.
+- Microsoft tenant validation now permits only the three documented aliases, canonical GUIDs, and bounded DNS-style tenant/domain names. Tests reject trailing/consecutive dots, underscores, tildes, percent encodings, separators, dot segments, and invalid label boundaries in both client and server paths.
+
+### RED evidence
+
+The focused pre-fix run failed six admin tests and one OAuth test: approval/edit/revoke stayed pending against a never-resolving refresh, the client invoked an overridden `Response.json()`, scoped motion missed spin/pulse utilities, and `common.` was accepted as a Microsoft tenant.
+
+### Final verification evidence
+
+```text
+npx vitest run --config apps/admin/vitest.config.ts
+Test Files  10 passed (10)
+Tests       59 passed (59)
+```
+
+```text
+npx vitest run tests/control-oauth.test.ts
+Test Files  1 passed (1)
+Tests       27 passed (27)
+```
+
+```text
+npm run typecheck
+Exit code: 0
+```
+
+```text
+npm run lint -- --quiet
+Exit code: 0
+```
+
+```text
+npm run build -w @cloudframe/admin
+1951 modules transformed
+build completed successfully
+```
+
+No Playwright rerun was needed because this round changed callback ordering covered directly by component tests and reduced-motion CSS only; touch/focus markup and behavior were unchanged from the passing fix-round-1 browser run.
+
+### Impeccable detector
+
+Ran once after final CSS changes:
+
+```text
+node F:\Projects\tv-video-ui\.agents\skills\impeccable\scripts\detect.mjs --json apps/admin/src/app.tsx apps/admin/src/styles/app.css
+[]
+```
