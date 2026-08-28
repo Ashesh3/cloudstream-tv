@@ -15,6 +15,7 @@ import {
   createFirestoreRecoveryMirror,
   createLiveBrowseService,
   createLiveProviderFolderService,
+  createMediaHandleCodec,
   createRuntimeRateLimiter,
   createSealedSessionCodec,
   createVercelBlobControlStore,
@@ -122,6 +123,10 @@ export function createProductionApi(
     requiredSecret(environment, "BROWSE_ID_SECRET"),
     now
   );
+  const mediaHandles = createMediaHandleCodec(
+    versionedAeadKeyringFromEnv(environment, "BROWSE_HANDLE_KEY"),
+    now,
+  );
   const providerTokenKeyring = providerTokenKeyringFromEnv(environment);
   const credentialBroker = createCredentialBroker({
     controlStore,
@@ -177,8 +182,10 @@ export function createProductionApi(
   });
   const directMedia = createDirectMediaService({
     browse,
+    mediaHandles,
     credentialBroker,
     providers,
+    fetch: providerFetch,
     now
   });
   return createControlApiApp({

@@ -44,7 +44,7 @@ describe("screening room material contract", () => {
       "zero steady-state Firestore reads",
       "live Google Drive and OneDrive metadata",
       "local TV watch history",
-      "direct provider media",
+      "authenticated streaming",
       "explicit recovery"
     ]) {
       expect(documentation).toContain(required);

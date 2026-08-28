@@ -133,7 +133,8 @@ const DEFAULT_RATE_LIMITS: Record<string, RuntimeRateLimitPolicy> = {
   "admin-mutation": { limit: 120, windowSeconds: 60 },
   "device-request-create": { limit: 6, windowSeconds: 60 * 60 },
   "device-request-status": { limit: 120, windowSeconds: 10 * 60 },
-  "url-vending": { limit: 120, windowSeconds: 60 }
+  "url-vending": { limit: 120, windowSeconds: 60 },
+  "media-stream": { limit: 3_600, windowSeconds: 60 }
 };
 
 const consoleControlApiLogger: ControlApiLogger = {
@@ -434,6 +435,17 @@ async function routeRequest(
     requireMethod(request, "POST");
     assertQueryKeys(url, []);
     return mediaUrl(request, dependencies, now);
+  }
+  const googleMediaMatch = /^\/api\/tv\/google-media\/([^/]+)$/.exec(path);
+  if (googleMediaMatch) {
+    requireOneMethod(request, ["GET", "HEAD"]);
+    assertQueryKeys(url, []);
+    return googleMedia(
+      request,
+      dependencies,
+      now,
+      decodeHandle(googleMediaMatch[1]!),
+    );
   }
 
   throw new HttpError(
@@ -1178,6 +1190,27 @@ async function protectedAdmin(
   };
 }
 
+async function googleMedia(
+  request: Request,
+  dependencies: ActiveDependencies,
+  now: Date,
+  handle: string,
+): Promise<Response> {
+  const { device } = await protectedDevice(request, dependencies, now);
+  await enforceRateLimit(
+    dependencies,
+    "media-stream",
+    device.deviceId,
+    now,
+  );
+  return dependencies.directMedia.googleMedia(device, handle, {
+    method: request.method as "GET" | "HEAD",
+    range: request.headers.get("range"),
+    ifRange: request.headers.get("if-range"),
+    signal: request.signal,
+  });
+}
+
 async function protectedDevice(
   request: Request,
   dependencies: ActiveDependencies,
@@ -1916,6 +1949,9 @@ function classifyRoute(request: Request): string {
   }
   if (/^\/api\/tv\/folders\/[^/]+$/.test(path)) {
     return "/api/tv/folders/:handle";
+  }
+  if (/^\/api\/tv\/google-media\/[^/]+$/.test(path)) {
+    return "/api/tv/google-media/:handle";
   }
   return "/api/:unmatched";
 }

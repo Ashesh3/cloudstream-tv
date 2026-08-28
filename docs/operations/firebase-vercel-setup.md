@@ -115,7 +115,7 @@ https://<host>/api/admin/sources/onedrive/callback
 
 Google uses Drive read-only offline access. Microsoft uses `Files.Read`, `offline_access`, and identity scopes. The callback host is derived server-side; the browser cannot supply an arbitrary redirect.
 
-Folder/media metadata is listed live through Vercel with no-store responses. Media URLs are vended only after current authorization. Google direct playback includes a short-lived access token in the query string; OneDrive returns its temporary download URL. Never log either URL. Range traffic and bytes must go from provider to TV, not through Vercel.
+Folder/media metadata is listed live through Vercel with no-store responses. Media URLs are vended only after current authorization. Google returns a same-origin handle URL; Vercel reauthorizes and streams Drive with a bearer header and Range forwarding. OneDrive returns its temporary download URL directly. Never log either URL, provider IDs, tokens, or response bodies.
 
 ## Build and preview deployment
 

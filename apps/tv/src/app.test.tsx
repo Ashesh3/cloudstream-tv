@@ -735,6 +735,20 @@ describe("TV API live browse contract", () => {
     expect(JSON.parse(fetchMock.mock.calls[2]![1]!.body as string)).toEqual({ handle: "sealed-video" });
   });
 
+  it("accepts a same-origin Google media path without exposing a provider token", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => apiResponse({
+      itemId: "item_video",
+      kind: "video",
+      url: "/api/tv/google-media/sealed-google-handle",
+      expiresAt: futureIso(),
+      revision: null
+    })));
+
+    await expect(tvApi.mediaUrl("sealed-google-handle")).resolves.toMatchObject({
+      url: "/api/tv/google-media/sealed-google-handle"
+    });
+  });
+
   it("preserves bounded raw server error codes while replacing internal messages", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
       code: "NAVIGATION_EXPIRED",

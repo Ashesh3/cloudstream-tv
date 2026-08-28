@@ -19,6 +19,7 @@ import {
   createDirectMediaService,
   createFirestoreRecoveryMirror,
   createLiveBrowseService,
+  createMediaHandleCodec,
   createLiveProviderFolderService,
   createSealedSessionCodec,
   encryptControlPlaneDocument,
@@ -68,7 +69,10 @@ export interface ControlApiHarness {
     mediaUrlCalls: number;
     thumbnailUrlCalls: number;
   };
-  rateLimiter: { consumeCount: number };
+  rateLimiter: {
+    consumeCount: number;
+    calls: Array<{ bucket: string; policy: { limit: number; windowSeconds: number } }>;
+  };
   events: ControlApiLoggerEvent[];
   adminHeaders(extra?: HeadersInit): HeadersInit;
   adminMutationHeaders(extra?: HeadersInit): HeadersInit;
@@ -85,6 +89,7 @@ export interface ControlApiHarness {
 
 export interface ControlApiHarnessOptions {
   telemetryObserver?: ControlPlaneTelemetryObserver;
+  providerFetch?: typeof globalThis.fetch;
 }
 
 export async function createControlApiHarness(
@@ -183,6 +188,7 @@ export async function createControlApiHarness(
     "test-browse-id-secret",
     () => now
   );
+  const mediaCodec = createMediaHandleCodec(testAeadKeyring(), () => now);
   const activeContext = () => {
     const active = durable.currentDocument!;
     return { document: active, revision: active.revision };
@@ -266,9 +272,11 @@ export async function createControlApiHarness(
   });
   const directMedia = createDirectMediaService({
     browse,
+    mediaHandles: mediaCodec,
     credentialBroker: broker,
     providers,
-    now: () => new Date(now)
+    now: () => new Date(now),
+    fetch: options.providerFetch
   });
   const events: ControlApiLoggerEvent[] = [];
   const logger: ControlApiLogger = {
@@ -276,9 +284,19 @@ export async function createControlApiHarness(
     error: (event) => events.push(event)
   };
   let rateLimitConsumeCount = 0;
+  const rateLimitCalls: Array<{
+    bucket: string;
+    policy: { limit: number; windowSeconds: number };
+  }> = [];
   const rateLimiter = {
-    async consume() {
+    async consume(
+      bucket: string,
+      _subject: string,
+      _requestedAt: Date,
+      policy: { limit: number; windowSeconds: number }
+    ) {
       rateLimitConsumeCount += 1;
+      rateLimitCalls.push({ bucket, policy });
       return { allowed: true, remaining: 1, retryAfterSeconds: 1 };
     }
   };
@@ -427,7 +445,8 @@ export async function createControlApiHarness(
     rateLimiter: {
       get consumeCount() {
         return rateLimitConsumeCount;
-      }
+      },
+      calls: rateLimitCalls
     },
     events,
     adminHeaders(extra = {}) {
@@ -563,14 +582,15 @@ class ControlProviderHarness {
       getThumbnailUrl: async ({ providerNodeId }) => {
         this.thumbnailUrlCalls += 1;
         return {
-          url: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(providerNodeId)}?alt=media&access_token=access-token&supportsAllDrives=true`,
+          url: `https://lh3.googleusercontent.com/${encodeURIComponent(providerNodeId)}=s720`,
           expiresAt: new Date(this.now.getTime() + 5 * 60_000)
         };
       },
       getMediaUrl: async ({ providerNodeId }) => {
         this.mediaUrlCalls += 1;
         return {
-          url: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(providerNodeId)}?alt=media&access_token=access-token&supportsAllDrives=true`,
+          url: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(providerNodeId)}?alt=media&supportsAllDrives=true`,
+          headers: { authorization: "Bearer access-token" },
           expiresAt: new Date(this.now.getTime() + 5 * 60_000)
         };
       }

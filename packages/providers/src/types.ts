@@ -87,6 +87,12 @@ export interface TemporaryUrl {
   expiresAt: Date;
 }
 
+export interface AuthenticatedMediaRequest {
+  url: string;
+  headers: HeadersInit;
+  expiresAt: Date;
+}
+
 export interface ProviderAdapter {
   beginAuthorization(input: AuthorizationInput): Promise<AuthorizationStart>;
   completeAuthorization(input: AuthorizationCallback): Promise<ProviderAccount>;
@@ -95,7 +101,7 @@ export interface ProviderAdapter {
   getNode(input: GetNodeInput): Promise<ProviderNode>;
   listFolder(input: ListFolderInput): Promise<Page<ProviderNode>>;
   getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null>;
-  getMediaUrl(input: MediaUrlInput): Promise<TemporaryUrl>;
+  getMediaUrl(input: MediaUrlInput): Promise<TemporaryUrl | AuthenticatedMediaRequest>;
 }
 
 export type ProviderErrorCode =

@@ -1,6 +1,7 @@
 import { bearer, json, providerFetch } from "./http";
 import { ProviderError } from "./types";
 import type {
+  AuthenticatedMediaRequest,
   AuthorizationCallback,
   GetNodeInput,
   ListFolderInput,
@@ -142,20 +143,27 @@ export function createGoogleDriveAdapter(
     async getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null> {
       const file = await googleJson<GoogleFile>(
         fetch,
-        `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}?fields=mimeType&supportsAllDrives=true`,
+        `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}?fields=mimeType%2CthumbnailLink&supportsAllDrives=true`,
         input.credentials.accessToken,
         now
       );
-      if (!file.mimeType?.startsWith("image/")) return null;
+      if (
+        (!file.mimeType?.startsWith("image/") &&
+          !file.mimeType?.startsWith("video/")) ||
+        !file.thumbnailLink
+      ) {
+        return null;
+      }
       return {
-        url: googleMediaUrl(input.providerNodeId, input.credentials.accessToken),
+        url: googleThumbnailUrl(file.thumbnailLink, input.maxDimension),
         expiresAt: input.credentials.accessTokenExpiresAt
       };
     },
 
-    async getMediaUrl(input: MediaUrlInput): Promise<TemporaryUrl> {
+    async getMediaUrl(input: MediaUrlInput): Promise<AuthenticatedMediaRequest> {
       return {
-        url: googleMediaUrl(input.providerNodeId, input.credentials.accessToken),
+        url: googleMediaUrl(input.providerNodeId),
+        headers: { authorization: `Bearer ${input.credentials.accessToken}` },
         expiresAt: input.credentials.accessTokenExpiresAt
       };
     }
@@ -263,12 +271,34 @@ async function googleJson<T>(
   }));
 }
 
-function googleMediaUrl(providerNodeId: string, accessToken: string): string {
+function googleMediaUrl(providerNodeId: string): string {
   const url = new URL(`${DRIVE_ENDPOINT}/files/${encodeURIComponent(providerNodeId)}`);
   url.searchParams.set("alt", "media");
-  url.searchParams.set("access_token", accessToken);
   url.searchParams.set("supportsAllDrives", "true");
   return url.toString();
+}
+
+function googleThumbnailUrl(value: string, maxDimension: number): string {
+  const url = new URL(value);
+  const hostname = url.hostname.toLowerCase();
+  if (
+    url.protocol !== "https:" ||
+    url.port !== "" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.hash !== "" ||
+    !validGoogleThumbnailHost(hostname) ||
+    url.search !== "" ||
+    !/=s\d+$/u.test(url.pathname)
+  ) {
+    throw badResponse();
+  }
+  url.pathname = url.pathname.replace(/=s\d+$/u, `=s${maxDimension}`);
+  return url.toString();
+}
+
+function validGoogleThumbnailHost(hostname: string): boolean {
+  return /^lh\d+\.googleusercontent\.com$/u.test(hostname);
 }
 
 function requireString(value: string | undefined): string {
