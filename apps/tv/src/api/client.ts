@@ -397,6 +397,7 @@ function futureTimestamp(value: unknown): { iso: string; epoch: number } | null 
 
 function validHttpsUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.length < 1 || value.length > 8192) return null;
+  if (/^\/api\/tv\/google-media\/[A-Za-z0-9._~-]+$/u.test(value)) return value;
   try {
     const url = new URL(value);
     return url.protocol === "https:" && url.username === "" && url.password === "" && url.hash === "" ? value : null;

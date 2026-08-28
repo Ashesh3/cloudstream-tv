@@ -85,6 +85,7 @@ export interface ControlApiHarness {
 
 export interface ControlApiHarnessOptions {
   telemetryObserver?: ControlPlaneTelemetryObserver;
+  providerFetch?: typeof globalThis.fetch;
 }
 
 export async function createControlApiHarness(
@@ -268,7 +269,8 @@ export async function createControlApiHarness(
     browse,
     credentialBroker: broker,
     providers,
-    now: () => new Date(now)
+    now: () => new Date(now),
+    fetch: options.providerFetch
   });
   const events: ControlApiLoggerEvent[] = [];
   const logger: ControlApiLogger = {
@@ -563,14 +565,15 @@ class ControlProviderHarness {
       getThumbnailUrl: async ({ providerNodeId }) => {
         this.thumbnailUrlCalls += 1;
         return {
-          url: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(providerNodeId)}?alt=media&access_token=access-token&supportsAllDrives=true`,
+          url: `https://lh3.googleusercontent.com/${encodeURIComponent(providerNodeId)}=s720`,
           expiresAt: new Date(this.now.getTime() + 5 * 60_000)
         };
       },
       getMediaUrl: async ({ providerNodeId }) => {
         this.mediaUrlCalls += 1;
         return {
-          url: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(providerNodeId)}?alt=media&access_token=access-token&supportsAllDrives=true`,
+          url: `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(providerNodeId)}?alt=media&supportsAllDrives=true`,
+          headers: { authorization: "Bearer access-token" },
           expiresAt: new Date(this.now.getTime() + 5 * 60_000)
         };
       }

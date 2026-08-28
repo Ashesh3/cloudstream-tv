@@ -76,7 +76,7 @@ components:
 
 **Creative North Star: "Screening Room Ledger."** Cloudframe programs household media like a private screening, not a generic SaaS dashboard. Projection black carries the room; warm program stock carries the household's approved selection; a single cue orange marks action, motion, and attention. The result should feel like a precise projection-booth cue sheet that still makes live-source, access, and recovery truth easy to read.
 
-The visual story follows the runtime truth: private Vercel Blob is the active control ledger, Firestore is an explicit recovery copy only, live Google Drive and OneDrive metadata supplies the program, direct provider media fills the projection, and local TV watch history never appears as a server-side admin fact.
+The visual story follows the runtime truth: private Vercel Blob is the active control ledger, Firestore is an explicit recovery copy only, live Google Drive and OneDrive metadata supplies the program, OneDrive media stays direct while Google media uses the authenticated streaming boundary, and local TV watch history never appears as a server-side admin fact.
 
 The admin surface keeps the visible source truth above quiet navigation, then places the live provider stage beside the household program so a folder's move into the program remains legible. The TV surface enlarges the same hierarchy for a remote and viewing distance: collection first, program status attached, chrome only when it serves the moment. The locally generated program-stock raster supplies paper fiber, registration marks, perforation dots, and sparse cue geometry without becoming a decorative background.
 

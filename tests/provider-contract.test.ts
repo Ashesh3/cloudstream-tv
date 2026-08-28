@@ -68,7 +68,7 @@ function createHarness(provider: ProviderKind): ContractHarness {
         return jsonResponse({
           id: "g-image-a",
           mimeType: "image/jpeg",
-          thumbnailLink: "https://synthetic.invalid/google-thumb=s220",
+          thumbnailLink: "https://lh3.googleusercontent.com/synthetic-google-thumb=s220",
           version: "12"
         });
       }
@@ -260,21 +260,21 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     const media = await adapter.getMediaUrl({ credentials, providerNodeId });
 
     expect(thumbnail?.url).toContain(
-      provider === "google" ? "googleapis.com" : "files.1drv.com"
+      provider === "google" ? "googleusercontent.com" : "files.1drv.com"
     );
     expect(thumbnail?.expiresAt.getTime()).toBeGreaterThan(now.getTime());
-    expect(
-      media.url.includes("sharepoint.com") || media.url.includes("googleapis.com")
-    ).toBe(true);
+    expect(media.url.includes("sharepoint.com") || media.url.includes("googleapis.com")).toBe(true);
     expect(media.expiresAt.getTime()).toBeGreaterThan(now.getTime());
     if (provider === "google") {
       expect(thumbnail?.url).toBe(
-        "https://www.googleapis.com/drive/v3/files/g-image-a?alt=media&access_token=synthetic-access-token&supportsAllDrives=true"
+        "https://lh3.googleusercontent.com/synthetic-google-thumb=s720"
       );
       expect(thumbnail?.expiresAt).toEqual(accessExpiresAt);
       expect(media.url).toBe(
-        "https://www.googleapis.com/drive/v3/files/g-image-a?alt=media&access_token=synthetic-access-token&supportsAllDrives=true"
+        "https://www.googleapis.com/drive/v3/files/g-image-a?alt=media&supportsAllDrives=true"
       );
+      expect(new Headers("headers" in media ? media.headers : undefined).get("authorization"))
+        .toBe("Bearer synthetic-access-token");
       expect(media.expiresAt).toEqual(accessExpiresAt);
     } else {
       expect(thumbnail?.url).toBe(
@@ -317,6 +317,7 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       expect(list.searchParams.get("fields")).toContain("nextPageToken,files(");
       expect(thumbnail.searchParams.get("supportsAllDrives")).toBe("true");
       expect(new URL(media.url).searchParams.get("supportsAllDrives")).toBe("true");
+      expect(new URL(media.url).searchParams.has("access_token")).toBe(false);
       expect(requests.some(request => request.url.searchParams.get("alt") === "media")).toBe(false);
     });
 
@@ -330,7 +331,7 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       })).resolves.toBeNull();
 
       expect(requests).toHaveLength(1);
-      expect(requests[0].url.searchParams.get("fields")).toBe("mimeType");
+      expect(requests[0].url.searchParams.get("fields")).toBe("mimeType,thumbnailLink");
       expect(requests[0].url.searchParams.get("alt")).toBeNull();
       expect(new Headers(requests[0].init?.headers).get("range")).toBeNull();
     });

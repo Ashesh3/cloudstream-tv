@@ -7,13 +7,13 @@ Cloudframe is a private household cloud-media browser for televisions. The TV ap
 - Lists live Google Drive and OneDrive metadata through authenticated, no-store Vercel API responses.
 - Lets the administrator select folder roots and assign them to named, approved TVs.
 - Revalidates current device, root, source, and browse-handle authorization on every protected request.
-- Sends direct provider media to the TV. Google and OneDrive handle range requests, seeking, buffering, and media bytes; Vercel does not proxy or cache them.
+- Sends OneDrive media directly from Microsoft and streams Google Drive media through an authenticated, no-store Vercel route that forwards range requests.
 - Stores authoritative active control state as an encrypted private Vercel Blob snapshot.
 - Uses Vercel Runtime Cache as a five-minute hot copy with Blob ETag revalidation on every protected request.
 - Writes one compact Firestore recovery mirror after control mutations, while ordinary TV, admin, and provider traffic causes zero steady-state Firestore reads.
 - Keeps local TV watch history in browser `localStorage`, capped at 500 entries. It clears with browser data and is disabled for the session if storage is unavailable.
 
-This is live Google Drive and OneDrive metadata, and playback uses direct provider media rather than a stored browsing/media proxy. There is no provider-file catalog, workflow runtime, refresh schedule/button, server watch history, or Firestore-backed rate counter in the active application.
+This is live Google Drive and OneDrive metadata. Cloudframe stores no provider media catalog or media bodies; only Google playback transits Vercel because Drive requires an OAuth header that TV media elements cannot attach. There is no workflow runtime, refresh schedule/button, server watch history, or Firestore-backed rate counter in the active application.
 
 ## Repository
 
@@ -88,9 +88,9 @@ The migration reads only legacy household, request, device, source, and root rec
 
 ## Direct media security boundary
 
-Provider refresh tokens remain encrypted and server-only. Vercel obtains or refreshes access tokens to list metadata and vend media URLs, but media transfer bypasses Vercel.
+Provider refresh tokens and access tokens remain encrypted/server-only. Vercel obtains or refreshes access tokens to list metadata and authorize media.
 
-For Google playback, the returned short-lived Drive URL includes the current access token because the target TV's HTML media elements cannot set an OAuth `Authorization` header. Anyone who extracts that URL can use the bearer token until Google expires or revokes it, normally within its short token lifetime. Cloudframe bounds the exposure with assigned-root authorization before vending, no-store/no-referrer responses, HTTPS, and secret-safe logging; revoking a TV cannot invalidate a URL already issued by Google.
+Google playback uses a same-origin URL containing only the sealed, device-bound browse handle. Vercel revalidates the current device/root/source on every request, attaches `Authorization: Bearer` server-side, forwards range requests, and streams the response without caching or persistence. Revocation or root removal therefore blocks the next Google request, and the Google access token is never exposed to the TV URL.
 
 OneDrive uses its temporary provider download URL and has the same direct-byte path without exposing the stored refresh token.
 

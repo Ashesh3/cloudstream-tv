@@ -435,6 +435,17 @@ async function routeRequest(
     assertQueryKeys(url, []);
     return mediaUrl(request, dependencies, now);
   }
+  const googleMediaMatch = /^\/api\/tv\/google-media\/([^/]+)$/.exec(path);
+  if (googleMediaMatch) {
+    requireOneMethod(request, ["GET", "HEAD"]);
+    assertQueryKeys(url, []);
+    return googleMedia(
+      request,
+      dependencies,
+      now,
+      decodeHandle(googleMediaMatch[1]!),
+    );
+  }
 
   throw new HttpError(
     404,
@@ -1178,6 +1189,26 @@ async function protectedAdmin(
   };
 }
 
+async function googleMedia(
+  request: Request,
+  dependencies: ActiveDependencies,
+  now: Date,
+  handle: string,
+): Promise<Response> {
+  const { device } = await protectedDevice(request, dependencies, now);
+  await enforceRateLimit(
+    dependencies,
+    "url-vending",
+    device.deviceId,
+    now,
+  );
+  return dependencies.directMedia.googleMedia(device, handle, {
+    method: request.method as "GET" | "HEAD",
+    range: request.headers.get("range"),
+    ifRange: request.headers.get("if-range"),
+  });
+}
+
 async function protectedDevice(
   request: Request,
   dependencies: ActiveDependencies,
@@ -1916,6 +1947,9 @@ function classifyRoute(request: Request): string {
   }
   if (/^\/api\/tv\/folders\/[^/]+$/.test(path)) {
     return "/api/tv/folders/:handle";
+  }
+  if (/^\/api\/tv\/google-media\/[^/]+$/.test(path)) {
+    return "/api/tv/google-media/:handle";
   }
   return "/api/:unmatched";
 }

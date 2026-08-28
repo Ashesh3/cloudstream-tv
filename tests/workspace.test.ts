@@ -24,6 +24,16 @@ describe("workspace", () => {
     expect(spa.src).not.toContain("workflow");
   });
 
+  it("documents the bounded Google streaming route without reviving provider indexing", async () => {
+    const readme = await readFile("README.md", "utf8");
+    const product = await readFile("PRODUCT.md", "utf8");
+    const server = await readFile("packages/server/src/http/control-app.ts", "utf8");
+
+    expect(server).toContain("/api/tv/google-media/:handle");
+    expect(`${readme}\n${product}`).toContain("server-only");
+    expect(`${readme}\n${product}`).not.toMatch(/access token in the (?:media )?URL|access token in the query string/i);
+  });
+
   it("has no dormant root application or indexing and workflow packages", async () => {
     await expect(access("src")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(access("next.config.ts")).rejects.toMatchObject({ code: "ENOENT" });

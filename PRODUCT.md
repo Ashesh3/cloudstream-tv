@@ -21,8 +21,8 @@ Cloudframe is a private, single-household cloud-media browser. The administrator
 - The encrypted private Vercel Blob snapshot is authoritative active control state. Vercel Runtime Cache is a five-minute hot copy and every protected request conditionally revalidates its Blob ETag.
 - Firestore contains one compact write-only recovery mirror. Ordinary TV, admin, and provider traffic performs zero steady-state Firestore reads.
 - Approved TVs receive signed, sealed sessions and opaque browse handles. Current device, root, and source authorization is revalidated before live provider operations.
-- Google Drive and OneDrive media bytes go directly from the provider to the TV. Vercel vends short-lived URLs but does not proxy, cache, or transcode media.
-- Google direct playback places the current short-lived access token in the media URL because Chromium 68 video elements cannot attach an OAuth header. This is an accepted bounded trade-off: anyone extracting the URL can use that token until the provider expires or revokes it.
+- OneDrive media bytes go directly from Microsoft. Google Drive media is streamed through a same-origin authenticated Vercel route because Chromium 68 media elements cannot attach Google's required OAuth header.
+- Google access tokens remain server-only. The Google route revalidates device/root/source authorization, forwards range requests, and never caches, persists, or transcodes media.
 - Local TV watch history is stored in browser `localStorage`, capped at 500 entries, and removed when browser data is cleared. Playback continues without resume history when storage is unavailable.
 
 ## Operating Context

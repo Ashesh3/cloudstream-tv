@@ -1,6 +1,7 @@
 import {
   ProviderError,
   type ProviderAdapter,
+  type AuthenticatedMediaRequest,
   type ProviderCredentials,
   type ProviderKind,
   type ProviderRegistry,
@@ -51,12 +52,24 @@ export interface DirectMediaService {
     auth: AuthenticatedControlDevice,
     sealedHandle: string,
   ): Promise<DirectMediaResponse>;
+  googleMedia(
+    auth: AuthenticatedControlDevice,
+    sealedHandle: string,
+    request: GoogleMediaRequest,
+  ): Promise<Response>;
+}
+
+export interface GoogleMediaRequest {
+  method: "GET" | "HEAD";
+  range: string | null;
+  ifRange: string | null;
 }
 
 export interface CreateDirectMediaServiceOptions {
   browse: Pick<LiveBrowseService, "authorizeHandle">;
   credentialBroker: CredentialBroker;
   providers: ProviderRegistry;
+  fetch?: typeof globalThis.fetch;
   now?: () => Date;
 }
 
@@ -179,27 +192,35 @@ function exactlyOneQueryValue(
   return values.length === 1 && values[0] === expected;
 }
 
-function validGoogleUrl(
+function validGoogleRequest(
+  value: TemporaryUrl | AuthenticatedMediaRequest,
   url: URL,
   item: AuthorizedBrowseItem,
   credentials: ProviderCredentials,
 ): boolean {
-  const allowedQueryKeys = new Set([
-    "access_token",
-    "alt",
-    "supportsAllDrives",
-  ]);
+  const allowedQueryKeys = new Set(["alt", "supportsAllDrives"]);
   const keys = queryKeys(url);
+  if (!("headers" in value)) return false;
+  const headers = new Headers(value.headers);
   return (
     url.origin === "https://www.googleapis.com" &&
     url.pathname ===
       `/drive/v3/files/${encodeURIComponent(item.claims.providerNodeId)}` &&
-    keys.length === 3 &&
-    new Set(keys).size === 3 &&
+    keys.length === 2 &&
+    new Set(keys).size === 2 &&
     keys.every((key) => allowedQueryKeys.has(key)) &&
     exactlyOneQueryValue(url, "alt", "media") &&
-    exactlyOneQueryValue(url, "access_token", credentials.accessToken) &&
-    exactlyOneQueryValue(url, "supportsAllDrives", "true")
+    exactlyOneQueryValue(url, "supportsAllDrives", "true") &&
+    headers.get("authorization") === `Bearer ${credentials.accessToken}` &&
+    [...headers.keys()].length === 1
+  );
+}
+
+function validGoogleThumbnailUrl(url: URL): boolean {
+  return (
+    url.origin === "https://lh3.googleusercontent.com" &&
+    url.pathname.length > 1 &&
+    url.search === ""
   );
 }
 
@@ -267,11 +288,11 @@ function validOneDriveUrl(url: URL, rawUrl: string): boolean {
 }
 
 function validTemporaryUrl(
-  value: TemporaryUrl,
+  value: TemporaryUrl | AuthenticatedMediaRequest,
   item: AuthorizedBrowseItem,
   credentials: ProviderCredentials,
   now: Date,
-): TemporaryUrl {
+): TemporaryUrl | AuthenticatedMediaRequest {
   try {
     const rawUrl = value?.url;
     const rawExpiry = value?.expiresAt;
@@ -293,13 +314,21 @@ function validTemporaryUrl(
       url.username !== "" ||
       url.password !== "" ||
       url.hash !== "" ||
-      (item.source.provider === "google"
-        ? !validGoogleUrl(url, item, credentials)
-        : !validOneDriveUrl(url, rawUrl))
+      !(
+        item.source.provider === "google"
+          ? "headers" in value
+            ? validGoogleRequest(value, url, item, credentials)
+            : validGoogleThumbnailUrl(url)
+          : validOneDriveUrl(url, rawUrl)
+      )
     ) {
       throw directMediaError("INVALID_PROVIDER_URL");
     }
-    return { url: rawUrl, expiresAt: new Date(expiryEpoch) };
+    return {
+      url: rawUrl,
+      expiresAt: new Date(expiryEpoch),
+      ...("headers" in value ? { headers: new Headers(value.headers) } : {}),
+    };
   } catch (error) {
     if (error instanceof DirectMediaError) throw error;
     throw directMediaError("INVALID_PROVIDER_URL");
@@ -346,6 +375,7 @@ export function createDirectMediaService(
   options: CreateDirectMediaServiceOptions,
 ): DirectMediaService {
   const now = options.now ?? (() => new Date());
+  const providerFetch = options.fetch ?? fetch;
 
   async function thumbnails(
     auth: AuthenticatedControlDevice,
@@ -406,6 +436,10 @@ export function createDirectMediaService(
             items[entry.index] = unavailable(entry.item);
             continue;
           }
+          if (error instanceof ProviderError) {
+            items[entry.index] = unavailable(entry.item);
+            continue;
+          }
           normalizeDependencyError(error);
         }
       }
@@ -444,7 +478,7 @@ export function createDirectMediaService(
         providerNodeId: item.claims.providerNodeId,
       });
 
-    let temporary: TemporaryUrl;
+    let temporary: TemporaryUrl | AuthenticatedMediaRequest;
     try {
       temporary = await operation(credentials!);
     } catch (error) {
@@ -476,6 +510,18 @@ export function createDirectMediaService(
       credentials!,
       now(),
     );
+    if (item.source.provider === "google") {
+      return {
+        itemId: item.id,
+        kind: item.claims.kind,
+        url: `/api/tv/google-media/${encodeURIComponent(sealedHandle)}`,
+        expiresAt: new Date(
+          Math.min(safe.expiresAt.getTime(), item.claims.expiresAt),
+        ).toISOString(),
+        revision: null,
+        responseHeaders: RESPONSE_HEADERS,
+      };
+    }
     return {
       itemId: item.id,
       kind: item.claims.kind,
@@ -486,5 +532,100 @@ export function createDirectMediaService(
     };
   }
 
-  return { thumbnails, media };
+  async function googleMedia(
+    auth: AuthenticatedControlDevice,
+    sealedHandle: string,
+    request: GoogleMediaRequest,
+  ): Promise<Response> {
+    const item = options.browse.authorizeHandle(auth, sealedHandle);
+    if (item.source.provider !== "google" || item.claims.kind === "folder") {
+      throw directMediaError("ITEM_NOT_FOUND");
+    }
+    if (request.range !== null && !validRange(request.range)) {
+      throw directMediaError("ITEM_NOT_FOUND");
+    }
+    if (request.ifRange !== null && !validIfRange(request.ifRange)) {
+      throw directMediaError("ITEM_NOT_FOUND");
+    }
+
+    let credentials = compatibleCredentials(
+      item,
+      await brokerGet(options.credentialBroker, item),
+    );
+    const fetchGoogle = async (active: ProviderCredentials) => {
+      const adapter = providerAdapter(options.providers, "google");
+      const upstream = await adapter.getMediaUrl({
+        credentials: active,
+        providerNodeId: item.claims.providerNodeId,
+      });
+      const safe = validTemporaryUrl(upstream, item, active, now());
+      if (!("headers" in safe)) throw directMediaError("INVALID_PROVIDER_URL");
+      const headers = new Headers(safe.headers);
+      if (request.range !== null) headers.set("range", request.range);
+      if (request.ifRange !== null) headers.set("if-range", request.ifRange);
+      return providerFetch(safe.url, { method: request.method, headers });
+    };
+
+    let upstream: Response;
+    try {
+      upstream = await fetchGoogle(credentials);
+    } catch (error) {
+      normalizeDependencyError(error);
+    }
+    if (upstream.status === 401) {
+      try {
+        credentials = compatibleCredentials(
+          item,
+          await options.credentialBroker.refresh(
+            item.source.id,
+            item.claims.householdId,
+          ),
+        );
+        upstream = await fetchGoogle(credentials);
+      } catch (error) {
+        normalizeDependencyError(error);
+      }
+    }
+    return googleMediaResponse(upstream, request.method);
+  }
+
+  return { thumbnails, media, googleMedia };
+}
+
+async function brokerGet(
+  broker: CredentialBroker,
+  item: AuthorizedBrowseItem,
+): Promise<BrokeredProviderCredentials> {
+  try {
+    return await broker.get(item.source.id, item.claims.householdId);
+  } catch (error) {
+    normalizeDependencyError(error);
+  }
+}
+
+function validRange(value: string): boolean {
+  return /^bytes=\d*-\d*(?:,\d*-\d*)*$/u.test(value) && value.length <= 256;
+}
+
+function validIfRange(value: string): boolean {
+  return value.length >= 1 && value.length <= 256 && !/[\r\n]/u.test(value);
+}
+
+function googleMediaResponse(upstream: Response, method: "GET" | "HEAD"): Response {
+  const headers = new Headers(RESPONSE_HEADERS);
+  for (const name of [
+    "accept-ranges",
+    "content-length",
+    "content-range",
+    "content-type",
+    "etag",
+    "last-modified",
+  ]) {
+    const value = upstream.headers.get(name);
+    if (value !== null) headers.set(name, value);
+  }
+  return new Response(method === "HEAD" ? null : upstream.body, {
+    status: upstream.status,
+    headers,
+  });
 }

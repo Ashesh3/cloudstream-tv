@@ -74,6 +74,87 @@ describe("final control HTTP API", () => {
     expect(rejected.status).toBe(400);
   });
 
+  it("streams Google media through an authenticated same-origin GET route", async () => {
+    const harness = await createControlApiHarness({
+      providerFetch: async (_input, init) => {
+        expect(init?.method).toBe("GET");
+        const headers = new Headers(init?.headers);
+        expect(headers.get("authorization")).toBe("Bearer access-token");
+        expect(headers.get("range")).toBe("bytes=0-0");
+        return new Response("x", {
+          status: 206,
+          headers: {
+            "content-range": "bytes 0-0/1",
+            "content-type": "video/mp4"
+          }
+        });
+      }
+    });
+    const media = await harness.app(harness.mediaRequest());
+    const payload = await media.json() as {
+      ok: true;
+      data: { url: string };
+    };
+
+    const response = await harness.app(
+      new Request(`${harness.origin}${payload.data.url}`, {
+        method: "GET",
+        headers: harness.deviceHeaders({ range: "bytes=0-0" })
+      })
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 0-0/1");
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response.text()).toBe("x");
+  });
+
+  it("rejects invalid Google media ranges before provider traffic", async () => {
+    let providerCalls = 0;
+    const harness = await createControlApiHarness({
+      providerFetch: async () => {
+        providerCalls += 1;
+        return new Response("x");
+      }
+    });
+    const media = await harness.app(harness.mediaRequest());
+    const payload = await media.json() as { ok: true; data: { url: string } };
+
+    const response = await harness.app(
+      new Request(`${harness.origin}${payload.data.url}`, {
+        headers: harness.deviceHeaders({ range: "not-bytes" })
+      })
+    );
+
+    expect(response.status).toBe(404);
+    expect(providerCalls).toBe(0);
+  });
+
+  it("supports HEAD for Google media without returning a body", async () => {
+    const harness = await createControlApiHarness({
+      providerFetch: async (_input, init) => {
+        expect(init?.method).toBe("HEAD");
+        return new Response(null, {
+          status: 200,
+          headers: { "content-length": "42", "content-type": "image/jpeg" }
+        });
+      }
+    });
+    const media = await harness.app(harness.mediaRequest());
+    const payload = await media.json() as { ok: true; data: { url: string } };
+
+    const response = await harness.app(
+      new Request(`${harness.origin}${payload.data.url}`, {
+        method: "HEAD",
+        headers: harness.deviceHeaders()
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-length")).toBe("42");
+    expect(await response.text()).toBe("");
+  });
+
   it("does not expose a Firestore repository in API dependencies", () => {
     const source = readFileSync(
       "packages/server/src/http/control-app.ts",

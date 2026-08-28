@@ -179,6 +179,7 @@ export function createProductionApi(
     browse,
     credentialBroker,
     providers,
+    fetch: providerFetch,
     now
   });
   return createControlApiApp({

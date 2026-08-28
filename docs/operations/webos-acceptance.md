@@ -41,7 +41,7 @@ Perform these checks once with Google Drive and once with OneDrive:
 - Cause or wait for a media URL to expire, then confirm the TV requests one renewed URL and playback recovers without a loop.
 - Confirm an unsupported codec produces a bounded error without crashing the shell.
 
-Google's direct URL contains a short-lived access token as an accepted trade-off. Do not copy the URL into the acceptance record. Confirm Vercel application logs do not contain the URL, token, provider response body, or media bytes.
+Google's TV URL must be same-origin under `/api/tv/google-media/` and must not contain an access token or provider ID. Confirm seeking produces HTTP 206 range responses and Vercel logs contain no token, provider URL, provider ID, or response body.
 
 ## Local TV watch history
 
