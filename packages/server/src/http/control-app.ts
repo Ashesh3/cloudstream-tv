@@ -69,7 +69,7 @@ import { errorResponse, ok } from "./response";
 const MAX_JSON_BODY_BYTES = 32 * 1_024;
 const DEFAULT_PAGE_SIZE = 50;
 
-export interface ControlApiLoggerEvent {
+export interface ControlApiRequestLoggerEvent {
   level: "info" | "error";
   event: "api_request";
   requestId: string;
@@ -82,6 +82,22 @@ export interface ControlApiLoggerEvent {
   causeName?: string;
   causeCode?: string;
 }
+
+export interface OAuthCallbackFailureLoggerEvent {
+  level: "error";
+  event: "oauth_callback_failed";
+  requestId: string;
+  provider: ProviderKind;
+  stage: "state_cookie" | "query" | "admin_auth" | "completion";
+  errorCode: string;
+  errorName?: string;
+  causeName?: string;
+  causeCode?: string;
+}
+
+export type ControlApiLoggerEvent =
+  | ControlApiRequestLoggerEvent
+  | OAuthCallbackFailureLoggerEvent;
 
 export interface ControlApiLogger {
   info(event: ControlApiLoggerEvent): void;
@@ -166,7 +182,7 @@ export function createControlApiApp(input: ControlApiDependencies) {
     let response: Response;
     try {
       const runRequest = () => dependencies.requestContext.runRequest(
-        () => routeRequest(request, dependencies)
+        () => routeRequest(request, dependencies, requestId)
       );
       response = dependencies.controlStore.withTelemetry
         ? await dependencies.controlStore.withTelemetry(requestTelemetry, requestId, runRequest)
@@ -205,7 +221,8 @@ export function createControlApiApp(input: ControlApiDependencies) {
 
 async function routeRequest(
   request: Request,
-  dependencies: ActiveDependencies
+  dependencies: ActiveDependencies,
+  requestId: string
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
@@ -303,7 +320,8 @@ async function routeRequest(
       request,
       dependencies,
       now,
-      callbackMatch[1] as ProviderKind
+      callbackMatch[1] as ProviderKind,
+      requestId
     );
   }
   const sourceImpactMatch =
@@ -741,20 +759,29 @@ async function oauthCallback(
   request: Request,
   dependencies: ActiveDependencies,
   now: Date,
-  provider: ProviderKind
+  provider: ProviderKind,
+  requestId: string
 ): Promise<Response> {
   const clearOAuthCookie = clearOAuthStateCookie();
+  let stage: OAuthCallbackFailureLoggerEvent["stage"] = "state_cookie";
   try {
     let stateCookie: string | null;
     try {
       stateCookie = readUniqueCookie(request, "oauth_state");
-    } catch {
+    } catch (error) {
+      logOAuthCallbackFailure(dependencies.logger, requestId, provider, stage, error);
       return oauthRedirect("invalid", clearOAuthCookie);
     }
-    if (!stateCookie) return oauthRedirect("invalid", clearOAuthCookie);
+    if (!stateCookie) {
+      logOAuthCallbackFailure(dependencies.logger, requestId, provider, stage, null);
+      return oauthRedirect("invalid", clearOAuthCookie);
+    }
 
+    stage = "query";
     const callback = parseOAuthCallbackQuery(new URL(request.url), provider);
+    stage = "admin_auth";
     const protectedResult = await protectedAdmin(request, dependencies, now);
+    stage = "completion";
     await dependencies.oauth.completeAuthorization({
       admin: protectedResult.admin,
       context: protectedResult.context,
@@ -768,6 +795,7 @@ async function oauthCallback(
     });
     return oauthRedirect("connected", clearOAuthCookie);
   } catch (error) {
+    logOAuthCallbackFailure(dependencies.logger, requestId, provider, stage, error);
     const headers = new Headers();
     headers.append("set-cookie", clearOAuthCookie);
     const normalized = normalizeHttpError(error);
@@ -1171,6 +1199,25 @@ async function currentOrLoadControlRequestContext(
       dependencies.requestContext
     );
   }
+}
+
+function logOAuthCallbackFailure(
+  logger: ControlApiLogger,
+  requestId: string,
+  provider: ProviderKind,
+  stage: OAuthCallbackFailureLoggerEvent["stage"],
+  error: unknown
+): void {
+  const normalized = error === null ? null : normalizeHttpError(error);
+  safeLog(logger, "error", {
+    level: "error",
+    event: "oauth_callback_failed",
+    requestId,
+    provider,
+    stage,
+    errorCode: normalized?.code ?? "OAUTH_STATE_COOKIE_MISSING",
+    ...(error === null ? {} : safeErrorIdentity(error))
+  });
 }
 
 function safeLog(

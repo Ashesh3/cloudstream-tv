@@ -395,7 +395,11 @@ describe("final control HTTP API", () => {
       )
     );
 
-    expect(harness.events.map((event) => event.path)).toEqual([
+    expect(
+      harness.events
+        .filter((event) => event.event === "api_request")
+        .map((event) => event.path)
+    ).toEqual([
       "/api/tv/folders/:handle",
       "/api/admin/devices/:id"
     ]);
@@ -498,6 +502,40 @@ describe("final control HTTP API", () => {
       /oauth_state=;.*Max-Age=0/
     );
     expect(JSON.stringify(harness.events)).not.toContain("secret unexpected failure");
+  });
+
+  it("logs the safe OAuth callback failure stage without callback secrets", async () => {
+    const harness = await createControlApiHarness();
+    const callback = await harness.oauthCallbackRequest("google");
+    const providerCode = "secret-provider-code";
+    const response = await harness.app(
+      jsonRequest(
+        `${callback.path.replace("provider-code", providerCode)}&unexpected=secret-query-value`,
+        "GET",
+        undefined,
+        {
+          cookie: cookieHeader(
+            ["admin_session", harness.adminCookie],
+            ["oauth_state", callback.oauthCookie]
+          )
+        }
+      )
+    );
+
+    expect(response.headers.get("location")).toContain("oauth=invalid");
+    expect(harness.events).toContainEqual(
+      expect.objectContaining({
+        level: "error",
+        event: "oauth_callback_failed",
+        provider: "google",
+        stage: "query",
+        errorCode: "OAUTH_STATE_INVALID"
+      })
+    );
+    const serialized = JSON.stringify(harness.events);
+    expect(serialized).not.toContain(providerCode);
+    expect(serialized).not.toContain("secret-query-value");
+    expect(serialized).not.toContain(callback.oauthCookie);
   });
 
   it.each([
