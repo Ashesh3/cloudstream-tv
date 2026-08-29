@@ -95,6 +95,34 @@ describe("viewer reducer", () => {
     expect(state.mediaError).toMatchObject({ nodeId: "image-1", kind: "generic" });
   });
 
+  it.each([
+    { startId: "image-1", direction: 1 as const, returnDirection: -1 as const },
+    { startId: "image-2", direction: -1 as const, returnDirection: 1 as const }
+  ])("promotes an adjacent URL failure when navigating $direction and clears it on the ready destination", ({ startId, direction, returnDirection }) => {
+    let state = createViewerState(media, startId);
+    const start = state.urls[startId]!;
+    state = viewerReducer(state, {
+      type: "url-ready",
+      nodeId: startId,
+      requestId: start.requestId,
+      url: `https://provider.example/${startId}`,
+      sourceKind: "direct",
+      expiresAtEpoch: 10_000,
+      revision: "r1"
+    });
+    const adjacent = state.urls["video-1"]!;
+    state = viewerReducer(state, { type: "url-failed", nodeId: "video-1", requestId: adjacent.requestId, kind: "bridge" });
+    expect(state.mediaError).toBeNull();
+
+    state = viewerReducer(state, { type: "navigate", direction });
+    expect(activeViewerItem(state).id).toBe("video-1");
+    expect(state.mediaError).toEqual({ nodeId: "video-1", kind: "bridge" });
+
+    state = viewerReducer(state, { type: "navigate", direction: returnDirection });
+    expect(activeViewerItem(state).id).toBe(startId);
+    expect(state.mediaError).toBeNull();
+  });
+
   it("ignores stale URL completions and permits one refresh for each issued URL", () => {
     let state = createViewerState(media, "image-1");
     const first = state.urls["image-1"]!;

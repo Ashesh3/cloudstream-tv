@@ -225,6 +225,7 @@ function navigate(state: ViewerState, direction: -1 | 1): ViewerState {
   const index = Math.max(0, Math.min(state.items.length - 1, state.index + direction));
   if (index === state.index) return { ...state, controlsVisible: true };
   const nextItem = state.items[index]!;
+  const nextUrl = state.urls[nextItem.id];
   return withUrlWindow({
     ...state,
     index,
@@ -232,7 +233,9 @@ function navigate(state: ViewerState, direction: -1 | 1): ViewerState {
     playbackIntent: state.slideshowActive && nextItem.kind === "video" ? "play" : "pause",
     videoPlaying: false,
     controlsVisible: true,
-    mediaError: null
+    mediaError: nextUrl?.status === "error" && nextUrl.errorKind
+      ? { nodeId: nextItem.id, kind: nextUrl.errorKind }
+      : null
   });
 }
 

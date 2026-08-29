@@ -78,6 +78,31 @@ describe("unified TV viewer", () => {
     expect(document.body.innerHTML).not.toContain("ya29.test-token");
   });
 
+  it("shows an adjacent Google bridge failure when navigating to that item", async () => {
+    const bridge = fakeGoogleMediaBridge();
+    const adjacentPreparation = deferred<PreparedGoogleMediaSource>();
+    bridge.prepare.mockImplementation(descriptor => descriptor.itemId === "item_video_1"
+      ? adjacentPreparation.promise
+      : Promise.resolve(preparedGoogle(descriptor.itemId, "google-raw")));
+    const api = googleViewerApi();
+
+    render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={items} selectedItemId="item_image_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+
+    expect(await screen.findByRole("img", { name: "First.jpg" })).toBeVisible();
+    await act(async () => {
+      adjacentPreparation.reject(new GoogleMediaBridgeError("GOOGLE_MEDIA_BRIDGE_UNAVAILABLE"));
+      await Promise.resolve();
+    });
+    expect(screen.queryByRole("heading", { name: "This media could not be prepared" })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(await screen.findByRole("heading", { name: "This media could not be prepared" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Try fresh URL" })).toBeVisible();
+    expect(screen.queryByText("Preparing video…")).not.toBeInTheDocument();
+  });
+
   it("keeps OneDrive direct and never calls the Google bridge", async () => {
     const bridge = fakeGoogleMediaBridge();
     const api = viewerApi();
