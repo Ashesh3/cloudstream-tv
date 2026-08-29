@@ -1,6 +1,7 @@
 import type {
   AdminSnapshotResponse,
   ApproveDeviceRequestBody,
+  ClaimInstallationBody,
   ControlDeviceDto,
   ControlHouseholdDto,
   ControlRequestDto,
@@ -8,6 +9,7 @@ import type {
   ControlSourceDto,
   CreateAssignedRootBody,
   MediaOrder,
+  InstallationStatusResponse,
   ProviderFolderDto,
   ProviderKind,
   UpdateAdminSettingsBody,
@@ -41,6 +43,8 @@ export class AdminApiError extends Error {
 }
 
 export interface AdminApi {
+  installationStatus(): Promise<InstallationStatusResponse>;
+  claimInstallation(body: ClaimInstallationBody): Promise<{ configured: true }>;
   login(passphrase: string): Promise<{ authenticated: true }>;
   logout(): Promise<{ authenticated: false }>;
   snapshot(): Promise<AdminSnapshotResponse>;
@@ -109,6 +113,8 @@ export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
 
   const json = (value: unknown) => JSON.stringify(value);
   return {
+    installationStatus: () => request("/api/setup/status", installationStatus),
+    claimInstallation: body => request("/api/setup/claim", configuredTrue, { method: "POST", body: json(body) }),
     login: passphrase => request("/api/admin/login", authenticatedTrue, { method: "POST", body: json({ passphrase }) }),
     logout: () => request("/api/admin/logout", authenticatedFalse, { method: "POST", body: json({}) }),
     snapshot: () => request("/api/admin/snapshot", adminSnapshot),
@@ -271,6 +277,8 @@ const enumValue = <T extends string>(value: unknown, allowed: readonly T[]): T =
 
 function authenticatedTrue(value: unknown) { const record = exactRecord(value, ["authenticated"]); if (record.authenticated !== true) throw new Error("auth"); return { authenticated: true as const }; }
 function authenticatedFalse(value: unknown) { const record = exactRecord(value, ["authenticated"]); if (record.authenticated !== false) throw new Error("auth"); return { authenticated: false as const }; }
+function installationStatus(value: unknown): InstallationStatusResponse { const record = exactRecord(value, ["state"]); return { state: enumValue(record.state, ["unconfigured", "configured"] as const) }; }
+function configuredTrue(value: unknown) { const record = exactRecord(value, ["configured"]); if (record.configured !== true) throw new Error("configured"); return { configured: true as const }; }
 function revisionResult(value: unknown) { const record = exactRecord(value, ["revision"]); return { revision: integerValue(record.revision) }; }
 function passphraseResult(value: unknown) { const record = exactRecord(value, ["authenticated", "revision"]); if (record.authenticated !== false) throw new Error("auth"); return { authenticated: false as const, revision: integerValue(record.revision) }; }
 function removedFlag<K extends "revoked">(key: K) { return (value: unknown) => { const record = exactRecord(value, [key]); if (record[key] !== true) throw new Error(key); return { [key]: true } as Record<K, true>; }; }

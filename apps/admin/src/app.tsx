@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import type { AdminSnapshotResponse, ControlDeviceDto, ControlRequestDto, UpdateDeviceBody } from "@cloudframe/shared";
+import type { AdminSnapshotResponse, ClaimInstallationBody, ControlDeviceDto, ControlRequestDto, UpdateDeviceBody } from "@cloudframe/shared";
 import type { AdminApi } from "./api/client";
 import { AdminApiError } from "./api/client";
 import { ApprovalSheet } from "./components/approval-sheet";
 import { Devices } from "./components/devices";
+import { FirstRun } from "./components/first-run";
 import { Login } from "./components/login";
 import { Requests } from "./components/requests";
 import { Settings } from "./components/settings";
@@ -20,6 +21,7 @@ import { DIRECTION_SEED } from "./design/ledger";
 export function AdminApp({ api, navigate = url => window.location.assign(url), checkSession = true }: { api: AdminApi; navigate?(url: string): void; checkSession?: boolean }) {
   const initial = initialNavigation();
   const [authenticated, setAuthenticated] = useState(false);
+  const [installationState, setInstallationState] = useState<"checking" | "unconfigured" | "configured" | "error">(checkSession ? "checking" : "configured");
   const [checkingSession, setCheckingSession] = useState(checkSession);
   const [snapshot, setSnapshot] = useState<AdminSnapshotResponse | null>(null);
   const [section, setSection] = useState<AdminSection>(initial.section);
@@ -69,6 +71,15 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
     }
   };
   const login = async (passphrase: string) => { await api.login(passphrase); if (mounted.current) setAuthenticated(true); await refresh(); };
+  const claimInstallation = async (input: ClaimInstallationBody) => {
+    await api.claimInstallation(input);
+    await api.login(input.passphrase);
+    if (mounted.current) {
+      setInstallationState("configured");
+      setAuthenticated(true);
+    }
+    await refresh();
+  };
   const refreshCommittedChange = async (surfaceWarning = true): Promise<boolean> => {
     try { await refresh(false); }
     catch (cause) {
@@ -101,10 +112,20 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
   useEffect(() => {
     if (!checkSession || bootstrapped.current) return;
     bootstrapped.current = true;
-    void refresh().catch(() => undefined).finally(() => { if (mounted.current) setCheckingSession(false); });
+    void api.installationStatus().then(async (status) => {
+      if (!mounted.current) return;
+      setInstallationState(status.state);
+      if (status.state === "configured") await refresh();
+    }).catch((cause) => {
+      if (!mounted.current) return;
+      setInstallationState("error");
+      setError(messageFor(cause));
+    }).finally(() => { if (mounted.current) setCheckingSession(false); });
   }, [checkSession]);
 
   if (checkingSession) return <main className="login-stage grid min-h-screen place-items-center p-6" aria-live="polite"><div className="ledger-loading w-full max-w-md" data-state="opening-ledger"><Skeleton className="h-5 w-32" /><Skeleton className="mt-3 h-10 w-full" /><Skeleton className="mt-3 h-10 w-full" /></div></main>;
+  if (installationState === "unconfigured") return <FirstRun onClaim={claimInstallation} />;
+  if (installationState === "error") return <main className="login-stage grid min-h-screen place-items-center p-6"><Alert variant="destructive" className="max-w-lg"><AlertCircleIcon /><AlertTitle>Installation status unavailable</AlertTitle><AlertDescription>{error || "Cloudframe could not read local installation state."}</AlertDescription></Alert></main>;
   if (!authenticated) return <Login onLogin={login} />;
   if (!snapshot) return <main className="login-stage grid min-h-screen place-items-center p-6"><Alert variant="destructive" className="max-w-lg"><AlertCircleIcon /><AlertTitle>Household ledger unavailable</AlertTitle><AlertDescription>{error || "Cloudframe could not load the household ledger."}</AlertDescription><AlertAction><Button variant="outline" onClick={() => void refresh().catch(() => undefined)}>Try again</Button></AlertAction></Alert></main>;
   return <TooltipProvider><div className="admin-root" ref={emitDirectionContract} data-direction-seed={DIRECTION_SEED}>

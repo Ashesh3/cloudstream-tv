@@ -24,6 +24,8 @@ const snapshot: AdminSnapshotResponse = {
 function api(initial = snapshot): AdminApi {
   const providerRoot = { providerNodeId: "provider-root", parentProviderId: null, name: "My Drive", assignedRootId: null };
   return {
+    installationStatus: vi.fn().mockResolvedValue({ state: "configured" }),
+    claimInstallation: vi.fn().mockResolvedValue({ configured: true }),
     login: vi.fn().mockResolvedValue({ authenticated: true }), logout: vi.fn().mockResolvedValue({ authenticated: false }),
     snapshot: vi.fn().mockResolvedValue(initial), approveRequest: vi.fn().mockResolvedValue({ device }),
     denyRequest: vi.fn().mockResolvedValue({ request: { ...initial.pendingRequests[0]!, status: "denied" } }),
@@ -47,6 +49,37 @@ const go = (name: string) => fireEvent.click(within(screen.getByRole("navigation
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.history.replaceState({}, "", "/admin/"); });
 
 describe("admin snapshot workflows", () => {
+  it("claims an unconfigured installation, signs in, and loads the empty local ledger", async () => {
+    const emptySnapshot: AdminSnapshotResponse = {
+      revision: 1,
+      household: { allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8 },
+      pendingRequests: [],
+      devices: [],
+      sources: [],
+      roots: [],
+      storage: { mode: "local", revision: 1 },
+    };
+    const client = api(emptySnapshot);
+    vi.mocked(client.installationStatus).mockResolvedValueOnce({ state: "unconfigured" });
+    render(<AdminApp api={client} />);
+
+    fireEvent.change(await screen.findByLabelText("Setup code"), {
+      target: { value: "AQEBAQEBAQEBAQEBAQEBAQ" },
+    });
+    fireEvent.change(screen.getByLabelText("New admin passphrase"), {
+      target: { value: "correct horse battery staple" },
+    });
+    fireEvent.change(screen.getByLabelText("Confirm admin passphrase"), {
+      target: { value: "correct horse battery staple" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Claim installation" }));
+
+    expect(await screen.findByText("No cloud source connected")).toBeVisible();
+    expect(client.claimInstallation).toHaveBeenCalledTimes(1);
+    expect(client.login).toHaveBeenCalledWith("correct horse battery staple");
+    expect(client.snapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("loads the admin with exactly one snapshot request and no legacy reads", async () => {
     const client = api();
     render(<AdminApp api={client} />);

@@ -19,6 +19,35 @@ const ok = <T>(data: T, csrf?: string) => new Response(JSON.stringify({ ok: true
 });
 
 describe("admin API browser boundary", () => {
+  it("uses strict first-run status and claim contracts", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(ok({ state: "unconfigured" }))
+      .mockResolvedValueOnce(ok({ configured: true }));
+    const client = createAdminApi(fetcher);
+
+    await expect(client.installationStatus()).resolves.toEqual({ state: "unconfigured" });
+    await expect(client.claimInstallation({
+      setupCode: "AQEBAQEBAQEBAQEBAQEBAQ",
+      passphrase: "correct horse battery staple",
+    })).resolves.toEqual({ configured: true });
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      "/api/setup/status",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      "/api/setup/claim",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          setupCode: "AQEBAQEBAQEBAQEBAQEBAQ",
+          passphrase: "correct horse battery staple",
+        }),
+      }),
+    );
+  });
+
   it("loads the admin with one snapshot request", async () => {
     const fetcher = vi.fn().mockResolvedValue(ok(snapshot, "csrf-next"));
     const client = createAdminApi(fetcher);

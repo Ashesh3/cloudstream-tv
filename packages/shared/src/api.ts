@@ -66,6 +66,15 @@ export interface AdminSnapshotResponse {
   storage: { mode: "local"; revision: number };
 }
 
+export type InstallationStatusResponse =
+  | { state: "unconfigured" }
+  | { state: "configured" };
+
+export interface ClaimInstallationBody {
+  setupCode: string;
+  passphrase: string;
+}
+
 export interface TvBootstrapResponse {
   enrollment:
     | { state: "requests-disabled" | "unenrolled" }
