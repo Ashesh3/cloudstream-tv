@@ -1,9 +1,11 @@
 import { createWriteStream } from "node:fs";
-import { access, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
+import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
 
@@ -12,44 +14,179 @@ const cache = resolve(".cache", "chromium-68", revision);
 const archive = join(cache, "chrome-win32.zip");
 const executable = join(cache, "chrome-win32", "chrome.exe");
 const sitePort = await freePort();
-const port = await freePort();
+const mediaPort = await freePort();
+const debuggerPort = await freePort();
+const siteOrigin = `http://127.0.0.1:${sitePort}`;
+const mediaOrigin = `http://127.0.0.1:${mediaPort}`;
+const mediaUrl = `${mediaOrigin}/sample.wav`;
+const probeToken = randomBytes(24).toString("base64url");
+const mediaBody = pcmWav(10);
+const upstreamRequests = [];
+let aliasApplicationRequests = 0;
+const temporaryDirectory = await mkdtemp(join(tmpdir(), "cloudframe-chromium68-"));
+const probeWorkerPath = join(temporaryDirectory, "cloudframe-media-sw.js");
+const productionWorkerPath = resolve("apps", "tv", "dist", "cloudframe-media-sw.js");
+const profile = join(cache, "profile");
+let chrome = null;
+let ws = null;
+
 await mkdir(cache, { recursive: true });
 
-try {
-  await access(executable);
-} catch {
-  const url = `https://storage.googleapis.com/chromium-browser-snapshots/Win/${revision}/chrome-win32.zip`;
-  const response = await fetch(url);
-  if (!response.ok || !response.body) throw new Error(`Pinned Chromium download failed: ${response.status}`);
-  await pipeline(response.body, createWriteStream(archive));
-  await new Promise((resolvePromise, reject) => {
-    const tar = spawn("tar", ["-xf", archive, "-C", cache], { stdio: "ignore", windowsHide: true });
-    tar.once("exit", code => code === 0 ? resolvePromise() : reject(new Error(`tar exited ${code}`)));
-  });
-}
+const mediaServer = createServer((request, response) => {
+  const pathname = new URL(request.url ?? "/", mediaOrigin).pathname;
+  if (pathname !== "/sample.wav") {
+    response.writeHead(404);
+    response.end();
+    return;
+  }
 
-const profile = join(cache, "profile");
-await rm(profile, { recursive: true, force: true });
+  const origin = request.headers.origin;
+  if (origin !== siteOrigin) {
+    response.writeHead(403);
+    response.end();
+    return;
+  }
+  const cors = {
+    "access-control-allow-origin": siteOrigin,
+    "access-control-allow-methods": "GET, HEAD, OPTIONS",
+    "access-control-allow-headers": "authorization, range",
+    "access-control-expose-headers": "accept-ranges, content-length, content-range, content-type",
+    vary: "Origin",
+  };
+
+  if (request.method === "OPTIONS") {
+    const requestedHeaders = String(request.headers["access-control-request-headers"] ?? "")
+      .split(",")
+      .map(value => value.trim().toLowerCase())
+      .filter(Boolean);
+    if (
+      requestedHeaders.length !== 2 ||
+      !requestedHeaders.includes("authorization") ||
+      !requestedHeaders.includes("range")
+    ) {
+      response.writeHead(403, cors);
+      response.end();
+      return;
+    }
+    response.writeHead(204, cors);
+    response.end();
+    return;
+  }
+
+  const authorization = request.headers.authorization ?? null;
+  const range = request.headers.range ?? null;
+  upstreamRequests.push({ method: request.method, authorization, range });
+  if (authorization !== `Bearer ${probeToken}`) {
+    response.writeHead(401, cors);
+    response.end();
+    return;
+  }
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    response.writeHead(405, cors);
+    response.end();
+    return;
+  }
+
+  const interval = byteRange(range, mediaBody.byteLength);
+  if (!interval) {
+    response.writeHead(416, {
+      ...cors,
+      "accept-ranges": "bytes",
+      "content-range": `bytes */${mediaBody.byteLength}`,
+    });
+    response.end();
+    return;
+  }
+  const body = mediaBody.subarray(interval.start, interval.end + 1);
+  response.writeHead(206, {
+    ...cors,
+    "accept-ranges": "bytes",
+    "content-length": String(body.byteLength),
+    "content-range": `bytes ${interval.start}-${interval.end}/${mediaBody.byteLength}`,
+    "content-type": "audio/wav",
+  });
+  response.end(request.method === "HEAD" ? undefined : body);
+});
+
 const staticServer = createServer(async (request, response) => {
-  const pathname = new URL(request.url ?? "/", `http://127.0.0.1:${sitePort}`).pathname;
+  const pathname = new URL(request.url ?? "/", siteOrigin).pathname;
+  if (pathname.startsWith("/__cloudframe_media__/")) {
+    aliasApplicationRequests += 1;
+    response.writeHead(404);
+    response.end();
+    return;
+  }
+  if (pathname === "/cloudframe-media-sw.js") {
+    try {
+      const body = await readFile(probeWorkerPath);
+      response.writeHead(200, {
+        "cache-control": "no-cache",
+        "content-type": "text/javascript",
+        "service-worker-allowed": "/",
+      });
+      response.end(body);
+    } catch {
+      response.writeHead(404);
+      response.end();
+    }
+    return;
+  }
   const relative = pathname === "/" ? "index.html" : pathname.replace(/^\//, "");
   try {
     const body = await readFile(resolve("apps", "tv", "dist", relative));
-    response.writeHead(200, { "content-type": relative.endsWith(".js") ? "text/javascript" : relative.endsWith(".css") ? "text/css" : "text/html" });
+    response.writeHead(200, { "content-type": staticContentType(relative) });
     response.end(body);
   } catch {
-    response.writeHead(404); response.end();
+    response.writeHead(404);
+    response.end();
   }
 });
-await new Promise(resolvePromise => staticServer.listen(sitePort, "127.0.0.1", resolvePromise));
-const chrome = spawn(executable, [
-  "--headless", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
-  `--remote-debugging-port=${port}`, `--user-data-dir=${profile}`, `http://127.0.0.1:${sitePort}/`
-], { stdio: "ignore", windowsHide: true });
 
 try {
-  const endpoint = await waitForDebugger(port);
-  const ws = new WebSocket(endpoint.webSocketDebuggerUrl);
+  try {
+    await access(executable);
+  } catch {
+    const url = `https://storage.googleapis.com/chromium-browser-snapshots/Win/${revision}/chrome-win32.zip`;
+    const response = await fetch(url);
+    if (!response.ok || !response.body) throw new Error(`Pinned Chromium download failed: ${response.status}`);
+    await pipeline(response.body, createWriteStream(archive));
+    await new Promise((resolvePromise, reject) => {
+      const tar = spawn("tar", ["-xf", archive, "-C", cache], { stdio: "ignore", windowsHide: true });
+      tar.once("exit", code => code === 0 ? resolvePromise() : reject(new Error(`tar exited ${code}`)));
+    });
+  }
+
+  const productionWorker = await readFile(productionWorkerPath, "utf8");
+  if (
+    /https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?/iu.test(productionWorker) ||
+    productionWorker.includes("/sample.wav")
+  ) {
+    throw new Error("Production media worker contains probe configuration");
+  }
+  await runNode([
+    "scripts/build-tv-media-worker.mjs",
+    "--outfile",
+    probeWorkerPath,
+    "--probe-origin",
+    mediaOrigin,
+  ]);
+  const probeWorker = await readFile(probeWorkerPath, "utf8");
+  if (!probeWorker.includes(mediaOrigin)) {
+    throw new Error("Temporary media worker does not contain the exact probe origin");
+  }
+
+  await rm(profile, { recursive: true, force: true });
+  await Promise.all([
+    listen(mediaServer, mediaPort),
+    listen(staticServer, sitePort),
+  ]);
+  chrome = spawn(executable, [
+    "--headless", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
+    `--remote-debugging-port=${debuggerPort}`, `--user-data-dir=${profile}`, `${siteOrigin}/`,
+  ], { stdio: "ignore", windowsHide: true });
+
+  const endpoint = await waitForDebugger(debuggerPort);
+  ws = new WebSocket(endpoint.webSocketDebuggerUrl);
   await new Promise((resolvePromise, reject) => { ws.once("open", resolvePromise); ws.once("error", reject); });
   let id = 0;
   const pending = new Map();
@@ -75,15 +212,28 @@ try {
     throw new Error(`Pinned snapshot is not Chromium 68: ${product.product}`);
   }
   const evaluated = await command("Runtime.evaluate", {
-    expression: "({promise:typeof Promise==='function',fetch:typeof fetch==='function',url:typeof URL==='function',abort:typeof AbortController==='function',textEncoder:typeof TextEncoder==='function'})",
-    returnByValue: true
+    expression: `({
+      promise:typeof Promise==='function',
+      fetch:typeof fetch==='function',
+      url:typeof URL==='function',
+      abort:typeof AbortController==='function',
+      crypto:Boolean(self.crypto&&self.crypto.subtle&&typeof self.crypto.subtle.digest==='function'),
+      textEncoder:typeof TextEncoder==='function',
+      serviceWorker:Boolean(navigator.serviceWorker),
+      readableStream:typeof ReadableStream==='function',
+      response:typeof Response==='function'
+    })`,
+    returnByValue: true,
   });
   const value = evaluated.result.value;
-  if (!value.promise || !value.fetch || !value.url || !value.abort || !value.textEncoder) {
+  if (
+    !value.promise || !value.fetch || !value.url || !value.abort || !value.crypto ||
+    !value.textEncoder || !value.serviceWorker || !value.readableStream || !value.response
+  ) {
     throw new Error(`Chromium 68 required APIs missing: ${JSON.stringify(value)}`);
   }
   await command("Page.enable");
-  await command("Page.navigate", { url: `http://127.0.0.1:${sitePort}/` });
+  await command("Page.navigate", { url: `${siteOrigin}/` });
   let rendered;
   for (let attempt = 0; attempt < 100; attempt += 1) {
     rendered = await command("Runtime.evaluate", { expression: "document.body && document.body.innerText", returnByValue: true });
@@ -118,19 +268,158 @@ try {
       };
     })()`,
     awaitPromise: true,
-    returnByValue: true
+    returnByValue: true,
   });
   const playerValue = playerResult.result.value;
   if (!playerValue?.player || !playerValue.container || !playerValue.nativeVideo) {
     throw new Error(`Chromium 68 Video.js fallback failed: ${JSON.stringify(playerResult)}`);
   }
+
+  const probe = JSON.stringify({
+    workerUrl: "/cloudframe-media-sw.js",
+    rawUrl: mediaUrl,
+    token: probeToken,
+    size: mediaBody.byteLength,
+  });
+  const mediaResult = await command("Runtime.evaluate", {
+    expression: `(async()=>{
+      const config=${probe};
+      const sessionId='session_chromium68_probe';
+      const requestId='request_chromium68_probe';
+      const filename='sample.wav';
+      const media=[];
+      let controller=null;
+      const timeout=(label,ms)=>new Promise((_,reject)=>setTimeout(()=>reject(new Error(label)),ms));
+      const exactKeys=(value,keys)=>{
+        if(!value||typeof value!=='object'||Array.isArray(value))return false;
+        const actual=Object.keys(value).sort();
+        const expected=keys.slice().sort();
+        return actual.length===expected.length&&actual.every((key,index)=>key===expected[index]);
+      };
+      const fingerprint=async value=>{
+        const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));
+        const bytes=new Uint8Array(digest);
+        let binary='';
+        for(let index=0;index<bytes.length;index+=1)binary+=String.fromCharCode(bytes[index]);
+        return btoa(binary).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/g,'');
+      };
+      const waitForController=()=>new Promise((resolve,reject)=>{
+        const timer=setTimeout(()=>reject(new Error('controller-timeout')),10000);
+        const changed=()=>{
+          if(!navigator.serviceWorker.controller)return;
+          clearTimeout(timer);
+          navigator.serviceWorker.removeEventListener('controllerchange',changed);
+          resolve(navigator.serviceWorker.controller);
+        };
+        navigator.serviceWorker.addEventListener('controllerchange',changed);
+      });
+      const waitForMessage=(predicate,label)=>new Promise((resolve,reject)=>{
+        const timer=setTimeout(()=>{
+          navigator.serviceWorker.removeEventListener('message',received);
+          reject(new Error(label));
+        },10000);
+        const received=event=>{
+          if(!event.source||!controller||event.source.scriptURL!==controller.scriptURL||!predicate(event.data))return;
+          clearTimeout(timer);
+          navigator.serviceWorker.removeEventListener('message',received);
+          resolve(event.data);
+        };
+        navigator.serviceWorker.addEventListener('message',received);
+      });
+      const waitForResult=attempt=>waitForMessage(data=>
+        exactKeys(data,['type','sessionId','attempt','outcome','status'])&&
+        data.type==='cloudframe-media-result'&&data.sessionId===sessionId&&
+        data.attempt===attempt&&data.outcome==='response'&&data.status===206,
+        attempt+'-result-timeout'
+      );
+      const loadMetadata=(source,label)=>{
+        const audio=document.createElement('audio');
+        media.push(audio);
+        audio.preload='metadata';
+        document.body.appendChild(audio);
+        const loaded=new Promise((resolve,reject)=>{
+          const timer=setTimeout(()=>reject(new Error(label+'-metadata-timeout')),15000);
+          audio.addEventListener('loadedmetadata',()=>{clearTimeout(timer);resolve();},{once:true});
+          audio.addEventListener('error',()=>{
+            clearTimeout(timer);
+            reject(new Error(label+'-media-error-'+String(audio.error?audio.error.code:0)));
+          },{once:true});
+        });
+        audio.src=source;
+        audio.load();
+        return Promise.race([loaded,timeout(label+'-timeout',16000)]).then(()=>audio.duration);
+      };
+      try{
+        const controllerChanged=waitForController();
+        await navigator.serviceWorker.register(config.workerUrl,{scope:'/'});
+        await navigator.serviceWorker.ready;
+        controller=await controllerChanged;
+        const ack=waitForMessage(data=>
+          exactKeys(data,['type','requestId','sessionId'])&&
+          data.type==='cloudframe-media-grant-ack'&&data.requestId===requestId&&data.sessionId===sessionId,
+          'grant-ack-timeout'
+        );
+        controller.postMessage({
+          type:'cloudframe-media-grant',
+          requestId,
+          grant:{
+            sessionId,
+            rawUrl:config.rawUrl,
+            fingerprint:await fingerprint(config.rawUrl),
+            token:config.token,
+            expiresAtEpoch:Date.now()+60000,
+            kind:'video',
+            mimeType:'video/wav',
+            filename,
+            size:config.size
+          }
+        });
+        await ack;
+        const rawResult=waitForResult('google-raw');
+        const rawDuration=await loadMetadata(config.rawUrl,'raw');
+        await rawResult;
+        const aliasResult=waitForResult('google-filename');
+        const aliasDuration=await loadMetadata('/__cloudframe_media__/'+sessionId+'/'+encodeURIComponent(filename),'alias');
+        await aliasResult;
+        controller.postMessage({type:'cloudframe-media-revoke',sessionId});
+        return {ok:true,rawLoaded:Number.isFinite(rawDuration),aliasLoaded:Number.isFinite(aliasDuration)};
+      }catch(error){
+        return {ok:false,reason:error instanceof Error?error.message:'probe-failed'};
+      }finally{
+        for(const audio of media){
+          audio.pause();
+          audio.removeAttribute('src');
+          audio.load();
+          audio.remove();
+        }
+      }
+    })()`,
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  const mediaValue = mediaResult.result.value;
+  if (!mediaValue?.ok || !mediaValue.rawLoaded || !mediaValue.aliasLoaded) {
+    throw new Error(`Chromium 68 media worker probe failed: ${mediaValue?.reason ?? "unknown"}`);
+  }
+  if (!upstreamRequests.some(request =>
+    request.authorization === `Bearer ${probeToken}` &&
+    request.range === "bytes=0-"
+  )) throw new Error("Chromium 68 did not forward bearer Range media");
+  if (aliasApplicationRequests !== 0) {
+    throw new Error("Filename alias escaped the service worker");
+  }
+
   const unexpectedErrors = runtimeErrors.filter(error => !isExpectedLegacyProbeError(error));
   if (unexpectedErrors.length) throw new Error(`Chromium 68 runtime errors: ${JSON.stringify(unexpectedErrors)}`);
-  ws.close();
-  process.stdout.write(`Pinned Chromium ${revision} executed required TV APIs successfully.\n`);
+  process.stdout.write(`Pinned Chromium 68 revision ${revision} loaded authenticated Range media and filename alias successfully.\n`);
 } finally {
-  chrome.kill();
-  await new Promise(resolvePromise => staticServer.close(resolvePromise));
+  if (ws) ws.close();
+  if (chrome) chrome.kill();
+  await Promise.all([
+    closeServer(staticServer),
+    closeServer(mediaServer),
+  ]);
+  await rm(temporaryDirectory, { recursive: true, force: true });
 }
 
 async function waitForDebugger(debugPort) {
@@ -157,6 +446,90 @@ async function freePort() {
   const free = typeof address === "object" && address ? address.port : 0;
   await new Promise(resolvePromise => server.close(resolvePromise));
   return free;
+}
+
+function listen(server, port) {
+  return new Promise((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      resolvePromise();
+    });
+  });
+}
+
+function closeServer(server) {
+  return server.listening
+    ? new Promise(resolvePromise => server.close(resolvePromise))
+    : Promise.resolve();
+}
+
+function runNode(args) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn(process.execPath, args, {
+      cwd: process.cwd(),
+      stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
+    });
+    let stderr = "";
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", chunk => { stderr += chunk; });
+    child.once("error", reject);
+    child.once("exit", code => {
+      if (code === 0) resolvePromise();
+      else reject(new Error(`Temporary media worker build exited ${code}: ${stderr.trim()}`));
+    });
+  });
+}
+
+function byteRange(value, size) {
+  if (typeof value !== "string") return null;
+  const match = /^bytes=(?:(\d+)-(\d*)|-(\d+))$/u.exec(value);
+  if (!match) return null;
+  if (match[3] !== undefined) {
+    const suffix = Number(match[3]);
+    if (!Number.isSafeInteger(suffix) || suffix <= 0) return null;
+    const length = Math.min(suffix, size);
+    return { start: size - length, end: size - 1 };
+  }
+  const start = Number(match[1]);
+  const requestedEnd = match[2] === "" ? size - 1 : Number(match[2]);
+  if (
+    !Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) ||
+    start < 0 || start >= size || requestedEnd < start
+  ) return null;
+  return { start, end: Math.min(requestedEnd, size - 1) };
+}
+
+function pcmWav(seconds) {
+  const sampleRate = 44_100;
+  const channels = 1;
+  const bitsPerSample = 16;
+  const blockAlign = channels * bitsPerSample / 8;
+  const dataLength = seconds * sampleRate * blockAlign;
+  const body = Buffer.alloc(44 + dataLength);
+  body.write("RIFF", 0, "ascii");
+  body.writeUInt32LE(36 + dataLength, 4);
+  body.write("WAVE", 8, "ascii");
+  body.write("fmt ", 12, "ascii");
+  body.writeUInt32LE(16, 16);
+  body.writeUInt16LE(1, 20);
+  body.writeUInt16LE(channels, 22);
+  body.writeUInt32LE(sampleRate, 24);
+  body.writeUInt32LE(sampleRate * blockAlign, 28);
+  body.writeUInt16LE(blockAlign, 32);
+  body.writeUInt16LE(bitsPerSample, 34);
+  body.write("data", 36, "ascii");
+  body.writeUInt32LE(dataLength, 40);
+  return body;
+}
+
+function staticContentType(pathname) {
+  if (pathname.endsWith(".js")) return "text/javascript";
+  if (pathname.endsWith(".css")) return "text/css";
+  if (pathname.endsWith(".woff2")) return "font/woff2";
+  if (pathname.endsWith(".webp")) return "image/webp";
+  return "text/html";
 }
 
 function isExpectedLegacyProbeError(error) {

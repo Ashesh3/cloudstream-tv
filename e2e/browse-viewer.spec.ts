@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 import { installTvFixture, media } from "./fixtures";
 
 test("folder browse opens a unified image and video viewer", async ({ page }) => {
+  const requests: string[] = [];
+  page.on("request", request => requests.push(request.url()));
   await installTvFixture(page, "ready");
   await page.goto("/");
   await expect(page.getByRole("button", { name: "Family Trips, program" })).toBeVisible();
@@ -37,6 +39,7 @@ test("folder browse opens a unified image and video viewer", async ({ page }) =>
   expect(calls.thumbnails.flat()).toEqual(expect.arrayContaining(["sealed-child-folder", "sealed-image", "sealed-video"]));
   expect(calls.thumbnails.flat()).not.toEqual(expect.arrayContaining(["item_image", "item_video"]));
   expect(calls.media).toEqual(expect.arrayContaining(["sealed-image", "sealed-video"]));
+  expect(requests.some(url => url.includes("/api/tv/google-media/"))).toBe(false);
 });
 
 test("folder browse preloads thumbnails beyond the virtual window before scrolling", async ({ page }) => {

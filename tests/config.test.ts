@@ -42,7 +42,13 @@ describe("deployment configuration", () => {
 
   it("routes the two SPAs without swallowing API traffic", async () => {
     const contract = await json("deploy/vercel-build-contract.json") as {
-      routes: Array<{ src?: string; dest?: string; handle?: string }>;
+      routes: Array<{
+        src?: string;
+        dest?: string;
+        handle?: string;
+        headers?: Record<string, string>;
+        continue?: boolean;
+      }>;
     };
     expect(contract.routes).toEqual(expect.arrayContaining([
       { handle: "filesystem" },
@@ -50,7 +56,17 @@ describe("deployment configuration", () => {
       { src: "^/admin(?:/.*)?$", dest: "/admin/index.html" },
       { src: "^/(?!api(?:/|$)).*$", dest: "/index.html" }
     ]));
-    expect(contract.routes[0]).toEqual({ handle: "filesystem" });
+    expect(contract.routes).toContainEqual({
+      src: "^/cloudframe-media-sw\\.js$",
+      headers: { "cache-control": "no-cache" },
+      continue: true,
+    });
+    expect(contract.routes[0]).toEqual({
+      src: "^/cloudframe-media-sw\\.js$",
+      headers: { "cache-control": "no-cache" },
+      continue: true,
+    });
+    expect(contract.routes[1]).toEqual({ handle: "filesystem" });
   });
 
   it("lists the final post-cutover environment contract", async () => {
@@ -113,6 +129,7 @@ describe("deployment configuration", () => {
     expect(output.routes).toContainEqual({ src: "^/api(?:/.*)?$", dest: "/api" });
     await Promise.all([
       access(".vercel/output/static/index.html"),
+      access(".vercel/output/static/cloudframe-media-sw.js"),
       access(".vercel/output/static/admin/index.html"),
       access(".vercel/output/functions/api.func/index.js"),
       access(".vercel/output/functions/api.func/node_modules/@node-rs/argon2/index.js"),
