@@ -526,6 +526,116 @@ describe("direct provider URL vending", () => {
     ]);
   });
 
+  it("bounds representative folder thumbnail lookups while allowing parallel progress", async () => {
+    const harness = createHarness();
+    const release = harness.google.blockThumbnailCalls();
+    const folderIds = Array.from({ length: 6 }, (_, index) => `google-folder-${index}`);
+    folderIds.forEach((providerNodeId, index) => {
+      harness.google.thumbnailResults.set(providerNodeId, {
+        url: `https://lh3.googleusercontent.com/folder-${index}=s720`,
+        expiresAt: harness.expiry,
+      });
+    });
+
+    const pending = harness.media.thumbnails(
+      harness.auth(),
+      folderIds.map((providerNodeId) =>
+        harness.handle("source-google", "root-google", providerNodeId, "folder")
+      ),
+      720,
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const startedBeforeRelease = harness.google.thumbnailInputs.length;
+    const maximumConcurrent = harness.google.maximumConcurrentThumbnailCalls;
+    release();
+    const result = await pending;
+
+    expect(startedBeforeRelease).toBe(4);
+    expect(maximumConcurrent).toBe(4);
+    expect(result.items.map((item) => item.itemId)).toEqual(
+      folderIds.map((providerNodeId) => harness.itemId("source-google", providerNodeId)),
+    );
+    expect(result.items.map((item) => item.status)).toEqual(Array(6).fill("ready"));
+  });
+
+  it("shares one credential refresh across concurrent thumbnail reauthorization", async () => {
+    const harness = createHarness();
+    const providerNodeIds = Array.from({ length: 4 }, (_, index) => `google-reauth-${index}`);
+    providerNodeIds.forEach((providerNodeId, index) => {
+      harness.google.thumbnailErrors.set(
+        providerNodeId,
+        new ProviderError("PROVIDER_REAUTH_REQUIRED", "private upstream detail", {
+          retryable: false,
+        }),
+      );
+      harness.google.thumbnailResults.set(providerNodeId, {
+        url: `https://lh3.googleusercontent.com/reauth-${index}=s720`,
+        expiresAt: harness.expiry,
+      });
+    });
+    harness.google.clearThumbnailErrorAfterThrow = true;
+
+    const result = await harness.media.thumbnails(
+      harness.auth(),
+      providerNodeIds.map((providerNodeId) =>
+        harness.handle("source-google", "root-google", providerNodeId, "folder")
+      ),
+      720,
+    );
+
+    expect(result.items.map((item) => item.status)).toEqual(Array(4).fill("ready"));
+    expect(harness.credentialRefreshes).toBe(1);
+    expect(harness.google.thumbnailTokens.filter((token) => token === "access-token")).toHaveLength(4);
+    expect(harness.google.thumbnailTokens.filter((token) => token === "refreshed-google-access")).toHaveLength(4);
+  });
+
+  it("settles in-flight thumbnail lookups before reporting a fatal batch error", async () => {
+    const harness = createHarness();
+    const blockedIds = ["google-blocked-1", "google-blocked-2", "google-blocked-3"];
+    const releaseBlocked = blockedIds.map((providerNodeId) =>
+      harness.google.blockThumbnailCall(providerNodeId)
+    );
+    harness.google.thumbnailErrors.set(
+      "google-fatal",
+      new ProviderError("PROVIDER_THROTTLED", "private upstream detail", {
+        retryable: true,
+      }),
+    );
+    const providerNodeIds = [
+      "google-fatal",
+      ...blockedIds,
+      "google-not-started-1",
+      "google-not-started-2",
+    ];
+
+    const pending = harness.media.thumbnails(
+      harness.auth(),
+      providerNodeIds.map((providerNodeId) =>
+        harness.handle("source-google", "root-google", providerNodeId, "folder")
+      ),
+      720,
+    );
+    const outcome = pending.then(() => "resolved", () => "rejected");
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(await Promise.race([
+      outcome,
+      new Promise<"waiting">((resolve) => setTimeout(() => resolve("waiting"), 10)),
+    ])).toBe("waiting");
+    expect(harness.google.thumbnailInputs.map((input) => input.providerNodeId)).toEqual([
+      "google-fatal",
+      ...blockedIds,
+    ]);
+
+    releaseBlocked.forEach((release) => release());
+    await expect(pending).rejects.toMatchObject({ code: "PROVIDER_THROTTLED" });
+    expect(harness.google.activeThumbnailCalls).toBe(0);
+    expect(harness.google.thumbnailInputs.map((input) => input.providerNodeId)).not.toEqual(
+      expect.arrayContaining(["google-not-started-1", "google-not-started-2"]),
+    );
+  });
+
   it("rejects folder media as item not found before provider access", async () => {
     const harness = createHarness();
 
@@ -1261,6 +1371,8 @@ function credentials(
 
 class MediaProviderHarness {
   calls = 0;
+  activeThumbnailCalls = 0;
+  maximumConcurrentThumbnailCalls = 0;
   readonly thumbnailInputs: Array<{
     provider: ProviderKind;
     providerNodeId: string;
@@ -1276,6 +1388,10 @@ class MediaProviderHarness {
   rewriteGoogleMediaToken = true;
   clearThumbnailErrorAfterThrow = false;
   clearThumbnailErrorsAfterThrows = Number.POSITIVE_INFINITY;
+  private thumbnailBlocker: Promise<void> | null = null;
+  private releaseThumbnailBlocker: (() => void) | null = null;
+  private readonly thumbnailCallBlockers = new Map<string, Promise<void>>();
+  private readonly releaseThumbnailCallBlockers = new Map<string, () => void>();
 
   readonly adapter: ProviderAdapter;
 
@@ -1303,6 +1419,11 @@ class MediaProviderHarness {
       listFolder: async () => unexpected("listFolder"),
       getThumbnailUrl: async (input) => {
         this.calls += 1;
+        this.activeThumbnailCalls += 1;
+        this.maximumConcurrentThumbnailCalls = Math.max(
+          this.maximumConcurrentThumbnailCalls,
+          this.activeThumbnailCalls,
+        );
         this.thumbnailTokens.push(input.credentials.accessToken);
         this.thumbnailInputs.push({
           provider: this.provider,
@@ -1310,18 +1431,25 @@ class MediaProviderHarness {
           kind: input.kind,
           maxDimension: input.maxDimension,
         });
-        const error = this.thumbnailErrors.get(input.providerNodeId);
-        if (error !== undefined) {
-          if (this.clearThumbnailErrorAfterThrow) {
-            this.thumbnailErrors.delete(input.providerNodeId);
-          } else if (this.clearThumbnailErrorsAfterThrows <= 0) {
-            this.thumbnailErrors.delete(input.providerNodeId);
-          } else {
-            this.clearThumbnailErrorsAfterThrows -= 1;
+        try {
+          if (this.thumbnailBlocker) await this.thumbnailBlocker;
+          const callBlocker = this.thumbnailCallBlockers.get(input.providerNodeId);
+          if (callBlocker) await callBlocker;
+          const error = this.thumbnailErrors.get(input.providerNodeId);
+          if (error !== undefined) {
+            if (this.clearThumbnailErrorAfterThrow) {
+              this.thumbnailErrors.delete(input.providerNodeId);
+            } else if (this.clearThumbnailErrorsAfterThrows <= 0) {
+              this.thumbnailErrors.delete(input.providerNodeId);
+            } else {
+              this.clearThumbnailErrorsAfterThrows -= 1;
+            }
+            throw error;
           }
-          throw error;
+          return this.thumbnailResults.get(input.providerNodeId) ?? null;
+        } finally {
+          this.activeThumbnailCalls -= 1;
         }
-        return this.thumbnailResults.get(input.providerNodeId) ?? null;
       },
       getMediaUrl: async (input) => {
         this.calls += 1;
@@ -1336,6 +1464,33 @@ class MediaProviderHarness {
         }
         return this.mediaResult;
       },
+    };
+  }
+
+  blockThumbnailCalls(): () => void {
+    if (this.thumbnailBlocker) throw new Error("Thumbnail calls are already blocked.");
+    this.thumbnailBlocker = new Promise<void>((resolve) => {
+      this.releaseThumbnailBlocker = resolve;
+    });
+    return () => {
+      this.releaseThumbnailBlocker?.();
+      this.releaseThumbnailBlocker = null;
+      this.thumbnailBlocker = null;
+    };
+  }
+
+  blockThumbnailCall(providerNodeId: string): () => void {
+    if (this.thumbnailCallBlockers.has(providerNodeId)) {
+      throw new Error(`Thumbnail call is already blocked: ${providerNodeId}`);
+    }
+    const blocker = new Promise<void>((resolve) => {
+      this.releaseThumbnailCallBlockers.set(providerNodeId, resolve);
+    });
+    this.thumbnailCallBlockers.set(providerNodeId, blocker);
+    return () => {
+      this.releaseThumbnailCallBlockers.get(providerNodeId)?.();
+      this.releaseThumbnailCallBlockers.delete(providerNodeId);
+      this.thumbnailCallBlockers.delete(providerNodeId);
     };
   }
 }

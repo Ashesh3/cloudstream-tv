@@ -27,6 +27,7 @@ import {
 const MAX_THUMBNAIL_BATCH = 100;
 const MIN_THUMBNAIL_DIMENSION = 64;
 const MAX_THUMBNAIL_DIMENSION = 4096;
+const MAX_CONCURRENT_THUMBNAIL_REQUESTS = 4;
 
 const RESPONSE_HEADERS = {
   "cache-control": "private, no-store",
@@ -116,6 +117,35 @@ function groupsBySource(items: readonly AuthorizedBrowseItem[]): SourceGroup[] {
     }
   });
   return [...groups.values()];
+}
+
+async function forEachWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  operation: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  let failed = false;
+  let firstError: unknown;
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => {
+      while (!failed && nextIndex < items.length) {
+        const item = items[nextIndex]!;
+        nextIndex += 1;
+        try {
+          await operation(item);
+        } catch (error) {
+          if (!failed) {
+            failed = true;
+            firstError = error;
+          }
+        }
+      }
+    },
+  );
+  await Promise.all(workers);
+  if (failed) throw firstError;
 }
 
 function compatibleCredentials(
@@ -443,7 +473,8 @@ export function createDirectMediaService(
       const provider = group.item.source.provider;
       let credentials: BrokeredProviderCredentials;
       let adapter: ProviderAdapter;
-      let refreshedCredentials = false;
+      let credentialGeneration = 0;
+      let refreshPromise: Promise<BrokeredProviderCredentials> | null = null;
       try {
         credentials = compatibleCredentials(
           group.item,
@@ -457,56 +488,71 @@ export function createDirectMediaService(
         normalizeDependencyError(error);
       }
 
-      for (const entry of vendable) {
-        try {
-          const operation = (activeCredentials: ProviderCredentials) =>
-            adapter!.getThumbnailUrl({
-              credentials: activeCredentials,
-              providerNodeId: entry.item.claims.providerNodeId,
-              kind: entry.item.claims.kind,
-              maxDimension,
-            });
-          let temporary: TemporaryUrl | null;
+      const refreshedCredentials = () => {
+        if (!refreshPromise) {
+          refreshPromise = options.credentialBroker.refresh(
+            group.item.source.id,
+            group.item.claims.householdId,
+          ).then((nextCredentials) => {
+            const compatible = compatibleCredentials(group.item, nextCredentials);
+            credentials = compatible;
+            credentialGeneration = 1;
+            return compatible;
+          });
+        }
+        return refreshPromise;
+      };
+
+      await forEachWithConcurrency(
+        vendable,
+        MAX_CONCURRENT_THUMBNAIL_REQUESTS,
+        async (entry) => {
           try {
-            temporary = await operation(credentials!);
+            const operation = (activeCredentials: ProviderCredentials) =>
+              adapter!.getThumbnailUrl({
+                credentials: activeCredentials,
+                providerNodeId: entry.item.claims.providerNodeId,
+                kind: entry.item.claims.kind,
+                maxDimension,
+              });
+            const operationGeneration = credentialGeneration;
+            let temporary: TemporaryUrl | null;
+            try {
+              temporary = await operation(credentials!);
+            } catch (error) {
+              if (
+                error instanceof ProviderError &&
+                error.code === "PROVIDER_REAUTH_REQUIRED" &&
+                error.reauthReason !== "invalid_grant" &&
+                operationGeneration === 0
+              ) {
+                const retryCredentials = credentialGeneration === 1
+                  ? credentials!
+                  : await refreshedCredentials();
+                temporary = await operation(retryCredentials);
+              } else {
+                throw error;
+              }
+            }
+            const safe = temporary
+              ? validThumbnailUrl(temporary, entry.item, now())
+              : null;
+            items[entry.index] = safe
+              ? readyThumbnail(entry.item, safe)
+              : unavailable(entry.item);
           } catch (error) {
             if (
               error instanceof ProviderError &&
-              error.code === "PROVIDER_REAUTH_REQUIRED" &&
-              error.reauthReason !== "invalid_grant" &&
-              !refreshedCredentials
+              (error.code === "PROVIDER_NOT_FOUND" ||
+                error.code === "PROVIDER_BAD_RESPONSE")
             ) {
-              credentials = compatibleCredentials(
-                entry.item,
-                await options.credentialBroker.refresh(
-                  entry.item.source.id,
-                  entry.item.claims.householdId,
-                ),
-              );
-              refreshedCredentials = true;
-              temporary = await operation(credentials);
-            } else {
-              throw error;
+              items[entry.index] = unavailable(entry.item);
+              return;
             }
+            normalizeDependencyError(error);
           }
-          const safe = temporary
-            ? validThumbnailUrl(temporary, entry.item, now())
-            : null;
-          items[entry.index] = safe
-            ? readyThumbnail(entry.item, safe)
-            : unavailable(entry.item);
-        } catch (error) {
-          if (
-            error instanceof ProviderError &&
-            (error.code === "PROVIDER_NOT_FOUND" ||
-              error.code === "PROVIDER_BAD_RESPONSE")
-          ) {
-            items[entry.index] = unavailable(entry.item);
-            continue;
-          }
-          normalizeDependencyError(error);
-        }
-      }
+        },
+      );
     }
 
     return { items, responseHeaders: RESPONSE_HEADERS };
