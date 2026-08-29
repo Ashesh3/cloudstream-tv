@@ -10,7 +10,6 @@
   "scripts": {
     "build": "npm run build -w @cloudframe/tv && npm run build -w @cloudframe/admin && node scripts/build-site.mjs",
     "build:e2e": "cross-env CLOUDFRAME_E2E_BUILD=1 npm run build",
-    "build:vercel": "npm run build && node scripts/build-vercel.mjs",
     "build:server": "npm run build && node scripts/build-server.mjs",
     "docker:build": "docker build --platform linux/amd64 -t cloudframe:local .",
     "check:chromium68": "node scripts/check-chromium68.mjs",
@@ -27,11 +26,7 @@
     "@cloudframe/shared": "*",
     "@cloudframe/server": "*",
     "@cloudframe/providers": "*",
-    "@google-cloud/firestore": "^9.0.0",
     "@node-rs/argon2": "^2.1.0",
-    "@vercel/blob": "2.8.0",
-    "@vercel/functions": "3.9.5",
-    "@vercel/oidc": "^3.8.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {

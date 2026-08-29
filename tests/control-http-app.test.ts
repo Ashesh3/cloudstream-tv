@@ -110,7 +110,7 @@ describe("final control HTTP API", () => {
     expect(serialized).not.toContain("www.googleapis.com");
   });
 
-  it("does not expose a Firestore repository in API dependencies", () => {
+  it("does not expose a remote repository in API dependencies", () => {
     const source = readFileSync(
       "packages/server/src/http/control-app.ts",
       "utf8"
@@ -120,13 +120,12 @@ describe("final control HTTP API", () => {
     );
   });
 
-  it("loads and conditionally revalidates the active control snapshot once per protected request", async () => {
+  it("loads the active local control snapshot once per protected request", async () => {
     const harness = await createControlApiHarness();
 
     await harness.app(harness.folderRequest());
 
     expect(harness.controlStore.loadCount).toBe(1);
-    expect(harness.durable.conditionalReadCount).toBe(1);
   });
 
   it("reuses the same request context in live admin folder services", async () => {
@@ -143,7 +142,6 @@ describe("final control HTTP API", () => {
 
     expect(response.status).toBe(200);
     expect(harness.controlStore.loadCount).toBe(1);
-    expect(harness.durable.conditionalReadCount).toBe(1);
   });
 
   it("keeps mutation services on the store mutation boundary without a redundant HTTP load", async () => {
@@ -161,7 +159,6 @@ describe("final control HTTP API", () => {
     expect(response.status).toBe(200);
     expect(harness.controlStore.loadCount).toBe(1);
     expect(harness.controlStore.mutateCount).toBe(1);
-    expect(harness.durable.readCount).toBe(2);
   });
 
   it("rejects duplicate sensitive cookies at the same safe boundary", async () => {
@@ -250,8 +247,7 @@ describe("final control HTTP API", () => {
     ));
     expect(response.status).toBe(200);
     expect(observed).toEqual(expect.arrayContaining([
-      { level: "info", event: "control_plane_cache_hit", requestId: "request-telemetry", householdId: "h1", count: 1 },
-      { level: "info", event: "control_plane_blob_read", requestId: "request-telemetry", householdId: "h1", count: 1 }
+      { level: "info", event: "control_plane_sqlite_read", requestId: "request-telemetry", householdId: "h1", count: 1 }
     ]));
 
     const failing = await createControlApiHarness({
@@ -260,7 +256,7 @@ describe("final control HTTP API", () => {
     await expect(failing.app(failing.folderRequest())).resolves.toMatchObject({ status: 200 });
   });
 
-  it("retains the HTTP request id for mirror telemetry after the response scope ends", async () => {
+  it("retains the HTTP request id for local write telemetry", async () => {
     const observed: unknown[] = [];
     const harness = await createControlApiHarness({
       telemetryObserver: { emit: event => observed.push(event) }
@@ -273,10 +269,9 @@ describe("final control HTTP API", () => {
     ));
 
     expect(response.status).toBe(200);
-    await harness.deferred.flush();
     expect(observed).toContainEqual({
       level: "info",
-      event: "control_plane_mirror_write",
+      event: "control_plane_sqlite_write",
       requestId: "mutation-request",
       householdId: "h1",
       revision: 2,

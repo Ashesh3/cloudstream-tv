@@ -13,27 +13,23 @@ import {
   createControlAuth,
   createControlEnrollmentService,
   createControlOAuthService,
-  createControlPlaneStore,
   createControlRequestContextScope,
   createCredentialBroker,
   createDirectMediaService,
-  createFirestoreRecoveryMirror,
   createLiveBrowseService,
   createLiveProviderFolderService,
   createProviderMediaSourceService,
   createSealedSessionCodec,
-  encryptControlPlaneDocument,
   encryptProviderToken,
   hashOpaqueToken,
   hashPassphrase,
   type ControlApiLogger,
   type ControlApiLoggerEvent,
   type ControlPlaneTelemetryObserver,
+  safeControlPlaneTelemetry,
   type ControlMutationReducer,
   type ControlPlaneStore,
-  MemoryControlDurableStore,
-  MemoryControlHotCache,
-  MemoryDeferredTasks,
+  controlStoreHarness,
   TranscodeError,
 } from "@cloudframe/server";
 
@@ -57,14 +53,6 @@ export interface ControlApiHarness {
   replaceDocument(document: ControlPlaneDocumentV2): void;
   issueDeviceCookie(input: { deviceId: string; householdId?: string; sessionVersion?: number; expiresAt?: number }): string;
   controlStore: { loadCount: number; mutateCount: number };
-  durable: {
-    readCount: number;
-    conditionalReadCount: number;
-    writeAttempts: number;
-  };
-  cache: { readCount: number };
-  deferred: { flush(): Promise<void> };
-  firestore: { readCount: number; writeCount: number };
   provider: {
     listFolderCalls: number;
     mediaUrlCalls: number;
@@ -118,36 +106,12 @@ export async function createControlApiHarness(
   document.sources["source-1"]!.bootstrapAccessTokenExpiresAt = new Date(
     now.getTime() + 60 * 60_000
   ).toISOString();
-  const controlKeyring = testAeadKeyring();
-  const initial = {
-    envelope: encryptControlPlaneDocument(document, controlKeyring),
-    etag: "etag-1"
-  };
-  const durable = new MemoryControlDurableStore(
-    initial,
-    0,
-    controlKeyring.keys
-  );
-  const cache = new MemoryControlHotCache();
-  cache.replaceOutOfBand(initial);
-  const deferred = new MemoryDeferredTasks();
-  const firestore = new FirestoreSentinel(document.householdId);
-  const mirror = createFirestoreRecoveryMirror(
-    firestore.client,
-    document.householdId
-  );
-  const rawStore = createControlPlaneStore({
-    durable,
-    cache,
-    mirror,
-    deferred,
-    keyring: controlKeyring,
-    now: () => new Date(now),
-    householdId: document.householdId
-  });
+  const memory = controlStoreHarness(document);
   let loadCount = 0;
   let mutateCount = 0;
   let failNextLoad = false;
+  let activeObserver: ControlPlaneTelemetryObserver | undefined;
+  let activeRequestId = "unknown";
   const store: ControlPlaneStore = {
     async load() {
       loadCount += 1;
@@ -155,22 +119,26 @@ export async function createControlApiHarness(
         failNextLoad = false;
         throw new Error("injected control load failure");
       }
-      return rawStore.load();
+      const loaded = await memory.store.load();
+      safeControlPlaneTelemetry(activeObserver, { level: "info", event: "control_plane_sqlite_read", requestId: activeRequestId, householdId: loaded.document.householdId, count: 1 });
+      return loaded;
     },
     async mutate<T>(name: string, reducer: ControlMutationReducer<T>) {
       mutateCount += 1;
-      return rawStore.mutate(name, reducer);
+      const previousRevision = memory.current().revision;
+      const result = await memory.store.mutate(name, reducer);
+      const currentRevision = memory.current().revision;
+      if (currentRevision !== previousRevision) safeControlPlaneTelemetry(activeObserver, { level: "info", event: "control_plane_sqlite_write", requestId: activeRequestId, householdId: memory.current().householdId, revision: currentRevision, count: 1 });
+      return result;
     },
     async withTelemetry<T>(observer: ControlPlaneTelemetryObserver | undefined, requestId: string, operation: () => Promise<T>) {
-      return rawStore.withTelemetry!(observer, requestId, operation);
+      const previousObserver = activeObserver;
+      const previousRequestId = activeRequestId;
+      activeObserver = observer;
+      activeRequestId = requestId;
+      try { return await operation(); }
+      finally { activeObserver = previousObserver; activeRequestId = previousRequestId; }
     }
-  };
-
-  let cacheReadCount = 0;
-  const originalCacheGet = cache.get.bind(cache);
-  cache.get = async () => {
-    cacheReadCount += 1;
-    return originalCacheGet();
   };
 
   const provider = new ControlProviderHarness(now);
@@ -189,7 +157,7 @@ export async function createControlApiHarness(
     () => now
   );
   const activeContext = () => {
-    const active = durable.currentDocument!;
+    const active = memory.current();
     return { document: active, revision: active.revision };
   };
   const requestContext = createControlRequestContextScope();
@@ -403,8 +371,7 @@ export async function createControlApiHarness(
     deviceCookie,
     requestCookie,
     replaceDocument(nextDocument) {
-      durable.replaceOutOfBand(nextDocument, controlKeyring);
-      cache.replaceOutOfBand({ envelope: encryptControlPlaneDocument(nextDocument, controlKeyring), etag: durable.currentEtag! });
+      memory.replace(nextDocument);
     },
     issueDeviceCookie(input) {
       return sessionCodec.issueDevice({
@@ -424,26 +391,6 @@ export async function createControlApiHarness(
         return mutateCount;
       }
     },
-    durable: {
-      get readCount() {
-        return durable.readCount;
-      },
-      get conditionalReadCount() {
-        return durable.ifNoneMatches.filter(
-          (value: string | undefined) => value !== undefined
-        ).length;
-      },
-      get writeAttempts() {
-        return durable.writeAttempts;
-      }
-    },
-    cache: {
-      get readCount() {
-        return cacheReadCount;
-      }
-    },
-    deferred,
-    firestore,
     provider,
     rateLimiter: {
       get consumeCount() {
@@ -604,53 +551,6 @@ class ControlProviderHarness {
         };
       }
     };
-  }
-}
-
-class FirestoreSentinel {
-  readCount = 0;
-  writeCount = 0;
-  readonly client: Parameters<typeof createFirestoreRecoveryMirror>[0];
-
-  constructor(private readonly householdId: string) {
-    const read = async () => {
-      this.readCount += 1;
-      throw new Error("Firestore reads are forbidden");
-    };
-    const document = {
-      set: async (value: ControlPlaneDocumentV2) => {
-        if (value.householdId !== this.householdId) {
-          throw new Error("Unexpected Firestore backup household");
-        }
-        this.writeCount += 1;
-      },
-      get: read,
-      create: read,
-      update: read,
-      delete: read,
-      listCollections: read
-    };
-    const collection = {
-      doc: (id: string) => {
-        if (id !== this.householdId) {
-          throw new Error("Unexpected Firestore backup document");
-        }
-        return document;
-      },
-      get: read,
-      where: read,
-      orderBy: read,
-      limit: read,
-      listDocuments: read
-    };
-    this.client = {
-      collection: (name: string) => {
-        if (name !== "controlPlaneBackups") {
-          throw new Error("Unexpected Firestore backup collection");
-        }
-        return collection;
-      }
-    } as unknown as Parameters<typeof createFirestoreRecoveryMirror>[0];
   }
 }
 

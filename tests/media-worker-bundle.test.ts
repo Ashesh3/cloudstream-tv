@@ -98,7 +98,6 @@ describe("production Google media worker bundle", () => {
         expiresAtEpoch: Date.now() + 60_000,
         kind: "video",
         mimeType: "video/mpeg",
-        filename: "MOV00516.MPG",
         size: 100,
       },
     });

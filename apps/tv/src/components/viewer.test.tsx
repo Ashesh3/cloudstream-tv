@@ -173,6 +173,7 @@ describe("unified TV viewer", () => {
     Object.defineProperty(hls, "currentTime", { configurable: true, writable: true, value: 0 });
     fireEvent.loadedMetadata(hls);
     expect(hls.currentTime).toBe(37);
+    Object.defineProperty(hls, "error", { configurable: true, value: { code: 3 } });
     fireEvent.error(hls);
     expect(await screen.findByRole("heading", { name: "The transcoded playback session ended" })).toBeVisible();
     expect(api.mediaUrl).toHaveBeenCalledTimes(2);

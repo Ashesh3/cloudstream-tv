@@ -9,11 +9,7 @@
   "dependencies": {
     "@cloudframe/shared": "*",
     "@cloudframe/providers": "*",
-    "@google-cloud/firestore": "^9.0.0",
     "@node-rs/argon2": "^2.1.0",
-    "@vercel/blob": "2.8.0",
-    "@vercel/functions": "3.9.5",
-    "@vercel/oidc": "^3.8.5",
     "zod": "^4.4.3"
   }
 }

@@ -100,7 +100,7 @@ describe("control admin service", () => {
     );
   });
 
-  it("performs one Blob mutation and one deferred recovery write for settings", async () => {
+  it("performs one local mutation for settings", async () => {
     const harness = await serviceHarness();
 
     const result = await harness.service.updateSettings("h1", {
@@ -108,11 +108,9 @@ describe("control admin service", () => {
       defaultMediaOrder: "name-asc",
       defaultSlideshowSeconds: 10
     });
-    await harness.deferred.flush();
 
     expect(result.revision).toBe(2);
     expect(harness.durable.writeAttempts).toBe(1);
-    expect(harness.mirror.writeCount).toBe(1);
   });
 
   it("performs zero writes for an idempotent settings update", async () => {
@@ -123,12 +121,9 @@ describe("control admin service", () => {
       defaultMediaOrder: "captured-desc",
       defaultSlideshowSeconds: 8
     });
-    await harness.deferred.flush();
 
     expect(result.revision).toBe(1);
     expect(harness.durable.writeAttempts).toBe(0);
-    expect(harness.cache.setCount).toBe(0);
-    expect(harness.mirror.writeCount).toBe(0);
   });
 
   it("verifies the current passphrase before rotating the hash and version", async () => {
@@ -144,11 +139,10 @@ describe("control admin service", () => {
       PASSPHRASE,
       NEXT_PASSPHRASE
     );
-    await harness.deferred.flush();
 
     expect(result.revision).toBe(2);
-    expect(harness.durable.currentDocument?.household.adminPassphraseVersion).toBe(2);
-    expect(harness.durable.currentDocument?.household.adminPassphraseHash).not.toBe(
+    expect(harness.current().household.adminPassphraseVersion).toBe(2);
+    expect(harness.current().household.adminPassphraseHash).not.toBe(
       PASSPHRASE
     );
   });
@@ -169,7 +163,6 @@ describe("control admin service", () => {
       "h1",
       approved.device.id
     );
-    await harness.deferred.flush();
 
     expect(approved.device).toMatchObject({
       id: "device-created",
@@ -182,12 +175,11 @@ describe("control admin service", () => {
       slideshowSeconds: 12
     });
     expect(revoked).toEqual({ revoked: true });
-    expect(harness.durable.currentDocument?.devices["device-created"]).toMatchObject({
+    expect(harness.current().devices["device-created"]).toMatchObject({
       enabled: false,
       sessionVersion: 2
     });
     expect(harness.durable.writeAttempts).toBe(3);
-    expect(harness.mirror.writeCount).toBe(3);
   });
 
   it("denies a pending request with a browser-safe resolved request", async () => {
@@ -212,9 +204,9 @@ describe("control admin service", () => {
     expect(sourceImpact.roots.map((root) => root.id)).toEqual(["root-1"]);
     expect(sourceImpact.devices.map((device) => device.id)).toEqual(["device-1"]);
     expect(removedSource).toMatchObject({ removed: true });
-    expect(sourceHarness.durable.currentDocument?.roots).toEqual({});
+    expect(sourceHarness.current().roots).toEqual({});
     expect(
-      sourceHarness.durable.currentDocument?.devices["device-1"].assignedRootIds
+      sourceHarness.current().devices["device-1"].assignedRootIds
     ).toEqual([]);
 
     const rootHarness = await serviceHarness();
@@ -224,7 +216,7 @@ describe("control admin service", () => {
     expect(rootImpact.roots.map((root) => root.id)).toEqual(["root-1"]);
     expect(rootImpact.devices.map((device) => device.id)).toEqual(["device-1"]);
     expect(removedRoot).toMatchObject({ removed: true });
-    expect(rootHarness.durable.currentDocument?.roots).toEqual({});
+    expect(rootHarness.current().roots).toEqual({});
   });
 
   it("rejects cross-household reads and mutations", async () => {

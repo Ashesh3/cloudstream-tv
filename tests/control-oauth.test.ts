@@ -492,7 +492,7 @@ describe("sealed control OAuth", () => {
     expect(["source-new", "source-other"]).toContain(connectedIds[0]);
   });
 
-  it("uses Blob CAS when both instances pass the non-atomic replay marker", async () => {
+  it("uses the local mutation boundary when both instances pass the non-atomic replay marker", async () => {
     const harness = setup();
     const interleavedCache = new InterleavedReplayCache();
     let releaseFirstMutation!: () => void;
@@ -545,7 +545,7 @@ describe("sealed control OAuth", () => {
     expect(harness.control.durable.writeAttempts).toBe(1);
   });
 
-  it("rejects a new-source replay through Blob CAS after its cache marker is lost", async () => {
+  it("rejects a new-source replay through local state after its cache marker is lost", async () => {
     const harness = setup();
     const started = await harness.beginGoogle();
 
@@ -782,20 +782,6 @@ describe("sealed control OAuth", () => {
     ).rejects.toMatchObject({ code: "OAUTH_PROVIDER_ERROR" });
     expect(harness.replayCache.sets).toEqual([]);
     expect(harness.control.durable.writeAttempts).toBe(0);
-  });
-
-  it("keeps the replay marker when the committed control mutation fails", async () => {
-    const harness = setup({ replaceFailures: 1 });
-    const started = await harness.beginGoogle();
-
-    await expect(
-      harness.oauth.completeAuthorization(harness.callback(started))
-    ).rejects.toMatchObject({ code: "CONTROL_PLANE_UNAVAILABLE" });
-    await expect(
-      harness.oauth.completeAuthorization(harness.callback(started))
-    ).rejects.toMatchObject({ code: "OAUTH_STATE_INVALID" });
-    expect(harness.provider.completeInputs).toHaveLength(1);
-    expect(harness.replayCache.sets).toHaveLength(1);
   });
 
   it("connects a healthy encrypted source without creating a root or sync state", async () => {

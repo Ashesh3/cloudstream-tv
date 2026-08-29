@@ -1,37 +1,23 @@
 import { access, readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
-describe("post-cutover cleanup", () => {
-  it("removes the temporary legacy-cookie exchange surface", async () => {
-    await expect(
-      access("packages/server/src/control-plane/legacy-session-exchange.ts")
-    ).rejects.toMatchObject({ code: "ENOENT" });
+const forbidden = /@vercel\/blob|@vercel\/functions|@vercel\/oidc|@google-cloud\/firestore|createVercelBlobControlStore|createVercelRuntimeControlCache|createFirestoreRecoveryMirror|requestOidcTokenSupplier|build:vercel|BLOB_STORE_ID|FIRESTORE_PROJECT_ID|GCP_WORKLOAD_IDENTITY_PROVIDER/;
 
-    for (const path of [
-      ".env.example",
-      "README.md",
-      "deploy/api-entry.ts",
-      "docs/operations/firebase-vercel-setup.md",
-      "packages/server/src/http/control-app.ts",
-      "packages/server/src/index.ts",
-      "scripts/migrate-vercel-control-plane.ts",
-      "scripts/restore-vercel-control-plane.ts"
-    ]) {
-      expect(await readFile(path, "utf8"), path).not.toMatch(
-        /legacy-session-exchange|ENABLE_LEGACY_SESSION_EXCHANGE|GCP_LEGACY_READER_SERVICE_ACCOUNT_EMAIL/
-      );
+describe("post-cutover cleanup", () => {
+  it("removes retired platform packages, adapters, scripts, and configuration", async () => {
+    const tracked = execFileSync("git", ["ls-files", "packages", "deploy", "scripts", "package.json", "packages/server/package.json", ".env.example", "Dockerfile", ".dockerignore", "compose.example.yaml"], { encoding: "utf8" })
+      .split(/\r?\n/u).filter(Boolean).filter(path => !path.startsWith("docs/superpowers/"));
+    for (const path of tracked) {
+      if (!await access(path).then(() => true, () => false)) continue;
+      expect(await readFile(path, "utf8"), path).not.toMatch(forbidden);
     }
+    expect(await readFile("package-lock.json", "utf8")).not.toMatch(/node_modules\/(?:@vercel|@google-cloud\/firestore)|"@vercel\/|"@google-cloud\/firestore"/);
   });
 
-  it("keeps the public HTTP composition free of a legacy exchange dependency", async () => {
-    const source = await readFile("packages/server/src/http/control-app.ts", "utf8");
-    const contracts = await readFile("packages/shared/src/contracts.ts", "utf8");
-    const dependencies = source.slice(
-      source.indexOf("export interface ControlApiDependencies"),
-      source.indexOf("const DEFAULT_RATE_LIMITS")
-    );
-
-    expect(dependencies).not.toMatch(/LegacySession|legacySessionExchange/);
-    expect(contracts).not.toMatch(/interface (?:Household|AdminSession|Device|DeviceSession)\b/);
+  it("documents only self-hosted runtime configuration", async () => {
+    const environment = await readFile(".env.example", "utf8");
+    expect(environment).toMatch(/APP_ORIGIN=.*PORT=8080.*DATA_DIR=\/data/s);
+    expect(environment).not.toMatch(/MASTER_KEY|PASSPHRASE|VERCEL|BLOB|FIRESTORE|GCP_/i);
   });
 });
