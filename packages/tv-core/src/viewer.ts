@@ -226,6 +226,9 @@ function navigate(state: ViewerState, direction: -1 | 1): ViewerState {
   if (index === state.index) return { ...state, controlsVisible: true };
   const nextItem = state.items[index]!;
   const nextUrl = state.urls[nextItem.id];
+  const nextError = nextUrl?.status === "error" && nextUrl.errorKind
+    ? { nodeId: nextItem.id, kind: nextUrl.errorKind }
+    : null;
   return withUrlWindow({
     ...state,
     index,
@@ -233,9 +236,8 @@ function navigate(state: ViewerState, direction: -1 | 1): ViewerState {
     playbackIntent: state.slideshowActive && nextItem.kind === "video" ? "play" : "pause",
     videoPlaying: false,
     controlsVisible: true,
-    mediaError: nextUrl?.status === "error" && nextUrl.errorKind
-      ? { nodeId: nextItem.id, kind: nextUrl.errorKind }
-      : null
+    slideshowActive: nextError ? false : state.slideshowActive,
+    mediaError: nextError
   });
 }
 
