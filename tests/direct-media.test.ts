@@ -420,6 +420,104 @@ describe("direct provider URL vending", () => {
     expect(result.items[0]).not.toHaveProperty("handle");
   });
 
+  it("returns a sealed listing preview without another credential or provider request", async () => {
+    const harness = createHarness();
+    const previewUrl = "https://lh3.googleusercontent.com/listing-image=s720";
+
+    const result = await harness.media.thumbnails(
+      harness.auth(),
+      [
+        harness.handle(
+          "source-google",
+          "root-google",
+          "google-listing-image",
+          "image",
+          {
+            url: previewUrl,
+            expiresAt: TEST_NOW.getTime() + 20 * 60_000,
+          },
+        ),
+      ],
+      720,
+    );
+
+    expect(result.items).toEqual([
+      {
+        itemId: harness.itemId("source-google", "google-listing-image"),
+        status: "ready",
+        url: previewUrl,
+        expiresAt: new Date(TEST_NOW.getTime() + 20 * 60_000).toISOString(),
+        revision: null,
+      },
+    ]);
+    expect(harness.credentialGets).toBe(0);
+    expect(harness.providerCalls).toBe(0);
+  });
+
+  it("falls back to provider thumbnail vending after a sealed preview expires", async () => {
+    const harness = createHarness();
+    harness.google.thumbnailResults.set("google-expired-preview", {
+      url: "https://lh3.googleusercontent.com/fresh-image=s720",
+      expiresAt: harness.expiry,
+    });
+
+    const result = await harness.media.thumbnails(
+      harness.auth(),
+      [
+        harness.handle(
+          "source-google",
+          "root-google",
+          "google-expired-preview",
+          "image",
+          {
+            url: "https://lh3.googleusercontent.com/expired-image=s720",
+            expiresAt: TEST_NOW.getTime() - 1,
+          },
+        ),
+      ],
+      720,
+    );
+
+    expect(result.items[0]).toMatchObject({
+      status: "ready",
+      url: "https://lh3.googleusercontent.com/fresh-image=s720",
+    });
+    expect(harness.thumbnailInputs).toEqual([
+      {
+        provider: "google",
+        providerNodeId: "google-expired-preview",
+        maxDimension: 720,
+      },
+    ]);
+  });
+
+  it("returns representative folder previews and accepts OneDrive storage subdomains", async () => {
+    const harness = createHarness();
+    const previewUrl =
+      "https://public.storage.live.com/items/folder?authkey=folder-capability";
+
+    const result = await harness.media.thumbnails(
+      harness.auth(),
+      [
+        harness.handle(
+          "source-onedrive",
+          "root-onedrive",
+          "onedrive-folder",
+          "folder",
+          {
+            url: previewUrl,
+            expiresAt: TEST_NOW.getTime() + 20 * 60_000,
+          },
+        ),
+      ],
+      720,
+    );
+
+    expect(result.items[0]).toMatchObject({ status: "ready", url: previewUrl });
+    expect(harness.credentialGets).toBe(0);
+    expect(harness.providerCalls).toBe(0);
+  });
+
   it("authorizes the whole thumbnail batch before any provider or credential call", async () => {
     const harness = createHarness();
     const valid = harness.handle(
@@ -514,7 +612,7 @@ describe("direct provider URL vending", () => {
     ]);
   });
 
-  it("returns unavailable for folders, absent thumbnails, and definitive missing items", async () => {
+  it("returns unavailable for folders without previews, absent thumbnails, and definitive missing items", async () => {
     const harness = createHarness();
     harness.google.thumbnailResults.set("google-missing-preview", null);
     harness.google.thumbnailErrors.set(
@@ -545,12 +643,13 @@ describe("direct provider URL vending", () => {
       "unavailable",
     ]);
     expect(harness.thumbnailInputs.map((input) => input.providerNodeId)).toEqual([
+      "google-folder",
       "google-missing-preview",
       "google-gone",
     ]);
   });
 
-  it("returns a folder-only thumbnail batch without credential or provider access", async () => {
+  it("asks the provider for a representative folder thumbnail when none was listed", async () => {
     const harness = createHarness();
 
     const result = await harness.media.thumbnails(
@@ -572,8 +671,10 @@ describe("direct provider URL vending", () => {
         status: "unavailable",
       },
     ]);
-    expect(harness.credentialGets).toBe(0);
-    expect(harness.providerCalls).toBe(0);
+    expect(harness.credentialGets).toBe(1);
+    expect(harness.thumbnailInputs).toEqual([
+      { provider: "google", providerNodeId: "google-folder", maxDimension: 720 },
+    ]);
   });
 
   it("rejects folder media as item not found before provider access", async () => {
@@ -1214,6 +1315,7 @@ function createHarness(
     rootId: "root-google" | "root-onedrive",
     providerNodeId: string,
     kind: BrowseItemClaims["kind"],
+    preview: BrowseItemClaims["preview"] = null,
   ): string {
     const root = document.roots[rootId]!;
     return codec.sealItem({
@@ -1230,6 +1332,7 @@ function createHarness(
       name: providerNodeId,
       mimeType:
         kind === "folder" ? null : kind === "video" ? "video/mp4" : "image/jpeg",
+      preview,
       credentialVersion: 1,
       issuedAt: TEST_NOW.getTime(),
       expiresAt: TEST_NOW.getTime() + 30 * 60_000,

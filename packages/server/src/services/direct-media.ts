@@ -296,7 +296,7 @@ function validOneDriveUrl(url: URL, rawUrl: string): boolean {
     );
   }
   if (hostnameMatchesSubdomain(hostname, "files.1drv.com")) return true;
-  if (hostname === "storage.live.com") return true;
+  if (hostname === "storage.live.com" || hostnameMatchesSubdomain(hostname, "storage.live.com")) return true;
   return hostnameMatchesSubdomain(hostname, "microsoftusercontent.com");
 }
 
@@ -351,20 +351,58 @@ function validTemporaryUrl(
 function validThumbnailUrl(
   value: TemporaryUrl,
   item: AuthorizedBrowseItem,
-  credentials: ProviderCredentials,
   now: Date,
 ): TemporaryUrl | null {
   try {
-    return validTemporaryUrl(value, item, credentials, now);
-  } catch (error) {
+    const rawUrl = value?.url;
+    const rawExpiry = value?.expiresAt;
+    const expiryEpoch = Date.prototype.getTime.call(rawExpiry);
     if (
-      error instanceof DirectMediaError &&
-      item.source.provider === "onedrive"
+      !value ||
+      typeof value !== "object" ||
+      typeof rawUrl !== "string" ||
+      !(rawExpiry instanceof Date) ||
+      !Number.isFinite(expiryEpoch) ||
+      expiryEpoch <= now.getTime()
     ) {
-      return null;
+      throw directMediaError("INVALID_PROVIDER_URL");
     }
-    throw error;
+    const url = new URL(rawUrl);
+    if (
+      url.protocol !== "https:" ||
+      url.port !== "" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.hash !== "" ||
+      !(
+        item.source.provider === "google"
+          ? validGoogleThumbnailUrl(url)
+          : validOneDriveUrl(url, rawUrl)
+      )
+    ) {
+      throw directMediaError("INVALID_PROVIDER_URL");
+    }
+    return { url: rawUrl, expiresAt: new Date(expiryEpoch) };
+  } catch (error) {
+    const normalized = error instanceof DirectMediaError
+      ? error
+      : directMediaError("INVALID_PROVIDER_URL");
+    if (item.source.provider === "onedrive") return null;
+    throw normalized;
   }
+}
+
+function sealedPreview(
+  item: AuthorizedBrowseItem,
+  currentNow: Date,
+): TemporaryUrl | null {
+  const preview = item.claims.preview;
+  if (!preview || preview.expiresAt <= currentNow.getTime()) return null;
+  return validThumbnailUrl(
+    { url: preview.url, expiresAt: new Date(preview.expiresAt) },
+    item,
+    currentNow,
+  );
 }
 
 function unavailable(item: AuthorizedBrowseItem): DirectThumbnailItem {
@@ -402,13 +440,11 @@ export function createDirectMediaService(
     const items: DirectThumbnailItem[] = new Array(authorized.length);
 
     for (const group of groupsBySource(authorized)) {
-      const vendable = group.items.filter(
-        (entry) => entry.item.claims.kind !== "folder",
-      );
+      const vendable: typeof group.items = [];
       for (const entry of group.items) {
-        if (entry.item.claims.kind === "folder") {
-          items[entry.index] = unavailable(entry.item);
-        }
+        const preview = sealedPreview(entry.item, now());
+        if (preview) items[entry.index] = readyThumbnail(entry.item, preview);
+        else vendable.push(entry);
       }
       if (vendable.length === 0) continue;
 
@@ -461,7 +497,7 @@ export function createDirectMediaService(
             }
           }
           const safe = temporary
-            ? validThumbnailUrl(temporary, entry.item, credentials!, now())
+            ? validThumbnailUrl(temporary, entry.item, now())
             : null;
           items[entry.index] = safe
             ? readyThumbnail(entry.item, safe)
