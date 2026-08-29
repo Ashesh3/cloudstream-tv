@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { Script } from "node:vm";
 
 const directory = join(process.cwd(), "apps", "tv", "dist", "assets");
+const workerPath = join(process.cwd(), "apps", "tv", "dist", "cloudframe-media-sw.js");
 const files = await readdir(directory);
 const legacyEntry = files.find(name => /^index-legacy-.*\.js$/.test(name));
 const legacyPolyfills = files.find(name => /^polyfills-legacy-.*\.js$/.test(name));
@@ -38,6 +39,19 @@ if (compressedCss > 45 * 1024) {
   throw new Error(`TV CSS exceeds 45 KiB compressed: ${compressedCss}`);
 }
 
+const workerSource = await readFile(workerPath, "utf8");
+new Script(workerSource, { filename: "cloudframe-media-sw.js" });
+if (/\?\.|\?\?/.test(workerSource)) {
+  throw new Error("cloudframe-media-sw.js contains syntax newer than Chromium 68");
+}
+if (/\bglobalThis\b/.test(workerSource)) {
+  throw new Error("cloudframe-media-sw.js contains globalThis, which Chromium 68 does not support");
+}
+const compressedWorker = gzipSync(workerSource).byteLength;
+if (compressedWorker > 24 * 1024) {
+  throw new Error(`TV media worker exceeds 24 KiB compressed: ${compressedWorker}`);
+}
+
 process.stdout.write(
-  `TV bundle compatibility and budget check passed (${compressedJavaScript} B JS, ${compressedCss} B CSS compressed).\n`
+  `TV bundle compatibility and budget check passed (${compressedJavaScript} B JS, ${compressedCss} B CSS, ${compressedWorker} B media worker compressed).\n`
 );
