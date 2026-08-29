@@ -79,7 +79,10 @@ function validHttpsUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.length < 1 || value.length > 8192) return null;
   try {
     const url = new URL(value);
-    return url.protocol === "https:" && url.username === "" && url.password === "" && url.hash === ""
+    return url.protocol === "https:" &&
+      url.username === "" && url.password === "" && url.hash === "" &&
+      !url.searchParams.has("access_token") &&
+      !(url.origin === GOOGLE_ORIGIN && /^\/drive\/v3\/files\/[^/]{1,1024}$/u.test(url.pathname))
       ? value
       : null;
   } catch {

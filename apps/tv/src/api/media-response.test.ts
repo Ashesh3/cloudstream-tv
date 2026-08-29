@@ -32,6 +32,20 @@ describe("TV media response decoder", () => {
     }, { itemId: "item_video", kind: "video" })).toBeNull();
   });
 
+  it.each([
+    ["an access_token query", "https://provider.example/video?access_token=secret"],
+    ["a Google Drive media endpoint", "https://www.googleapis.com/drive/v3/files/file_123?alt=media&supportsAllDrives=true"],
+  ])("rejects a direct descriptor with %s", (_label, url) => {
+    expect(decodeDirectMediaUrlResponse({
+      itemId: "item_video",
+      kind: "video",
+      transport: "direct",
+      url,
+      expiresAt,
+      revision: null,
+    }, { itemId: "item_video", kind: "video" })).toBeNull();
+  });
+
   it("rejects expired, malformed, mismatched, or extra credential fields", () => {
     const base = {
       itemId: "item_video",
