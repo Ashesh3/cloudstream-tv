@@ -19,6 +19,33 @@ const ok = <T>(data: T, csrf?: string) => new Response(JSON.stringify({ ok: true
 });
 
 describe("admin API browser boundary", () => {
+  it("strictly decodes protected transcode diagnostics", async () => {
+    const diagnostic = {
+      active: { itemName: "MOV00516.MPG", provider: "google", stage: "encoding", windowIndex: 2, progressPercent: 61, speed: "1.4x" },
+      leaseDeviceName: "Living Room", queuedDemandedWindows: 3, busyRejections: 4,
+      cacheBytes: 1024, cacheMaxBytes: 50 * 1024 * 1024, lastErrorCode: "TRANSCODER_BUSY",
+    } as const;
+    const signal = new AbortController().signal;
+    const fetcher = vi.fn().mockResolvedValue(ok(diagnostic, "csrf-diagnostic"));
+    const client = createAdminApi(fetcher);
+
+    await expect(client.transcodeStatus(signal)).resolves.toEqual(diagnostic);
+    expect(fetcher).toHaveBeenCalledWith("/api/admin/transcodes/status", expect.objectContaining({ credentials: "include", signal }));
+
+    for (const mutation of [
+      { extra: true },
+      { active: { ...diagnostic.active, sessionId: "secret" } },
+      { active: { ...diagnostic.active, progressPercent: 101 } },
+      { active: { ...diagnostic.active, provider: "other" } },
+      { cacheBytes: -1 },
+      { cacheMaxBytes: Number.NaN },
+      { lastErrorCode: "lowercase-secret" },
+    ]) {
+      const invalid = createAdminApi(vi.fn().mockResolvedValue(ok({ ...diagnostic, ...mutation })));
+      await expect(invalid.transcodeStatus()).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
+    }
+  });
+
   it("uses strict first-run status and claim contracts", async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(ok({ state: "unconfigured" }))

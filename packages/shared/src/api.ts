@@ -143,6 +143,23 @@ export interface GoogleBearerMediaUrlResponse extends DirectMediaResponseBase {
   };
 }
 
+export interface TranscodeDiagnosticResponse {
+  active: null | {
+    itemName: string;
+    provider: ProviderKind;
+    stage: "probing" | "encoding";
+    windowIndex: number | null;
+    progressPercent: number | null;
+    speed: string | null;
+  };
+  leaseDeviceName: string | null;
+  queuedDemandedWindows: number;
+  busyRejections: number;
+  cacheBytes: number;
+  cacheMaxBytes: number;
+  lastErrorCode: string | null;
+}
+
 export interface HlsMediaSourceResponse {
   itemId: string;
   kind: "video";

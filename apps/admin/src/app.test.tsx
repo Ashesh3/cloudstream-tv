@@ -28,6 +28,7 @@ function api(initial = snapshot): AdminApi {
     claimInstallation: vi.fn().mockResolvedValue({ configured: true }),
     login: vi.fn().mockResolvedValue({ authenticated: true }), logout: vi.fn().mockResolvedValue({ authenticated: false }),
     snapshot: vi.fn().mockResolvedValue(initial), approveRequest: vi.fn().mockResolvedValue({ device }),
+    transcodeStatus: vi.fn().mockResolvedValue({ active: null, leaseDeviceName: null, queuedDemandedWindows: 0, busyRejections: 0, cacheBytes: 0, cacheMaxBytes: 53_687_091_200, lastErrorCode: null }),
     denyRequest: vi.fn().mockResolvedValue({ request: { ...initial.pendingRequests[0]!, status: "denied" } }),
     updateDevice: vi.fn().mockResolvedValue({ device }), revokeDevice: vi.fn().mockResolvedValue({ revoked: true }),
     updateSettings: vi.fn().mockResolvedValue({ revision: 8 }), rotatePassphrase: vi.fn().mockResolvedValue({ authenticated: false, revision: 8 }),
@@ -128,6 +129,7 @@ describe("admin snapshot workflows", () => {
     expect(screen.getByText("Approved roots").parentElement).toHaveTextContent("1");
     expect(screen.getByText("Pending requests").parentElement).toHaveTextContent("2");
     expect(document.body.textContent).not.toMatch(/data loss/i);
+    expect(await screen.findByRole("region", { name: "Transcoder status" })).toHaveTextContent("Transcoder ready");
   });
 
   it("performs a focused device mutation and then one snapshot refresh", async () => {

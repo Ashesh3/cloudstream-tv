@@ -145,6 +145,7 @@ export async function installAdminFixture(page: Page, scenario: AdminFixtureScen
       installationStatus: async () => ({ state: "configured" }),
       claimInstallation: async () => ({ configured: true }),
       login: async () => ({ authenticated: true }), logout: async () => ({ authenticated: false }), snapshot: async () => snapshot(),
+      transcodeStatus: async () => ({ active: { itemName: "MOV00516.MPG", provider: "google", stage: "encoding", windowIndex: 2, progressPercent: 61, speed: "1.4x" }, leaseDeviceName: "Living Room", queuedDemandedWindows: 1, busyRejections: 0, cacheBytes: 1_572_864, cacheMaxBytes: 53_687_091_200, lastErrorCode: null }),
       updateSettings: async body => { Object.assign(household, body); revision += 1; return { revision }; }, rotatePassphrase: async () => ({ authenticated: false, revision: ++revision }),
       authorizeSource: async provider => ({ authorizationUrl: provider === "google" ? "https://accounts.google.com/o/oauth2/v2/auth?client_id=test" : "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test" }), sourceImpact: async () => ({ roots, devices }), removeSource: async () => ({ removed: true, roots, devices }),
       providerFolders: async (_id, input) => {

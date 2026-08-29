@@ -56,7 +56,7 @@ async function harness() {
     mutate: async () => { throw new Error("unused"); },
   };
   const auth: ControlAuth = {
-    admin: async () => { throw new Error("unused"); },
+    admin: vi.fn().mockResolvedValue({ householdId: "h1", sessionId: "admin-session-1", adminPassphraseVersion: 1, csrfToken: "csrf-refresh" }),
     device: vi.fn().mockResolvedValue(device),
     login: async () => { throw new Error("unused"); },
     logout: () => { throw new Error("unused"); },
@@ -66,6 +66,10 @@ async function harness() {
     heartbeat: vi.fn(),
     segment: vi.fn().mockResolvedValue({ path: segmentPath, sizeBytes: 188, sha256: "b".repeat(64), durationMs: 4_000, segmentIndex: 0 }),
     release: vi.fn().mockResolvedValue(undefined),
+    diagnostic: vi.fn().mockReturnValue({
+      active: { sessionIdSuffix: "12345678", itemName: "MOV00516.MPG", provider: "google", stage: "encoding", windowIndex: 2, progressPercent: 61, speed: "1.4x" },
+      leaseDeviceName: "Living Room", queuedDemandedWindows: 3, busyRejections: 4, cacheBytes: 1024, lastErrorCode: "TRANSCODER_BUSY",
+    }),
   } as unknown as TranscodeCoordinator;
   const sourceAuthorizer = {
     validateCurrent: vi.fn().mockReturnValue({}),
@@ -79,6 +83,7 @@ async function harness() {
     sourceAuthorizer,
     coordinator,
     cache,
+    cacheMaxBytes: 50 * 1024 * 1024,
     allowedOrigin: origin,
     now: () => TEST_NOW,
   });
@@ -90,6 +95,24 @@ function request(path: string, method = "GET", headers: HeadersInit = {}) {
 }
 
 describe("authenticated HLS routes", () => {
+  it("protects the strict admin diagnostic DTO and omits internal identifiers", async () => {
+    const current = await harness();
+    vi.mocked(current.auth.admin).mockRejectedValueOnce(Object.assign(new Error("unauthorized"), { code: "ADMIN_UNAUTHORIZED" }));
+    expect((await current.app(request("/api/admin/transcodes/status")))?.status).toBe(401);
+
+    const response = await current.app(request("/api/admin/transcodes/status"));
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("cache-control")).toBe("private, no-store");
+    expect(response?.headers.get("x-csrf-token")).toBe("csrf-refresh");
+    expect(await response?.json()).toEqual({ ok: true, data: {
+      active: { itemName: "MOV00516.MPG", provider: "google", stage: "encoding", windowIndex: 2, progressPercent: 61, speed: "1.4x" },
+      leaseDeviceName: "Living Room", queuedDemandedWindows: 3, busyRejections: 4,
+      cacheBytes: 1024, cacheMaxBytes: 50 * 1024 * 1024, lastErrorCode: "TRANSCODER_BUSY",
+    } });
+    const serialized = JSON.stringify(await current.coordinator.diagnostic());
+    expect(JSON.stringify(await (await current.app(request("/api/admin/transcodes/status")))?.json())).not.toMatch(/12345678|providerNodeId|sourceUrl|cacheKey|capability|stderr|cookie|bearer|access_token/i);
+    expect(serialized).toContain("12345678");
+  });
   it("serves master and complete media playlists with private same-origin headers", async () => {
     const current = await harness();
     const master = await current.app(request(`/api/tv/transcodes/${current.session.id}/master.m3u8`));

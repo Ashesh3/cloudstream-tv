@@ -1,14 +1,18 @@
 import { type FormEvent, useEffect, useState } from "react";
 import type { AdminSnapshotResponse, ControlHouseholdDto, MediaOrder, UpdateAdminSettingsBody } from "@cloudframe/shared";
+import type { AdminApi } from "../api/client";
 import { PageHeader } from "./requests";
 import { AlertTriangleIcon, CloudIcon, FolderOpenIcon, LogOutIcon, MonitorIcon, ShieldCheckIcon, TimerIcon } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { TranscodeDiagnostics } from "./transcode-diagnostics";
 
-export function Settings({ household, snapshot, onSave, onRotate, onLogout }: {
+export function Settings({ api, household, snapshot, onUnauthorized, onSave, onRotate, onLogout }: {
+  api: AdminApi;
   household: ControlHouseholdDto;
   snapshot: AdminSnapshotResponse;
+  onUnauthorized(): void;
   onSave(value: UpdateAdminSettingsBody): Promise<void>;
   onRotate(current: string, next: string): Promise<void>;
   onLogout(): Promise<void>;
@@ -18,7 +22,27 @@ export function Settings({ household, snapshot, onSave, onRotate, onLogout }: {
   const [seconds, setSeconds] = useState(household.defaultSlideshowSeconds.toString());
   const [current, setCurrent] = useState(""); const [next, setNext] = useState("");
   const [pending, setPending] = useState(""); const [error, setError] = useState("");
+  const [diagnostic, setDiagnostic] = useState<Awaited<ReturnType<AdminApi["transcodeStatus"]>> | null>(null);
+  const [diagnosticError, setDiagnosticError] = useState("");
   useEffect(() => { setAllowed(household.allowNewDeviceRequests); setOrder(household.defaultMediaOrder); setSeconds(household.defaultSlideshowSeconds.toString()); }, [household]);
+  useEffect(() => {
+    let disposed = false;
+    let controller: AbortController | null = null;
+    const poll = () => {
+      controller?.abort();
+      controller = new AbortController();
+      void api.transcodeStatus(controller.signal).then(value => {
+        if (!disposed) { setDiagnostic(value); setDiagnosticError(""); }
+      }).catch(cause => {
+        if (disposed || controller?.signal.aborted) return;
+        if (typeof cause === "object" && cause !== null && "status" in cause && (cause as { status: unknown }).status === 401) { onUnauthorized(); return; }
+        setDiagnosticError("Transcoder status is temporarily unavailable.");
+      });
+    };
+    poll();
+    const timer = window.setInterval(poll, 5_000);
+    return () => { disposed = true; controller?.abort(); window.clearInterval(timer); };
+  }, [api, onUnauthorized]);
   const save = async (event: FormEvent) => { event.preventDefault(); setPending("defaults"); setError(""); try { await onSave({ allowNewDeviceRequests: allowed, defaultMediaOrder: order, defaultSlideshowSeconds: Number(seconds) }); } catch (cause) { setError(safeFailure(cause, "Settings could not be saved.")); } finally { setPending(""); } };
   const rotate = async (event: FormEvent) => { event.preventDefault(); if (current.length < 16 || next.length < 16) { setError("Both passphrases must be at least 16 characters."); return; } setPending("passphrase"); setError(""); try { await onRotate(current, next); setCurrent(""); setNext(""); } catch (cause) { setError(safeFailure(cause, "Passphrase could not be changed.")); } finally { setPending(""); } };
   const counts = {
@@ -31,6 +55,7 @@ export function Settings({ household, snapshot, onSave, onRotate, onLogout }: {
     {error && <Alert variant="destructive"><AlertTriangleIcon /><AlertDescription>{error}</AlertDescription></Alert>}
     <div className="settings-grid"><form className="settings-card" onSubmit={save}><CardHeader><CardTitle>Household defaults</CardTitle><CardDescription>Enrollment and playback choices inherited by televisions.</CardDescription></CardHeader><CardContent className="grid gap-4"><div className="toggle-row"><span><label htmlFor="allow-device-requests"><strong>Allow new device requests</strong></label><small id="allow-device-requests-help">Unapproved televisions can request access for 30 minutes.</small></span><input id="allow-device-requests" aria-describedby="allow-device-requests-help" type="checkbox" checked={allowed} onChange={event => setAllowed(event.target.checked)} /></div><label className="field">Default ordering<select value={order} onChange={event => setOrder(event.target.value as MediaOrder)}><option value="captured-desc">Newest captured first</option><option value="captured-asc">Oldest captured first</option><option value="name-asc">Name A–Z</option></select></label><label className="field">Default slideshow seconds<input type="number" min="1" max="3600" value={seconds} onChange={event => setSeconds(event.target.value)} /></label></CardContent><CardFooter><Button disabled={pending === "defaults"}>{pending === "defaults" ? "Saving…" : "Save defaults"}</Button></CardFooter></form>
       <Card className="control-truth-ledger"><CardHeader><CardTitle className="flex items-center gap-2"><ShieldCheckIcon className="size-4" />Current household status</CardTitle><CardDescription>Browser-safe access truth from the active service.</CardDescription></CardHeader><CardContent><div className="metric-grid"><Truth icon={<MonitorIcon />} value={counts.devices} label="Approved devices" /><Truth icon={<CloudIcon />} value={counts.sources} label="Connected sources" /><Truth icon={<FolderOpenIcon />} value={counts.roots} label="Approved roots" /><Truth icon={<TimerIcon />} value={counts.requests} label="Pending requests" /></div><div className="recovery-ledger" data-storage-mode={snapshot.storage.mode}><strong>Local encrypted storage</strong><p>Control state is encrypted and persisted on this server at revision {snapshot.storage.revision}.</p></div></CardContent></Card>
+      <TranscodeDiagnostics diagnostic={diagnostic} error={diagnosticError} />
       <form className="settings-card border-destructive/30" onSubmit={rotate}><CardHeader><CardTitle className="flex items-center gap-2 text-destructive"><ShieldCheckIcon className="size-4" />Change passphrase</CardTitle><CardDescription>Changing it signs out every admin session, including this one.</CardDescription></CardHeader><CardContent className="grid gap-4"><label className="field">Current passphrase<input type="password" autoComplete="current-password" value={current} onChange={event => setCurrent(event.target.value)} /></label><label className="field">New passphrase<input type="password" autoComplete="new-password" value={next} onChange={event => setNext(event.target.value)} /></label></CardContent><CardFooter><Button variant="destructive" disabled={pending === "passphrase"}>{pending === "passphrase" ? "Changing…" : "Change passphrase"}</Button></CardFooter></form>
       <Card><CardHeader><CardTitle>Admin session</CardTitle><CardDescription>Sign out of this browser without affecting approved televisions.</CardDescription></CardHeader><CardFooter><Button variant="outline" onClick={() => void onLogout()}><LogOutIcon data-icon="inline-start" />Sign out</Button></CardFooter></Card>
     </div>

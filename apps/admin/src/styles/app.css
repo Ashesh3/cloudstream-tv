@@ -180,6 +180,15 @@
 .metric-grid svg { width: 1rem; height: 1rem; }
 .recovery-ledger { display: grid; gap: .35rem; padding: 1rem; border: 1px solid var(--hairline); background: #111314; }
 .recovery-ledger p { color: var(--muted-foreground); }
+.transcode-diagnostics { grid-column: 1 / -1; }
+.transcode-diagnostics-primary { display: grid; gap: .35rem; padding: 1rem; border: 1px solid var(--hairline); background: #111314; }
+.transcode-diagnostics-primary strong { color: var(--program); font-family: var(--font-heading); font-size: 1.35rem; }
+.transcode-diagnostics-primary span, .transcode-diagnostics-note, .transcode-diagnostics-error { color: var(--muted-foreground); }
+.transcode-diagnostics-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 1px; margin-top: 1px; background: var(--hairline); }
+.transcode-diagnostics-grid > div { min-width: 0; padding: .85rem; background: #111314; }
+.transcode-diagnostics-grid dt { color: var(--ash); font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; }
+.transcode-diagnostics-grid dd { margin: .3rem 0 0; overflow-wrap: anywhere; color: var(--foreground); font-variant-numeric: tabular-nums; }
+.transcode-diagnostics-note, .transcode-diagnostics-error { margin-top: 1rem; font-size: .82rem; }
 .recovery-ledger[data-recovery-status="delayed"] { border-color: var(--warning-border); background: var(--warning-surface); color: var(--warning-foreground); }
 .recovery-ledger[data-recovery-status="delayed"] p { color: var(--warning-muted); }
 .recovery-copy-delayed { padding: .8rem 1rem; border-top: 1px solid var(--warning-border); background: var(--warning-surface); color: var(--warning-foreground); }
@@ -270,6 +279,7 @@
   .attention-cue { display: none; }
   .device-ledger, .settings-grid { grid-template-columns: 1fr; }
   .metric-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .transcode-diagnostics-grid { grid-template-columns: repeat(2,minmax(0,1fr)); }
   .workbench-planes { grid-template-columns: 1fr; }
   .provider-stage-plane { min-height: 31rem; border-right: 0; border-bottom: 1px solid rgb(49 41 31 / .42); }
 }

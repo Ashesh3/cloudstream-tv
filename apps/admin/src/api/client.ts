@@ -13,7 +13,8 @@ import type {
   ProviderFolderDto,
   ProviderKind,
   UpdateAdminSettingsBody,
-  UpdateDeviceBody
+  UpdateDeviceBody,
+  TranscodeDiagnosticResponse
 } from "@cloudframe/shared";
 import { assertProviderAuthorizationUrl } from "@cloudframe/shared";
 
@@ -48,6 +49,7 @@ export interface AdminApi {
   login(passphrase: string): Promise<{ authenticated: true }>;
   logout(): Promise<{ authenticated: false }>;
   snapshot(): Promise<AdminSnapshotResponse>;
+  transcodeStatus(signal?: AbortSignal): Promise<TranscodeDiagnosticResponse>;
   approveRequest(requestId: string, body: ApproveDeviceRequestBody): Promise<{ device: ControlDeviceDto }>;
   denyRequest(requestId: string): Promise<{ request: ControlRequestDto }>;
   updateDevice(deviceId: string, body: UpdateDeviceBody): Promise<{ device: ControlDeviceDto }>;
@@ -118,6 +120,7 @@ export function createAdminApi(fetcher: Fetcher = fetch): AdminApi {
     login: passphrase => request("/api/admin/login", authenticatedTrue, { method: "POST", body: json({ passphrase }) }),
     logout: () => request("/api/admin/logout", authenticatedFalse, { method: "POST", body: json({}) }),
     snapshot: () => request("/api/admin/snapshot", adminSnapshot),
+    transcodeStatus: signal => request("/api/admin/transcodes/status", transcodeDiagnostic, { signal }),
     approveRequest: (id, body) => request(`/api/admin/requests/${encodeURIComponent(id)}/approve`, deviceResult, { method: "POST", body: json(body) }),
     denyRequest: id => request(`/api/admin/requests/${encodeURIComponent(id)}/deny`, requestResult, { method: "POST", body: json({}) }),
     updateDevice: (id, body) => request(`/api/admin/devices/${encodeURIComponent(id)}`, deviceResult, { method: "PATCH", body: json(body) }),
@@ -256,8 +259,10 @@ function plainDataRecord(value: unknown): value is Record<string, unknown> {
   return true;
 }
 const stringValue = (value: unknown) => { if (typeof value !== "string") throw new Error("string"); return value; };
+const boundedString = (value: unknown, minimum: number, maximum: number) => { const result = stringValue(value); if (result.length < minimum || result.length > maximum) throw new Error("string bounds"); return result; };
 const booleanValue = (value: unknown) => { if (typeof value !== "boolean") throw new Error("boolean"); return value; };
 const nonNegativeNumber = (value: unknown) => { if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error("number"); return value; };
+const boundedNumber = (value: unknown, minimum: number, maximum: number) => { if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) throw new Error("number bounds"); return value; };
 const integerValue = (value: unknown) => { const number = nonNegativeNumber(value); if (!Number.isSafeInteger(number)) throw new Error("integer"); return number; };
 const nullableString = (value: unknown) => value === null ? null : stringValue(value);
 const arrayOf = <T,>(value: unknown, decode: Decoder<T>) => { if (!ordinaryArray(value)) throw new Error("array"); return value.map(decode); };
@@ -320,6 +325,28 @@ function adminSnapshot(value: unknown): AdminSnapshotResponse {
   const storage = localStorage(record.storage);
   if (storage.revision !== revision) throw new Error("storage");
   return { revision, household: household(record.household), pendingRequests: arrayOf(record.pendingRequests, requestDto), devices: arrayOf(record.devices, deviceDto), sources: arrayOf(record.sources, sourceDto), roots: arrayOf(record.roots, rootDto), storage };
+}
+function transcodeDiagnostic(value: unknown): TranscodeDiagnosticResponse {
+  const record = exactRecord(value, ["active", "leaseDeviceName", "queuedDemandedWindows", "busyRejections", "cacheBytes", "cacheMaxBytes", "lastErrorCode"]);
+  const active = record.active === null ? null : (() => {
+    const current = exactRecord(record.active, ["itemName", "provider", "stage", "windowIndex", "progressPercent", "speed"]);
+    const itemName = boundedString(current.itemName, 1, 512);
+    const windowIndex = current.windowIndex === null ? null : integerValue(current.windowIndex);
+    const progressPercent = current.progressPercent === null ? null : boundedNumber(current.progressPercent, 0, 100);
+    const speed = current.speed === null ? null : boundedString(current.speed, 1, 64);
+    return { itemName, provider: enumValue(current.provider, ["google", "onedrive"] as const), stage: enumValue(current.stage, ["probing", "encoding"] as const), windowIndex, progressPercent, speed };
+  })();
+  const lastErrorCode = record.lastErrorCode === null ? null : boundedString(record.lastErrorCode, 1, 64);
+  if (lastErrorCode !== null && !/^[A-Z][A-Z0-9_]*$/u.test(lastErrorCode)) throw new Error("error code");
+  return {
+    active,
+    leaseDeviceName: record.leaseDeviceName === null ? null : boundedString(record.leaseDeviceName, 1, 256),
+    queuedDemandedWindows: integerValue(record.queuedDemandedWindows),
+    busyRejections: integerValue(record.busyRejections),
+    cacheBytes: integerValue(record.cacheBytes),
+    cacheMaxBytes: integerValue(record.cacheMaxBytes),
+    lastErrorCode,
+  };
 }
 function deviceResult(value: unknown) { const record = exactRecord(value, ["device"]); return { device: deviceDto(record.device) }; }
 function requestResult(value: unknown) { const record = exactRecord(value, ["request"]); return { request: requestDto(record.request) }; }

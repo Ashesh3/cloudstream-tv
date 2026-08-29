@@ -10,7 +10,7 @@ import { renderMasterPlaylist, renderMediaPlaylist } from "../transcode/manifest
 import type { TranscodeSourceAuthorizer } from "../transcode/source-authorizer.ts";
 import { TranscodeError } from "../transcode/types.ts";
 import { HttpError } from "./errors.ts";
-import { errorResponse } from "./response.ts";
+import { errorResponse, ok } from "./response.ts";
 
 const PLAYLIST_HEADERS = {
   "content-type": "application/vnd.apple.mpegurl; charset=utf-8",
@@ -24,17 +24,42 @@ export function createTranscodeApiApp(options: {
   requestContext: ControlRequestContextScope;
   auth: ControlAuth;
   sourceAuthorizer: Pick<TranscodeSourceAuthorizer, "validateCurrent">;
-  coordinator: Pick<TranscodeCoordinator, "session" | "heartbeat" | "segment" | "release">;
+  coordinator: Pick<TranscodeCoordinator, "session" | "heartbeat" | "segment" | "release" | "diagnostic">;
   cache: Pick<TranscodeCache, "pinServed">;
+  cacheMaxBytes: number;
   allowedOrigin: string;
   now?: () => Date;
 }) {
   const now = options.now ?? (() => new Date());
   return async (request: Request): Promise<Response | null> => {
     const url = new URL(request.url);
-    if (!url.pathname.startsWith("/api/tv/transcodes/")) return null;
+    const adminDiagnostic = url.pathname === "/api/admin/transcodes/status";
+    if (!adminDiagnostic && !url.pathname.startsWith("/api/tv/transcodes/")) return null;
     try {
       if (url.search) throw new HttpError(400, "INVALID_QUERY", "Query parameters are not accepted.");
+      if (adminDiagnostic) {
+        requireMethod(request, "admin-status");
+        const context = await options.requestContext.runRequest(() => loadControlRequestContext(options.controlStore, options.requestContext));
+        const admin = await options.auth.admin(request, context, now());
+        const diagnostic = options.coordinator.diagnostic();
+        const active = diagnostic.active ? {
+          itemName: diagnostic.active.itemName,
+          provider: diagnostic.active.provider,
+          stage: diagnostic.active.stage,
+          windowIndex: diagnostic.active.windowIndex,
+          progressPercent: diagnostic.active.progressPercent,
+          speed: diagnostic.active.speed,
+        } : null;
+        return ok({
+          active,
+          leaseDeviceName: diagnostic.leaseDeviceName,
+          queuedDemandedWindows: diagnostic.queuedDemandedWindows,
+          busyRejections: diagnostic.busyRejections,
+          cacheBytes: diagnostic.cacheBytes,
+          cacheMaxBytes: options.cacheMaxBytes,
+          lastErrorCode: diagnostic.lastErrorCode,
+        }, { headers: { "x-csrf-token": admin.csrfToken, "cache-control": "private, no-store" } });
+      }
       const match = /^\/api\/tv\/transcodes\/([A-Za-z0-9_-]{16,128})(?:\/(master\.m3u8|stream\.m3u8|heartbeat|segments\/(\d+)\.ts))?$/.exec(url.pathname);
       if (!match) {
         if (/\/segments\/-?\d+\.ts$/.test(url.pathname)) {
@@ -108,6 +133,7 @@ function mapError(error: unknown): HttpError {
     return new HttpError(status, error.code, "Transcoded playback request failed.", error.code === "TRANSCODER_BUSY" ? 5 : undefined, error.code === "TRANSCODER_BUSY" ? { "retry-after": "5" } : undefined);
   }
   if (error instanceof Error && "code" in error && (error as { code?: unknown }).code === "DEVICE_UNAUTHORIZED") return new HttpError(401, "DEVICE_UNAUTHORIZED", "Device is not authorized.");
+  if (error instanceof Error && "code" in error && String((error as { code?: unknown }).code).startsWith("ADMIN_")) return new HttpError(401, "ADMIN_UNAUTHORIZED", "Administrator authentication is required.");
   if (error instanceof Error && "code" in error) return new HttpError(401, String((error as { code: unknown }).code), "Device is not authorized.");
   return new HttpError(500, "INTERNAL_ERROR", "An unexpected error occurred.");
 }

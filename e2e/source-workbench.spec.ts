@@ -7,6 +7,12 @@ test("live source folders are immediately available with explicit removal impact
   await page.getByLabel(/passphrase/i).fill("synthetic acceptance passphrase");
   await page.getByRole("button", { name: /sign in/i }).click();
 
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const diagnostics = page.getByRole("region", { name: "Transcoder status" });
+  await expect(diagnostics).toContainText("MOV00516.MPG");
+  await expect(diagnostics).toContainText("Encoding window 3");
+  await expect(diagnostics.locator("button, a, input, select, textarea, [tabindex]:not([tabindex='-1'])")).toHaveCount(0);
+
   await page.getByRole("button", { name: "Sources", exact: true }).click();
   await page.getByRole("button", { name: "Browse & choose folders" }).click();
   const region = page.getByRole("region", { name: "Choose source folders" });

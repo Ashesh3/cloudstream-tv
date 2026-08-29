@@ -217,7 +217,7 @@ export async function createSelfHostedComposition(
       now,
       requestSubject,
     });
-    const transcodeHandler = createTranscodeApiApp({ controlStore, requestContext, auth, sourceAuthorizer, coordinator, cache: transcodeCache, allowedOrigin: config.appOrigin, now });
+    const transcodeHandler = createTranscodeApiApp({ controlStore, requestContext, auth, sourceAuthorizer, coordinator, cache: transcodeCache, cacheMaxBytes: config.transcode.cacheMaxBytes, allowedOrigin: config.appOrigin, now });
     const app = createSelfHostedApp({
       readiness,
       setupApp,
