@@ -41,6 +41,7 @@ yarn-error.log*
 
 # local design and test artifacts
 .superpowers/
+/.worktrees/
 .firebase/
 firebase-debug.log*
 playwright-report/
