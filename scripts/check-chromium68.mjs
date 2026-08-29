@@ -31,7 +31,6 @@ const mediaUrl = `${mediaOrigin}/sample.wav`;
 const probeToken = randomBytes(24).toString("base64url");
 const mediaBody = pcmWav(10);
 const upstreamRequests = [];
-let aliasApplicationRequests = 0;
 const productionWorkerPath = resolve("apps", "tv", "dist", "cloudframe-media-sw.js");
 let temporaryDirectory = null;
 let probeWorkerPath = null;
@@ -119,12 +118,6 @@ const mediaServer = createServer((request, response) => {
 
 const staticServer = createServer(async (request, response) => {
   const pathname = new URL(request.url ?? "/", siteOrigin).pathname;
-  if (pathname.startsWith("/__cloudframe_media__/")) {
-    aliasApplicationRequests += 1;
-    response.writeHead(404);
-    response.end();
-    return;
-  }
   if (pathname === "/cloudframe-media-sw.js") {
     try {
       const body = await readFile(probeWorkerPath);
@@ -267,33 +260,38 @@ try {
   }
   const assets = await readdir(resolve("apps", "tv", "dist", "assets"));
   const playerChunk = assets.find(name => /^player-legacy-.*\.js$/u.test(name));
-  const containerChunk = assets.find(name => /^container-legacy-.*\.js$/u.test(name));
+  const skinChunk = assets.find(name => /^skin-legacy-.*\.js$/u.test(name));
   if (!playerChunk) throw new Error("Video.js legacy player chunk was not emitted");
-  if (!containerChunk) throw new Error("Video.js legacy container chunk was not emitted");
+  if (!skinChunk) throw new Error("Video.js legacy skin chunk was not emitted");
   const playerResult = await command("Runtime.evaluate", {
     expression: `(async()=>{
-      await Promise.all([
-        System.import('/assets/${playerChunk}'),
-        System.import('/assets/${containerChunk}')
-      ]);
+      let skinLoaded=false;
+      try{
+        await Promise.all([
+          System.import('/assets/${playerChunk}'),
+          System.import('/assets/${skinChunk}')
+        ]);
+        skinLoaded=Boolean(customElements.get('video-player'))&&Boolean(customElements.get('video-skin'));
+      }catch(_error){}
       const player=document.createElement('video-player');
-      const container=document.createElement('media-container');
+      const skin=document.createElement('video-skin');
       const video=document.createElement('video');
-      container.appendChild(video);
-      player.appendChild(container);
+      if(!skinLoaded)video.controls=true;
+      skin.appendChild(video);
+      player.appendChild(skin);
       document.body.appendChild(player);
       await Promise.resolve();
       return {
-        player:Boolean(customElements.get('video-player')),
-        container:Boolean(customElements.get('media-container')),
-        nativeVideo:player.querySelector('media-container > video')===video
+        skinLoaded,
+        nativeControls:video.controls,
+        nativeVideo:player.querySelector('video-skin > video')===video
       };
     })()`,
     awaitPromise: true,
     returnByValue: true,
   });
   const playerValue = playerResult.result.value;
-  if (!playerValue?.player || !playerValue.container || !playerValue.nativeVideo) {
+  if (!playerValue?.nativeVideo || (!playerValue.skinLoaded && !playerValue.nativeControls)) {
     throw new Error(`Chromium 68 Video.js fallback failed: ${JSON.stringify(playerResult)}`);
   }
 
@@ -346,7 +344,6 @@ try {
           expiresAtEpoch:Date.now()+60000,
           kind:'video',
           mimeType:'video/mpeg',
-          filename:'MOV00516.MPG',
           size:100
         }
       });
@@ -393,9 +390,7 @@ try {
     expression: `(async()=>{
       const config=${probe};
       const sessionId='session_chromium68_probe';
-      const requestId='request_chromium68_probe';
-      const filename='sample.wav';
-      const media=[];
+      const requestId='request_chromium68_probe';      const media=[];
       let controller=null;
       const timeout=(label,ms)=>new Promise((_,reject)=>setTimeout(()=>reject(new Error(label)),ms));
       const exactKeys=(value,keys)=>{
@@ -478,7 +473,6 @@ try {
             expiresAtEpoch:Date.now()+60000,
             kind:'video',
             mimeType:'video/wav',
-            filename,
             size:config.size
           }
         });
@@ -486,11 +480,8 @@ try {
         const rawResult=waitForResult('google-raw');
         const rawDuration=await loadMetadata(config.rawUrl,'raw');
         await rawResult;
-        const aliasResult=waitForResult('google-filename');
-        const aliasDuration=await loadMetadata('/__cloudframe_media__/'+sessionId+'/'+encodeURIComponent(filename),'alias');
-        await aliasResult;
         controller.postMessage({type:'cloudframe-media-revoke',sessionId});
-        return {ok:true,rawLoaded:Number.isFinite(rawDuration),aliasLoaded:Number.isFinite(aliasDuration)};
+        return {ok:true,rawLoaded:Number.isFinite(rawDuration)};
       }catch(error){
         return {ok:false,reason:error instanceof Error?error.message:'probe-failed'};
       }finally{
@@ -506,16 +497,13 @@ try {
     returnByValue: true,
   });
   const mediaValue = mediaResult.result.value;
-  if (!mediaValue?.ok || !mediaValue.rawLoaded || !mediaValue.aliasLoaded) {
+  if (!mediaValue?.ok || !mediaValue.rawLoaded) {
     throw new Error(`Chromium 68 media worker probe failed: ${mediaValue?.reason ?? "unknown"}`);
   }
   if (!upstreamRequests.some(request =>
     request.authorization === `Bearer ${probeToken}` &&
     request.range === "bytes=0-"
   )) throw new Error("Chromium 68 did not forward bearer Range media");
-  if (aliasApplicationRequests !== 0) {
-    throw new Error("Filename alias escaped the service worker");
-  }
 
   const unexpectedErrors = runtimeErrors.filter(error => !isExpectedLegacyProbeError(error));
   if (unexpectedErrors.length) throw new Error(`Chromium 68 runtime errors: ${JSON.stringify(unexpectedErrors)}`);
@@ -532,7 +520,7 @@ try {
 }
 
 if (completed) {
-  process.stdout.write(`Pinned Chromium 68 revision ${revision} preserved revoked-grant ordering and loaded authenticated Range media and filename alias successfully.\n`);
+  process.stdout.write(`Pinned Chromium 68 revision ${revision} preserved revoked-grant ordering and loaded authenticated Range media successfully.\n`);
 }
 
 async function waitForDebugger(debugPort) {

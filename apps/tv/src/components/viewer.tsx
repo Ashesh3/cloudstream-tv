@@ -15,7 +15,6 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "p
 
 import type { TvApi } from "../api/client";
 import { GoogleMediaBridgeError, type GoogleMediaBridge, type PreparedGoogleMediaSource } from "../media/google-media-bridge";
-import { isLegacyMpeg } from "../media/google-media-protocol";
 import type { LocalWatchHistory } from "../state/local-watch-history";
 import { ImageViewer } from "./image-viewer";
 import { VideoPlayer } from "./video-player";
@@ -53,6 +52,7 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
   const lastVideoElements = useRef<Record<string, HTMLVideoElement>>({});
   const inflightUrls = useRef<Record<string, { requestId: number; controller: AbortController }>>({});
   const startedUrlRequests = useRef<Record<string, boolean>>({});
+  const requestedHlsFallback = useRef<Record<string, boolean>>({});
   const preparedSessions = useRef<Record<string, string>>({});
   const hlsSessions = useRef<Record<string, string>>({});
   const hlsHeartbeats = useRef<Record<string, number>>({});
@@ -63,6 +63,7 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
   const latestResumeOverrides = useRef<Record<string, number>>({});
   const latestVideoPositions = useRef<Record<string, number>>({});
   const pendingMediaEvidence = useRef<Record<string, string>>({});
+  const confirmedDecoderFailures = useRef<Record<string, boolean>>({});
   const lastSavedSnapshots = useRef<Record<string, string>>({});
   const [resumeOverrides, setResumeOverrides] = useState<Record<string, number>>({});
   const closed = useRef(false);
@@ -97,13 +98,13 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
 
   const releaseHlsSession = useCallback((nodeId: string) => {
     const sessionId = hlsSessions.current[nodeId];
-    if (!sessionId) return;
-    delete hlsSessions.current[nodeId];
     const timer = hlsHeartbeats.current[nodeId];
     if (timer !== undefined) {
       window.clearInterval(timer);
       delete hlsHeartbeats.current[nodeId];
     }
+    if (!sessionId) return;
+    delete hlsSessions.current[nodeId];
     void api.releaseTranscode(sessionId).catch(() => undefined);
   }, [api]);
 
@@ -145,6 +146,23 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
     return invalidateNavigation();
   }, [invalidateNavigation]);
 
+  const startHlsHeartbeat = useCallback((nodeId: string) => {
+    const sessionId = hlsSessions.current[nodeId];
+    if (!sessionId || hlsHeartbeats.current[nodeId] !== undefined) return;
+    const heartbeat = () => {
+      void api.heartbeatTranscode(sessionId).catch(error => {
+        if (!mounted.current || hlsSessions.current[nodeId] !== sessionId) return;
+        if (propagateUnauthorized(error)) return;
+        if (isTranscodeSessionExpired(error)) {
+          releaseHlsSession(nodeId);
+          dispatch({ type: "media-error", nodeId, kind: "transcode" });
+        }
+      });
+    };
+    heartbeat();
+    hlsHeartbeats.current[nodeId] = window.setInterval(heartbeat, 15_000);
+  }, [api, propagateUnauthorized, releaseHlsSession]);
+
   const saveElementHistory = useCallback((itemId: string, element: HTMLVideoElement | null) => {
     if (!element || unauthorized.current || !Number.isFinite(element.currentTime) || element.currentTime < 0 || !Number.isFinite(element.duration) || element.duration <= 0) return;
     latestVideoPositions.current[itemId] = element.currentTime;
@@ -176,9 +194,6 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
 
   const videoRef = useCallback((element: HTMLVideoElement | null) => {
     associateVideo(active.id, element);
-    if (element && active.kind === "video" && playbackIntentRef.current === "play") {
-      void element.play().catch(() => dispatch({ type: "media-error", nodeId: active.id, kind: "generic" }));
-    }
   }, [active.id, active.kind, associateVideo]);
 
   function videoElementFor(itemId: string): HTMLVideoElement | null {
@@ -217,7 +232,8 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
         return;
       }
       const mediaKind: "image" | "video" = expected.kind;
-      void api.mediaUrl(handle, controller.signal, { itemId: expected.id, kind: expected.kind }).then(async result => {
+      const fallback = requestedHlsFallback.current[nodeId] ? { fallback: "hls" as const } : undefined;
+      void api.mediaUrl(handle, controller.signal, { itemId: expected.id, kind: expected.kind }, fallback).then(async result => {
         let prepared: (PreparedGoogleMediaSource & { playbackSessionId?: undefined }) | { sourceUrl: string; sourceKind: "direct" | "hls"; sessionId: null; playbackSessionId?: string };
         if (result.transport === "google-bearer") {
           if (!expected.mimeType) throw new GoogleMediaBridgeError("GOOGLE_MEDIA_BRIDGE_INVALID");
@@ -250,14 +266,7 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
           if (displacedNodeId) delete preparedSessions.current[displacedNodeId];
           preparedSessions.current[nodeId] = prepared.sessionId;
         }
-        if (prepared.playbackSessionId) {
-          const playbackSessionId = prepared.playbackSessionId;
-          hlsSessions.current[nodeId] = playbackSessionId;
-          void api.heartbeatTranscode(playbackSessionId).catch(() => undefined);
-          hlsHeartbeats.current[nodeId] = window.setInterval(() => {
-            void api.heartbeatTranscode(playbackSessionId).catch(() => undefined);
-          }, 15_000);
-        }
+        if (prepared.playbackSessionId) hlsSessions.current[nodeId] = prepared.playbackSessionId;
         dispatch({
           type: "url-ready",
           nodeId,
@@ -348,9 +357,13 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
   useEffect(() => {
     const element = videoElementFor(active.id);
     if (!element || active.kind !== "video") return;
-    if (state.playbackIntent === "play") void element.play().catch(() => dispatch({ type: "media-error", nodeId: active.id, kind: "generic" }));
+    if (activeUrl?.status === "ready" && activeUrl.sourceKind === "hls") return;
+    if (state.playbackIntent === "play") void element.play().catch(error => {
+      if (isAutoplayRejection(error)) dispatch({ type: "autoplay-rejected", nodeId: active.id });
+      else dispatch({ type: "media-error", nodeId: active.id, kind: "generic" });
+    });
     else element.pause();
-  }, [active.id, active.kind, activeUrl?.url, state.playbackIntent]);
+  }, [active.id, active.kind, activeUrl?.sourceKind, activeUrl?.status, activeUrl?.url, state.playbackIntent]);
 
   useEffect(() => {
     if (!state.slideshowActive || active.kind !== "image") return;
@@ -447,16 +460,32 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
     const currentUrl = urlsRef.current[itemId];
     const sessionId = preparedSessions.current[itemId];
     const failedItem = state.items.find(item => item.id === itemId);
-    if (!currentUrl || currentUrl.status !== "ready" ||
-      (currentUrl.sourceKind !== "google-raw" && currentUrl.sourceKind !== "google-filename") ||
-      !sessionId || !failedItem) {
+    if (!currentUrl || currentUrl.status !== "ready" || !failedItem) {
+      dispatch({ type: "media-error", nodeId: itemId, kind: "generic" });
+      return;
+    }
+    if (currentUrl.sourceKind === "hls") {
+      releaseHlsSession(itemId);
+      dispatch({ type: "media-error", nodeId: itemId, kind: "transcode" });
+      return;
+    }
+    const nativeErrorCode = element?.error?.code;
+    if (failedItem.kind === "video" && (nativeErrorCode === 3 || nativeErrorCode === 4) && !requestedHlsFallback.current[itemId] &&
+      (currentUrl.sourceKind === "direct" || (currentUrl.sourceKind === "google-raw" && confirmedDecoderFailures.current[itemId]))) {
+      requestedHlsFallback.current[itemId] = true;
+      latestResumeOverrides.current[itemId] = resumeSeconds;
+      setResumeOverrides(current => ({ ...current, [itemId]: resumeSeconds }));
+      releasePreparedSession(itemId);
+      dispatch({ type: "hls-fallback", nodeId: itemId, resumeSeconds });
+      return;
+    }
+    if (currentUrl.sourceKind !== "google-raw" || !sessionId) {
       dispatch({ type: "media-error", nodeId: itemId, kind: "generic" });
       return;
     }
     const evidenceKey = `${sessionId}:${currentUrl.sourceKind}:${currentUrl.url}`;
     if (pendingMediaEvidence.current[itemId] === evidenceKey) return;
     pendingMediaEvidence.current[itemId] = evidenceKey;
-    const nativeErrorCode = element?.error?.code;
     void googleMedia.waitForEvidence(sessionId, 300).then(() => {
       const latestUrl = urlsRef.current[itemId];
       if (unauthorized.current || navigationExpired.current || closed.current || !mounted.current ||
@@ -487,10 +516,6 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
         dispatch({ type: "media-error", nodeId: itemId, kind: "generic" });
         return;
       }
-      if (latestUrl.sourceKind === "google-filename") {
-        dispatch({ type: "media-error", nodeId: itemId, kind: "decoder" });
-        return;
-      }
       if (failedItem.kind === "image") {
         dispatch({ type: "media-error", nodeId: itemId, kind: "decoder" });
         return;
@@ -499,24 +524,8 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
         dispatch({ type: "media-error", nodeId: itemId, kind: "generic" });
         return;
       }
-      if (latestUrl.sourceKind === "google-raw" && isLegacyMpeg(failedItem)) {
-        const filenameSource = googleMedia.filenameSource(sessionId);
-        if (filenameSource?.sessionId === sessionId && filenameSource.sourceKind === "google-filename") {
-          latestResumeOverrides.current[itemId] = resumeSeconds;
-          setResumeOverrides(current => ({ ...current, [itemId]: resumeSeconds }));
-          dispatch({
-            type: "compatibility-source",
-            nodeId: itemId,
-            url: filenameSource.sourceUrl,
-            sourceKind: filenameSource.sourceKind,
-            resumeSeconds
-          });
-          return;
-        }
-        dispatch({ type: "media-error", nodeId: itemId, kind: "bridge" });
-        return;
-      }
-      dispatch({ type: "media-error", nodeId: itemId, kind: "decoder" });
+      confirmedDecoderFailures.current[itemId] = true;
+      onMediaError(itemId, element);
     }).then(() => {
       if (pendingMediaEvidence.current[itemId] === evidenceKey) delete pendingMediaEvidence.current[itemId];
     });
@@ -543,6 +552,10 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
           <ViewerError title="This file reached the TV, but could not be decoded" item={active} body={active.kind === "video"
             ? "The TV browser could not decode this file's video or audio format."
             : "The TV browser could not decode this image format."} />
+        ) : state.mediaError?.kind === "unsupported" ? (
+          <ViewerError title="Transcoded playback is unsupported on this TV" item={active} body="This browser cannot attach the HLS stream produced by Cloudframe." />
+        ) : state.mediaError?.kind === "transcode" ? (
+          <ViewerError title="The transcoded playback session ended" item={active} body="Return to the collection and open this video again." />
         ) : state.mediaError ? (
           <ViewerError title="This media could not be opened" item={active} body={activeUrl?.refreshUsed ? "A fresh link did not solve this media error." : "The provider link failed. You can request one fresh link safely."}
             onRetry={state.mediaError.kind === "generic" && !activeUrl?.refreshUsed ? retry : undefined} />
@@ -552,6 +565,17 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
           <VideoPlayer
             key={active.id} item={active} url={activeUrl} videoRef={videoRef} controlsVisible={state.controlsVisible}
             buffering={buffering} currentSeconds={currentSeconds} durationSeconds={durationSeconds} bufferedPercent={bufferedPercent}
+            onHlsAttached={() => {
+              startHlsHeartbeat(active.id);
+              const element = videoElementFor(active.id);
+              if (element && playbackIntentRef.current === "play") void element.play().catch(error => {
+                if (isAutoplayRejection(error)) dispatch({ type: "autoplay-rejected", nodeId: active.id });
+              });
+            }}
+            onHlsFatal={error => {
+              releaseHlsSession(active.id);
+              dispatch({ type: "media-error", nodeId: active.id, kind: error.kind === "unsupported" ? "unsupported" : "transcode" });
+            }}
             onLoadedMetadata={element => {
               const resumeSeconds = latestResumeOverrides.current[active.id] || resumeOverrides[active.id] || activeUrl?.resumeSeconds || historyResume;
               if (resumeSeconds > 0 && resumeSeconds < element.duration) element.currentTime = resumeSeconds;
@@ -563,7 +587,6 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
               });
               setCurrentSeconds(element.currentTime);
               setDurationSeconds(element.duration);
-              if (state.playbackIntent === "play") void element.play().catch(() => undefined);
             }}
             onPlaying={() => setBuffering(false)}
             onPlay={() => { setBuffering(false); dispatch({ type: "video-playing", nodeId: active.id }); }}
@@ -585,7 +608,10 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
             }}
             onSeeked={element => saveElementHistory(active.id, element)}
             onEnded={element => { saveElementHistory(active.id, element); dispatch({ type: "video-ended", nodeId: active.id }); }}
-            onError={element => onMediaError(active.id, element)}
+            onError={element => {
+              if (activeUrl?.sourceKind === "hls" && !element.error) return;
+              onMediaError(active.id, element);
+            }}
           />
         )}
       </div>
@@ -628,6 +654,17 @@ function isNavigationExpired(error: unknown): boolean {
 function isInvalidResponse(error: unknown): boolean {
   const code = typeof error === "object" && error && "code" in error ? String((error as { code: unknown }).code) : "";
   return code === "INVALID_RESPONSE";
+}
+
+function isAutoplayRejection(error: unknown): boolean {
+  return error instanceof DOMException
+    ? error.name === "NotAllowedError"
+    : typeof error === "object" && error !== null && "name" in error && String((error as { name: unknown }).name) === "NotAllowedError";
+}
+
+function isTranscodeSessionExpired(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error &&
+    String((error as { code: unknown }).code) === "TRANSCODER_SESSION_EXPIRED";
 }
 
 function formatResume(seconds: number): string {

@@ -7,6 +7,8 @@ import { TvApp } from "./app";
 import { tvApi, type TvApi } from "./api/client";
 import type { GoogleMediaBridge, PreparedGoogleMediaSource } from "./media/google-media-bridge";
 
+vi.mock("./videojs", () => ({ loadVideoJs: vi.fn(async () => false) }));
+
 const api = (): TvApi => ({
   bootstrap: vi.fn(),
   createDeviceRequest: vi.fn(),
@@ -724,7 +726,7 @@ describe("TV enrollment and browse states", () => {
     fireEvent.click(screen.getByRole("button", { name: /Renewed video/ }));
     await screen.findByLabelText("Playing Renewed video");
     expect(client.folder).toHaveBeenCalledWith("sealed-root-new", undefined);
-    expect(client.mediaUrl).toHaveBeenCalledWith("sealed-new", expect.any(AbortSignal), { itemId: "item_duplicate", kind: "video" });
+    expect(client.mediaUrl).toHaveBeenCalledWith("sealed-new", expect.any(AbortSignal), { itemId: "item_duplicate", kind: "video" }, undefined);
   });
 
   it("refreshes navigation when a folder response parent does not match the requested item", async () => {
@@ -1185,7 +1187,6 @@ function mediaResponse(handle: string) {
 
 interface FakeGoogleMediaBridge extends GoogleMediaBridge {
   prepare: ReturnType<typeof vi.fn<GoogleMediaBridge["prepare"]>>;
-  filenameSource: ReturnType<typeof vi.fn<GoogleMediaBridge["filenameSource"]>>;
   evidence: ReturnType<typeof vi.fn<GoogleMediaBridge["evidence"]>>;
   waitForEvidence: ReturnType<typeof vi.fn<GoogleMediaBridge["waitForEvidence"]>>;
   release: ReturnType<typeof vi.fn<GoogleMediaBridge["release"]>>;
@@ -1200,7 +1201,6 @@ function fakeGoogleMediaBridge(): FakeGoogleMediaBridge {
   };
   return {
     prepare: vi.fn<GoogleMediaBridge["prepare"]>(async () => prepared),
-    filenameSource: vi.fn<GoogleMediaBridge["filenameSource"]>(() => null),
     evidence: vi.fn<GoogleMediaBridge["evidence"]>(() => ({ outcome: "none", attempt: "google-raw" })),
     waitForEvidence: vi.fn<GoogleMediaBridge["waitForEvidence"]>(async () => ({ outcome: "none", attempt: "google-raw" })),
     release: vi.fn<GoogleMediaBridge["release"]>(),

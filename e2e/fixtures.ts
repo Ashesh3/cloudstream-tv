@@ -1,11 +1,15 @@
 import { fileURLToPath } from "node:url";
+import { readFile } from "node:fs/promises";
 import type { Page } from "@playwright/test";
 
 export const media = {
   thumbnail: "https://provider-assets.example/sunset-preview.svg",
   folderThumbnail: "https://provider-assets.example/folder-preview.svg",
   image: "https://provider-assets.example/sunset-original.svg",
-  video: "https://provider-assets.example/lake.mp4"
+  video: "https://provider-assets.example/lake.mp4",
+  hlsMaster: "/api/tv/transcodes/abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG/master.m3u8",
+  hlsStream: "/api/tv/transcodes/abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG/stream.m3u8",
+  hlsSegmentPrefix: "/api/tv/transcodes/abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG/segments/"
 };
 
 export async function installTvFixture(
@@ -30,6 +34,19 @@ export async function installTvFixture(
     contentType: "video/mp4",
     path: fileURLToPath(new URL("./fixtures/video.mp4", import.meta.url))
   }));
+  const hlsFixture = (name: string) => fileURLToPath(new URL(`./fixtures/hls-long/${name}`, import.meta.url));
+  await page.route(`**${media.hlsMaster}`, async route => route.fulfill({
+    contentType: "application/vnd.apple.mpegurl",
+    body: await readFile(hlsFixture("stream.m3u8"), "utf8").then(value => value.replaceAll(/segment-(\d{3})\.ts/gu, (_match, index) => `segments/${Number(index)}.ts`))
+  }));
+  await page.route(`**${media.hlsStream}`, async route => route.fulfill({
+    contentType: "application/vnd.apple.mpegurl",
+    body: await readFile(hlsFixture("stream.m3u8"), "utf8").then(value => value.replaceAll(/segment-(\d{3})\.ts/gu, (_match, index) => `segments/${Number(index)}.ts`))
+  }));
+  await page.route(`**${media.hlsSegmentPrefix}*`, route => {
+    const index = Number(new URL(route.request().url()).pathname.split("/").pop()?.replace(/\.ts$/u, ""));
+    return route.fulfill({ contentType: "video/mp2t", path: hlsFixture(`segment-${String(index).padStart(3, "0")}.ts`) });
+  });
   await page.addInitScript(({ state, media, longFolder }) => {
     const now = new Date().toISOString();
     let status = state;
@@ -49,6 +66,7 @@ export async function installTvFixture(
     };
     const image = { ...folder, id: "item_image", handle: "sealed-image", name: "Sunset.jpg", normalizedName: "sunset.jpg", kind: "image", mimeType: "image/jpeg", width: 1200, height: 800, hasPreview: true };
     const video = { ...folder, id: "item_video", handle: "sealed-video", name: "Lake.mp4", normalizedName: "lake.mp4", kind: "video", mimeType: "video/mp4", width: 1280, height: 720, hasPreview: true };
+    const mpeg = { ...video, id: "item_mpeg", handle: "sealed-mpeg", name: "Archive.mpg", normalizedName: "archive.mpg", mimeType: "video/mpeg", hasPreview: false };
     const extras = Array.from({ length: longFolder ? 30 : 0 }, (_, index) => ({
       ...image,
       id: `item_extra_${index}`,
@@ -56,7 +74,7 @@ export async function installTvFixture(
       name: `Extra ${String(index).padStart(2, "0")}.jpg`,
       normalizedName: `extra ${String(index).padStart(2, "0")}.jpg`
     }));
-    const children = [childFolder, image, video, ...extras];
+    const children = [childFolder, image, video, mpeg, ...extras];
     const itemByHandle = new Map(children.map(item => [item.handle, item]));
     const household = { id: "household-test", allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8 };
     const device = { id: "device-1", name: "Living Room", enabled: true, assignedRootIds: ["root-1"], mediaOrder: null, slideshowSeconds: null, createdAt: now, approvedAt: now, lastSeenAt: now, revokedAt: null };
@@ -91,7 +109,7 @@ export async function installTvFixture(
         calls.media.push({ handle, fallback: options?.fallback ?? null });
         const item = itemByHandle.get(handle);
         if (!item || item.kind === "folder") return reject("ITEM_NOT_FOUND");
-        if (options?.fallback === "hls" && item.kind === "video") {
+        if (item.kind === "video" && (options?.fallback === "hls" || item.mimeType === "video/mpeg")) {
           const sessionId = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
           return { itemId: item.id, kind: "video", transport: "hls", playlistUrl: `/api/tv/transcodes/${sessionId}/master.m3u8`, playbackSessionId: sessionId, durationSeconds: 65.832, profile: "h264-aac-1080p-v1", expiresAt: new Date(Date.now()+45000).toISOString(), revision: "1" };
         }

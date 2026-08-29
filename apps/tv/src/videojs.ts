@@ -5,7 +5,7 @@ export function createVideoJsLoader(
   importer: VideoJsImporter = async () => {
     await Promise.all([
       import("@videojs/html/video/player"),
-      import("@videojs/html/ui/container"),
+      import("@videojs/html/video/skin"),
     ]);
   },
   registry: CustomElementRegistryReader | undefined = globalThis.customElements,
@@ -16,7 +16,7 @@ export function createVideoJsLoader(
     loading = importer()
       .then(() =>
         Boolean(registry?.get("video-player")) &&
-        Boolean(registry?.get("media-container"))
+        Boolean(registry?.get("video-skin"))
       )
       .catch(() => false);
     return loading;

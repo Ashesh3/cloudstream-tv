@@ -1,24 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-  googleMediaAlias,
-  googleMediaFingerprint,
-  isExactGoogleMediaUrl,
-  isLegacyMpeg,
-  sanitizeMediaFilename,
-  validSingleRange,
-} from "./google-media-protocol";
+import { googleMediaFingerprint, isExactGoogleMediaUrl, validSingleRange } from "./google-media-protocol";
 
 const RAW_URL =
   "https://www.googleapis.com/drive/v3/files/file_123?alt=media&supportsAllDrives=true";
 
 describe("Google media protocol helpers", () => {
-  it("recognizes only legacy MPEG MIME or filename candidates", () => {
-    expect(isLegacyMpeg({ name: "MOV00516.MPG", mimeType: "video/mpeg" })).toBe(true);
-    expect(isLegacyMpeg({ name: "archive.MPEG", mimeType: "application/octet-stream" })).toBe(true);
-    expect(isLegacyMpeg({ name: "disc.DAT", mimeType: null })).toBe(true);
-    expect(isLegacyMpeg({ name: "movie.mp4", mimeType: "video/mp4" })).toBe(false);
-  });
-
   it("accepts only the exact Google Drive media boundary", () => {
     expect(isExactGoogleMediaUrl(RAW_URL)).toBe(true);
     expect(isExactGoogleMediaUrl(
@@ -63,31 +49,6 @@ describe("Google media protocol helpers", () => {
       expect(validSingleRange(value)).toBeNull();
     }
     expect(validSingleRange(null)).toBeNull();
-  });
-
-  it("sanitizes the filename segment used by the reserved alias", () => {
-    expect(sanitizeMediaFilename("../MOV00516.MPG")).toBe("MOV00516.MPG");
-    expect(sanitizeMediaFilename("folder\\clip name.mpg")).toBe("clip name.mpg");
-    expect(googleMediaAlias("session_abc", "MOV00516.MPG"))
-      .toBe("/__cloudframe_media__/session_abc/MOV00516.MPG");
-    expect(googleMediaAlias("session_abc", "clip name.mpg"))
-      .toBe("/__cloudframe_media__/session_abc/clip%20name.mpg");
-    expect(sanitizeMediaFilename("clip-\ud800.mpg")).toBe("clip-�.mpg");
-    expect(googleMediaAlias("session_abc", "clip-\ud800.mpg"))
-      .toBe("/__cloudframe_media__/session_abc/clip-%EF%BF%BD.mpg");
-  });
-
-  it("truncates filenames by code point and makes every alias encodable", () => {
-    const prefix = "a".repeat(254);
-    const sanitized = sanitizeMediaFilename(`${prefix}😀tail`);
-    expect(Array.from(sanitized)).toHaveLength(255);
-    expect(sanitized).toBe(`${prefix}😀`);
-    expect(googleMediaAlias("session_abc", `${prefix}😀tail`))
-      .toBe(`/__cloudframe_media__/session_abc/${prefix}%F0%9F%98%80`);
-
-    expect(sanitizeMediaFilename("\udc00\udc01\ud800")).toBe("���");
-    expect(() => googleMediaAlias("session_abc", "\udc00\udc01\ud800"))
-      .not.toThrow();
   });
 
   it("creates a stable opaque SHA-256 URL fingerprint", async () => {

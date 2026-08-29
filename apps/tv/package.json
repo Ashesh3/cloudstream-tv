@@ -11,6 +11,7 @@
     "@cloudframe/shared": "*",
     "@cloudframe/tv-core": "*",
     "@videojs/html": "10.0.0-beta.32",
+    "hls.js": "1.7.1",
     "preact": "^10.29.8"
   },
   "devDependencies": {

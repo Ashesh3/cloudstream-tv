@@ -1,9 +1,7 @@
 import type { GoogleBearerMediaUrlResponse } from "@cloudframe/shared";
 import {
-  googleMediaAlias,
   googleMediaFingerprint,
   isExactGoogleMediaUrl,
-  sanitizeMediaFilename,
   type GoogleMediaGrant,
   type GoogleMediaPageMessage,
 } from "./google-media-protocol";
@@ -16,7 +14,7 @@ const SESSION_ID = /^session_[A-Za-z0-9_-]{1,128}$/u;
 const REQUEST_ID = /^request_[A-Za-z0-9_-]{1,128}$/u;
 const FINGERPRINT = /^[A-Za-z0-9_-]{43}$/u;
 
-export type GoogleMediaSourceKind = "google-raw" | "google-filename";
+export type GoogleMediaSourceKind = "google-raw";
 
 export interface PreparedGoogleMediaSource {
   sourceUrl: string;
@@ -52,7 +50,6 @@ export interface GoogleMediaBridge {
     item: { name: string; kind: "image" | "video"; mimeType: string; size: number | null },
     signal?: AbortSignal,
   ): Promise<PreparedGoogleMediaSource>;
-  filenameSource(sessionId: string): PreparedGoogleMediaSource | null;
   evidence(sessionId: string): GoogleMediaDeliveryEvidence;
   waitForEvidence(sessionId: string, timeoutMs?: number): Promise<GoogleMediaDeliveryEvidence>;
   release(sessionId: string): void;
@@ -144,7 +141,6 @@ export function createGoogleMediaBridge(
         expiresAtEpoch: validated.expiresAtEpoch,
         kind: item.kind,
         mimeType: item.mimeType,
-        filename: validated.filename,
         size: item.size,
       };
       const prepared: PreparedGoogleMediaSource = {
@@ -172,19 +168,6 @@ export function createGoogleMediaBridge(
           failPending(requestId, "GOOGLE_MEDIA_BRIDGE_UNAVAILABLE");
         }
       });
-    },
-
-    filenameSource(sessionId) {
-      expireGrants();
-      const live = grants.get(sessionId);
-      if (!live) return null;
-      evidenceBySession.set(sessionId, noneEvidence("google-filename"));
-      return {
-        sourceUrl: googleMediaAlias(sessionId, live.grant.filename),
-        sourceKind: "google-filename",
-        sessionId,
-        fingerprint: live.prepared.fingerprint,
-      };
     },
 
     evidence(sessionId) {
@@ -278,8 +261,7 @@ export function createGoogleMediaBridge(
     }
   }
 
-  function findGrant(kind: "fingerprint" | "session", value: string): LiveGrant | null {
-    if (kind === "session") return grants.get(value) ?? null;
+  function findGrant(kind: "fingerprint", value: string): LiveGrant | null {
     for (const live of grants.values()) {
       if (live.grant.fingerprint === value) return live;
     }
@@ -361,7 +343,6 @@ export function createGoogleMediaBridge(
 
 export const unavailableGoogleMediaBridge: GoogleMediaBridge = {
   prepare: async () => { throw new GoogleMediaBridgeError("GOOGLE_MEDIA_BRIDGE_UNAVAILABLE"); },
-  filenameSource: () => null,
   evidence: () => noneEvidence("google-raw"),
   waitForEvidence: async () => noneEvidence("google-raw"),
   release: () => undefined,
@@ -371,9 +352,8 @@ function validatePreparation(
   descriptor: GoogleBearerMediaUrlResponse,
   item: { name: string; kind: "image" | "video"; mimeType: string; size: number | null },
   now: number,
-): { expiresAtEpoch: number; filename: string } | null {
+): { expiresAtEpoch: number } | null {
   const expiresAtEpoch = Date.parse(descriptor.expiresAt);
-  const filename = sanitizeMediaFilename(item.name);
   if (!isExactGoogleMediaUrl(descriptor.url) ||
     descriptor.transport !== "google-bearer" ||
     descriptor.authorization?.scheme !== "Bearer" ||
@@ -381,11 +361,11 @@ function validatePreparation(
     descriptor.kind !== item.kind ||
     !Number.isSafeInteger(expiresAtEpoch) || expiresAtEpoch <= now ||
     new Date(expiresAtEpoch).toISOString() !== descriptor.expiresAt ||
-    typeof item.name !== "string" || item.name.length < 1 || filename.length < 1 ||
+    typeof item.name !== "string" || item.name.length < 1 || item.name.length > 1024 ||
     typeof item.mimeType !== "string" || item.mimeType.length > 256 ||
     !new RegExp(`^${item.kind}/[A-Za-z0-9!#$&^_.+-]+$`, "u").test(item.mimeType) ||
     (item.size !== null && (!Number.isSafeInteger(item.size) || item.size < 0))) return null;
-  return { expiresAtEpoch, filename };
+  return { expiresAtEpoch };
 }
 
 function printableSecret(value: unknown): value is string {
@@ -453,8 +433,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 function parseResult(value: Record<string, unknown>): GoogleMediaDeliveryEvidence | null {
-  if (typeof value.sessionId !== "string" || !SESSION_ID.test(value.sessionId) ||
-    (value.attempt !== "google-raw" && value.attempt !== "google-filename")) return null;
+  if (typeof value.sessionId !== "string" || !SESSION_ID.test(value.sessionId) || value.attempt !== "google-raw") return null;
   if (value.outcome === "response") {
     if (!exactKeys(value, ["type", "sessionId", "attempt", "outcome", "status"]) ||
       typeof value.status !== "number" || !Number.isInteger(value.status) || value.status < 200 || value.status > 599) return null;
@@ -467,11 +446,9 @@ function parseResult(value: Record<string, unknown>): GoogleMediaDeliveryEvidenc
   return null;
 }
 
-function validLookup(value: unknown): value is { kind: "fingerprint" | "session"; value: string } {
+function validLookup(value: unknown): value is { kind: "fingerprint"; value: string } {
   return plainRecord(value) && exactKeys(value, ["kind", "value"]) &&
-    typeof value.value === "string" &&
-    ((value.kind === "fingerprint" && FINGERPRINT.test(value.value)) ||
-      (value.kind === "session" && SESSION_ID.test(value.value)));
+    typeof value.value === "string" && value.kind === "fingerprint" && FINGERPRINT.test(value.value);
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {

@@ -7,8 +7,8 @@ export interface ViewerMediaItem {
 }
 
 export type ViewerUrlStatus = "loading" | "ready" | "error";
-export type ViewerMediaErrorKind = "authorization" | "bridge" | "transport" | "decoder" | "generic";
-export type ViewerMediaSourceKind = "direct" | "google-raw" | "google-filename" | "hls";
+export type ViewerMediaErrorKind = "authorization" | "bridge" | "transport" | "decoder" | "transcode" | "unsupported" | "generic";
+export type ViewerMediaSourceKind = "direct" | "google-raw" | "hls";
 
 export interface ViewerUrlState {
   status: ViewerUrlStatus;
@@ -60,13 +60,14 @@ export type ViewerAction =
   | { type: "video-ended"; nodeId: string }
   | { type: "video-playing"; nodeId: string }
   | { type: "video-paused"; nodeId: string }
+  | { type: "autoplay-rejected"; nodeId: string }
   | { type: "media-error"; nodeId: string; kind: ViewerMediaErrorKind }
   | { type: "url-ready"; nodeId: string; requestId: number; url: string; sourceKind: ViewerMediaSourceKind; playbackSessionId?: string; expiresAtEpoch: number; revision: string | null }
   | { type: "url-failed"; nodeId: string; requestId: number; kind: ViewerMediaErrorKind }
   | { type: "url-expired"; nodeId: string; requestId: number; resumeSeconds: number }
   | { type: "authorization-expired"; nodeId: string; resumeSeconds: number }
   | { type: "manual-retry"; nodeId: string; resumeSeconds: number }
-  | { type: "compatibility-source"; nodeId: string; url: string; sourceKind: "google-filename"; resumeSeconds: number }
+  | { type: "hls-fallback"; nodeId: string; resumeSeconds: number }
   | { type: "controls-timeout" }
   | { type: "activity" };
 
@@ -83,7 +84,7 @@ export function createViewerState(items: ViewerMediaItem[], selectedItemId: stri
     restorationItemId: selectedItemId,
     overlayOpen: false,
     slideshowActive: false,
-    playbackIntent: "pause",
+    playbackIntent: items[index]!.kind === "video" ? "play" : "pause",
     videoPlaying: false,
     controlsVisible: true,
     closed: false,
@@ -141,6 +142,10 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
         ? { ...state, playbackIntent: "play", videoPlaying: true }
         : state;
     case "video-paused":
+      return activeViewerItem(state).id === action.nodeId
+        ? { ...state, playbackIntent: "pause", videoPlaying: false, controlsVisible: true }
+        : state;
+    case "autoplay-rejected":
       return activeViewerItem(state).id === action.nodeId
         ? { ...state, playbackIntent: "pause", videoPlaying: false, controlsVisible: true }
         : state;
@@ -222,22 +227,25 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
       return refreshUrlOnce(state, action.nodeId, action.resumeSeconds, true);
     case "manual-retry":
       return refreshUrlOnce(state, action.nodeId, action.resumeSeconds, false);
-    case "compatibility-source": {
+    case "hls-fallback": {
       const current = state.urls[action.nodeId];
-      if (activeViewerItem(state).id !== action.nodeId || current?.status !== "ready" || current.sourceKind !== "google-raw") return state;
+      if (!current || current.status !== "ready" || current.sourceKind === "hls") return state;
       return {
         ...state,
         urls: {
           ...state.urls,
           [action.nodeId]: {
-            ...current,
-            url: action.url,
-            sourceKind: action.sourceKind,
+            status: "loading",
+            requestId: state.nextRequestId,
+            revision: current.revision,
+            refreshUsed: current.refreshUsed,
             resumeSeconds: finiteNonNegative(action.resumeSeconds),
-            errorKind: undefined
-          }
+          },
         },
-        mediaError: state.mediaError?.nodeId === action.nodeId ? null : state.mediaError
+        nextRequestId: state.nextRequestId + 1,
+        mediaError: state.mediaError?.nodeId === action.nodeId ? null : state.mediaError,
+        videoPlaying: false,
+        controlsVisible: true,
       };
     }
     case "controls-timeout":

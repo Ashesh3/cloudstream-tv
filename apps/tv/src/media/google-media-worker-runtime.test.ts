@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  googleMediaAlias,
   googleMediaFingerprint,
   isExactGoogleMediaUrl,
   type GoogleMediaPageMessage,
@@ -29,7 +28,6 @@ function grantMessage(requestId = "request_test"): GoogleMediaGrantMessage {
       expiresAtEpoch: TEST_NOW + 60_000,
       kind: "video",
       mimeType: "video/mpeg",
-      filename: "MOV00516.MPG",
       size: 100,
     },
   };
@@ -440,21 +438,6 @@ describe("Google media worker runtime", () => {
     expectSecretSafe(clientMessages);
   });
 
-  it("requests alias rehydration only from the fetching client and then fails closed", async () => {
-    const harness = workerHarness();
-    const response = await harness.dispatchFetch(
-      new Request("https://tv.test/__cloudframe_media__/session_test/MOV00516.MPG"),
-      "client_tv",
-    );
-    expect(response.type).toBe("error");
-    expect(harness.providerFetch).not.toHaveBeenCalled();
-    expect(harness.clientMessages).toContainEqual(expect.objectContaining({
-      type: "cloudframe-media-grant-request",
-      lookup: { kind: "session", value: "session_test" },
-    }));
-    expectSecretSafe(harness.clientMessages);
-  });
-
   it.each([
     ["expired grants", async (harness: WorkerHarness) => {
       const message = grantMessage();
@@ -556,14 +539,7 @@ describe("Google media worker runtime", () => {
       requestId: "request_revoked_during_validation",
     }));
     const raw = await harness.dispatchFetch(rawRequest({ range: "bytes=0-" }), "client_tv");
-    const alias = await harness.dispatchFetch(
-      new Request(`https://tv.test${googleMediaAlias("session_test", "MOV00516.MPG")}`, {
-        headers: { range: "bytes=0-" },
-      }),
-      "client_tv",
-    );
     expect(raw.type).toBe("error");
-    expect(alias.type).toBe("error");
     expect(harness.providerFetch).not.toHaveBeenCalled();
     expectSecretSafe(harness.clientMessages);
   });
@@ -708,22 +684,22 @@ describe("Google media worker runtime", () => {
   });
 
   it("evicts the oldest grant when a fifth live session is accepted", async () => {
-    const harness = workerHarness();
+    const fingerprints = new Map<string, string>();
+    const harness = workerHarness({ fingerprint: async url => fingerprints.get(url) ?? TEST_FINGERPRINT });
     for (let index = 1; index <= 5; index += 1) {
       const message = grantMessage(`request_${index}`);
       message.grant.sessionId = `session_${index}`;
-      message.grant.filename = `clip-${index}.mpg`;
+      message.grant.rawUrl = RAW_URL.replace("file_123", `file_${index}`);
+      message.grant.fingerprint = await googleMediaFingerprint(message.grant.rawUrl);
+      fingerprints.set(message.grant.rawUrl, message.grant.fingerprint);
       await harness.dispatchMessage(message, { id: "client_tv" });
     }
 
-    const oldest = await harness.dispatchFetch(
-      new Request(`https://tv.test${googleMediaAlias("session_1", "clip-1.mpg")}`),
-      "client_tv",
-    );
+    const oldest = await harness.dispatchFetch(new Request(RAW_URL.replace("file_123", "file_1")), "client_tv");
     expect(oldest.type).toBe("error");
     for (let index = 2; index <= 5; index += 1) {
       const response = await harness.dispatchFetch(
-        new Request(`https://tv.test${googleMediaAlias(`session_${index}`, `clip-${index}.mpg`)}`, {
+        new Request(RAW_URL.replace("file_123", `file_${index}`), {
           headers: { range: "bytes=0-" },
         }),
         "client_tv",

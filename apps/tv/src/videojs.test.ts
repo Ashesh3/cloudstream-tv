@@ -8,7 +8,7 @@ describe("Video.js progressive loader", () => {
     const registry = fakeRegistry();
     const importer = vi.fn(async () => {
       registry.define("video-player");
-      registry.define("media-container");
+      registry.define("video-skin");
       return {};
     });
     const loadVideoJs = createVideoJsLoader(importer, registry);

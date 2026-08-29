@@ -19,6 +19,33 @@ const media: ViewerMediaItem[] = [
 ];
 
 describe("viewer reducer", () => {
+  it("starts an active video with a play intent and handles autoplay rejection without a media error", () => {
+    let state = createViewerState(media, "video-1");
+    expect(state.playbackIntent).toBe("play");
+
+    state = viewerReducer(state, { type: "autoplay-rejected", nodeId: "video-1" });
+
+    expect(state.playbackIntent).toBe("pause");
+    expect(state.controlsVisible).toBe(true);
+    expect(state.mediaError).toBeNull();
+  });
+
+  it("requests one HLS replacement while preserving the resume position", () => {
+    let state = createViewerState(media, "video-1");
+    const request = state.urls["video-1"]!;
+    state = viewerReducer(state, {
+      type: "url-ready", nodeId: "video-1", requestId: request.requestId,
+      url: "https://provider.example/video", sourceKind: "direct",
+      expiresAtEpoch: 10_000, revision: "r1",
+    });
+
+    state = viewerReducer(state, { type: "hls-fallback", nodeId: "video-1", resumeSeconds: 37 });
+
+    expect(state.urls["video-1"]).toMatchObject({ status: "loading", resumeSeconds: 37 });
+    const unchanged = viewerReducer(state, { type: "hls-fallback", nodeId: "video-1", resumeSeconds: 38 });
+    expect(unchanged).toBe(state);
+  });
+
   it("requests the active video and adjacent images, never adjacent videos", () => {
     const sequence: ViewerMediaItem[] = [
       { id: "before-video", name: "Before.mp4", kind: "video", mimeType: "video/mp4", revision: null },
@@ -88,10 +115,11 @@ describe("viewer reducer", () => {
     expect(image.slideshowActive).toBe(false);
 
     let video = createViewerState(media, "video-1");
-    video = viewerReducer(video, { type: "enter" });
     expect(video.playbackIntent).toBe("play");
     video = viewerReducer(video, { type: "enter" });
     expect(video.playbackIntent).toBe("pause");
+    video = viewerReducer(video, { type: "enter" });
+    expect(video.playbackIntent).toBe("play");
   });
 
   it("opens and closes details before Back closes with the original restoration target", () => {
@@ -328,80 +356,6 @@ describe("viewer reducer", () => {
     const serialized = JSON.stringify(state);
     expect(serialized).not.toContain("authorization");
     expect(serialized).not.toContain("ya29.test-token");
-  });
-
-  it("substitutes the active raw Google source without consuming URL renewal state", () => {
-    let state = createViewerState(media, "video-1");
-    const initial = state.urls["video-1"]!;
-    state = viewerReducer(state, {
-      type: "url-ready",
-      nodeId: "video-1",
-      requestId: initial.requestId,
-      url: "https://www.googleapis.com/drive/v3/files/video-1?alt=media&supportsAllDrives=true",
-      sourceKind: "google-raw",
-      expiresAtEpoch: 10_000,
-      revision: "r1"
-    });
-    state = {
-      ...state,
-      retryLedger: { ...state.retryLedger, "video-1": { revision: "r1", used: true } },
-      mediaError: { nodeId: "video-1", kind: "generic" }
-    };
-    const before = state.urls["video-1"]!;
-
-    state = viewerReducer(state, {
-      type: "compatibility-source",
-      nodeId: "video-1",
-      url: "/__cloudframe_media__/session_mpeg/MOV00516.MPG",
-      sourceKind: "google-filename",
-      resumeSeconds: 37
-    });
-
-    expect(state.urls["video-1"]).toEqual({
-      ...before,
-      url: "/__cloudframe_media__/session_mpeg/MOV00516.MPG",
-      sourceKind: "google-filename",
-      resumeSeconds: 37,
-      errorKind: undefined
-    });
-    expect(state.retryLedger["video-1"]).toEqual({ revision: "r1", used: true });
-    expect(state.mediaError).toBeNull();
-  });
-
-  it.each([
-    ["direct source", "active", "ready", "direct"],
-    ["inactive source", "inactive", "ready", "google-raw"],
-    ["loading source", "active", "loading", undefined],
-    ["filename source", "active", "ready", "google-filename"]
-  ] as const)("ignores compatibility substitution for a %s", (_label, target, status, sourceKind) => {
-    let state = createViewerState(media, target === "active" ? "video-1" : "image-1");
-    const current = state.urls["video-1"]!;
-    if (!current) {
-      expect(target).toBe("inactive");
-      return;
-    }
-    if (status === "ready") {
-      state = viewerReducer(state, {
-        type: "url-ready",
-        nodeId: "video-1",
-        requestId: current.requestId,
-        url: "https://provider.example/video",
-        sourceKind: sourceKind!,
-        expiresAtEpoch: 10_000,
-        revision: "r1"
-      });
-    }
-    const before = state;
-
-    const next = viewerReducer(state, {
-      type: "compatibility-source",
-      nodeId: "video-1",
-      url: "/__cloudframe_media__/session_mpeg/MOV00516.MPG",
-      sourceKind: "google-filename",
-      resumeSeconds: 37
-    });
-
-    expect(next).toBe(before);
   });
 
   it("hides controls only while the active video is playing with no overlay", () => {

@@ -7,7 +7,7 @@ declare global {
   namespace preact.JSX {
     interface IntrinsicElements {
       "video-player": JSX.HTMLAttributes<HTMLElement>;
-      "media-container": JSX.HTMLAttributes<HTMLElement>;
+      "video-skin": JSX.HTMLAttributes<HTMLElement>;
     }
   }
 }

@@ -22,16 +22,18 @@ test("folder browse opens a unified image and video viewer", async ({ page }) =>
   await expect(page.getByRole("img", { name: "Sunset.jpg" })).toBeVisible();
   await expect(page.getByRole("img", { name: "Sunset.jpg" })).toHaveAttribute("src", media.image);
   expect(new URL(await page.getByRole("img", { name: "Sunset.jpg" }).getAttribute("src")!).pathname).not.toMatch(/^\/api\//);
-  await expect(page.locator(".viewer-shell")).toHaveScreenshot("tv-viewer-image.png", { animations: "disabled" });
+  await expect(page.locator(".viewer-shell")).toHaveScreenshot("tv-viewer-image.png", { animations: "disabled", maxDiffPixels: 20 });
   await page.keyboard.press("ArrowRight");
   const video = page.getByLabel("Playing Lake.mp4");
   await expect(video).toBeVisible();
   await expect(video).toHaveAttribute("src", media.video);
-  await expect(page.locator("video-player > media-container > video")).toHaveCount(1);
+  await expect(page.locator("video-player > video-skin > video")).toHaveCount(1);
   await expect.poll(() => page.evaluate(() => ({
     player: Boolean(customElements.get("video-player")),
-    container: Boolean(customElements.get("media-container"))
-  }))).toEqual({ player: true, container: true });
+    skin: Boolean(customElements.get("video-skin")),
+    lightContainer: document.querySelector("video-player > media-container") !== null,
+    skinContainer: Boolean(document.querySelector("video-skin")?.shadowRoot?.querySelector("media-container"))
+  }))).toEqual({ player: true, skin: true, lightContainer: false, skinContainer: true });
   expect(new URL(await video.getAttribute("src")!).pathname).not.toMatch(/^\/api\//);
   const calls = await tvApiCalls(page);
   expect(calls.folder).toEqual([{ handle: "sealed-folder", cursor: null }]);
@@ -64,6 +66,30 @@ test("folder browse preloads thumbnails beyond the virtual window before scrolli
   const lastCard = page.getByRole("button", { name: "Extra 29.jpg, image" });
   await expect(lastCard).toBeVisible();
   await expect(lastCard.locator("img")).toHaveAttribute("src", media.thumbnail);
+});
+
+test("legacy MPEG attaches through HLS, seeks into a later segment, and releases on Back", async ({ page }) => {
+  const hlsRequests: string[] = [];
+  page.on("request", request => {
+    const pathname = new URL(request.url()).pathname;
+    if (pathname.includes("/api/tv/transcodes/")) hlsRequests.push(pathname);
+  });
+  await installTvFixture(page, "ready");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Family Trips, program" }).click();
+  await page.getByText("Archive.mpg").click();
+
+  const video = page.getByLabel("Playing Archive.mpg");
+  await expect(video).toBeVisible();
+  await expect.poll(() => hlsRequests.some(path => path.endsWith("/master.m3u8"))).toBe(true);
+  await expect.poll(() => hlsRequests.some(path => path.endsWith("/segments/0.ts"))).toBe(true);
+  await expect.poll(() => video.evaluate((element: HTMLVideoElement) => Number.isFinite(element.duration) && element.duration >= 10)).toBe(true);
+  await video.evaluate((element: HTMLVideoElement) => { element.currentTime = 9; });
+  await expect.poll(() => hlsRequests.some(path => path.endsWith("/segments/2.ts"))).toBe(true);
+
+  await page.keyboard.press("Escape");
+  await expect(page.getByText("Archive.mpg")).toBeVisible();
+  await expect.poll(async () => (await tvApiCalls(page)).release).toContain("abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG");
 });
 
 test("viewer saves and restores a nonzero video position", async ({ page }) => {

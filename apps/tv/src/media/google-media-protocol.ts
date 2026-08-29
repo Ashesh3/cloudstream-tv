@@ -1,6 +1,4 @@
 const GOOGLE_MEDIA_ORIGIN = "https://www.googleapis.com";
-const MEDIA_ALIAS_PREFIX = "/__cloudframe_media__/";
-const SESSION_ID = /^session_[A-Za-z0-9_-]{1,128}$/u;
 
 export interface GoogleMediaGrant {
   sessionId: string;
@@ -10,7 +8,6 @@ export interface GoogleMediaGrant {
   expiresAtEpoch: number;
   kind: "image" | "video";
   mimeType: string;
-  filename: string;
   size: number | null;
 }
 
@@ -23,14 +20,12 @@ export type GoogleMediaWorkerMessage =
   | {
       type: "cloudframe-media-grant-request";
       requestId: string;
-      lookup:
-        | { kind: "fingerprint"; value: string }
-        | { kind: "session"; value: string };
+      lookup: { kind: "fingerprint"; value: string };
     }
   | {
       type: "cloudframe-media-result";
       sessionId: string;
-      attempt: "google-raw" | "google-filename";
+      attempt: "google-raw";
       outcome: "response" | "network-error" | "bridge-error";
       status?: number;
     };
@@ -60,10 +55,6 @@ export function isExactGoogleMediaUrl(value: string): boolean {
   }
 }
 
-export function isLegacyMpeg(item: { name: string; mimeType: string | null }): boolean {
-  return item.mimeType?.toLowerCase() === "video/mpeg" || /\.(?:mpg|mpeg|dat)$/iu.test(item.name);
-}
-
 export function validSingleRange(value: string | null): ParsedSingleRange | null {
   if (value === null || value.length < 8 || value.length > 128 || value.indexOf(",") >= 0) return null;
   const match = /^bytes=(?:(\d+)-(\d*)|-(\d+))$/u.exec(value);
@@ -80,26 +71,6 @@ export function validSingleRange(value: string | null): ParsedSingleRange | null
   return { header: value, start, end, suffixLength: null };
 }
 
-export function sanitizeMediaFilename(value: string): string {
-  const segment = value.replace(/\\/gu, "/").split("/").pop() ?? "";
-  let bounded = "";
-  let length = 0;
-  for (const character of segment) {
-    const codePoint = character.codePointAt(0)!;
-    if (isControlCodePoint(codePoint)) continue;
-    if (length >= 255) break;
-    bounded += codePoint >= 0xd800 && codePoint <= 0xdfff ? "�" : character;
-    length += 1;
-  }
-  bounded = bounded.trim();
-  return bounded !== "" && bounded !== "." && bounded !== ".." ? bounded : "media";
-}
-
-export function googleMediaAlias(sessionId: string, filename: string): string {
-  if (!SESSION_ID.test(sessionId)) throw new Error("Invalid Google media session");
-  return `${MEDIA_ALIAS_PREFIX}${sessionId}/${encodeURIComponent(sanitizeMediaFilename(filename))}`;
-}
-
 export async function googleMediaFingerprint(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   const bytes = new Uint8Array(digest);
@@ -114,8 +85,4 @@ function safeInteger(value: string | undefined): number | null {
   if (value === undefined || value.length < 1 || value.length > 16) return null;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
-}
-
-function isControlCodePoint(value: number): boolean {
-  return value <= 31 || value === 127;
 }

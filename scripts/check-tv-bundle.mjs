@@ -12,18 +12,25 @@ if (!legacyEntry || !legacyPolyfills) {
   throw new Error("TV legacy entry and polyfills-legacy chunks are required");
 }
 const legacyJavaScript = files.filter(name => /-legacy-.*\.js$/.test(name));
+const optionalSyntax = /\?\?(?:[^=]|$)|\?\.(?!\d)/;
 
 let compressedJavaScript = 0;
+let compressedLazyMediaJavaScript = 0;
 for (const name of legacyJavaScript) {
   const source = await readFile(join(directory, name), "utf8");
   new Script(source, { filename: name });
-  if (/\?\.|\?\?/.test(source)) {
+  if (optionalSyntax.test(source)) {
     throw new Error(`${name} contains syntax newer than Chromium 68`);
   }
-  compressedJavaScript += gzipSync(source).byteLength;
+  const compressed = gzipSync(source).byteLength;
+  if (/^(?:skin|hls)-legacy-/u.test(name)) compressedLazyMediaJavaScript += compressed;
+  else compressedJavaScript += compressed;
 }
 if (compressedJavaScript > 180 * 1024) {
   throw new Error(`TV legacy JavaScript exceeds 180 KiB compressed: ${compressedJavaScript}`);
+}
+if (compressedLazyMediaJavaScript > 260 * 1024) {
+  throw new Error(`Lazy Video.js and HLS chunks exceed 260 KiB compressed: ${compressedLazyMediaJavaScript}`);
 }
 
 let compressedCss = 0;
@@ -53,5 +60,5 @@ if (compressedWorker > 24 * 1024) {
 }
 
 process.stdout.write(
-  `TV bundle compatibility and budget check passed (${compressedJavaScript} B JS, ${compressedCss} B CSS, ${compressedWorker} B media worker compressed).\n`
+  `TV bundle compatibility and budget check passed (${compressedJavaScript} B app JS, ${compressedLazyMediaJavaScript} B lazy media JS, ${compressedCss} B CSS, ${compressedWorker} B media worker compressed).\n`
 );

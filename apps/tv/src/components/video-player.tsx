@@ -1,7 +1,8 @@
 import type { Ref } from "preact";
 import type { ViewerMediaItem, ViewerUrlState } from "@cloudframe/tv-core";
-import { useEffect } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
+import { attachHlsSource, type HlsPlaybackHandle } from "../media/hls-playback";
 import { loadVideoJs } from "../videojs";
 
 export interface VideoPlayerProps {
@@ -13,6 +14,8 @@ export interface VideoPlayerProps {
   currentSeconds: number;
   durationSeconds: number;
   bufferedPercent: number;
+  onHlsAttached: () => void;
+  onHlsFatal: (error: { kind: "network" | "media" | "unsupported" }) => void;
   onLoadedMetadata: (element: HTMLVideoElement) => void;
   onPlaying: () => void;
   onPlay: () => void;
@@ -27,21 +30,74 @@ export interface VideoPlayerProps {
 }
 
 export function VideoPlayer(props: VideoPlayerProps) {
-  const source = props.url?.status === "ready" ? props.url.url : undefined;
+  const readyUrl = props.url?.status === "ready" ? props.url : undefined;
+  const source = readyUrl?.sourceKind === "hls" ? undefined : readyUrl?.url;
+  const hlsPlaylist = readyUrl?.sourceKind === "hls" ? readyUrl.url : undefined;
+  const [videoJsReady, setVideoJsReady] = useState<boolean | null>(null);
+  const video = useRef<HTMLVideoElement | null>(null);
+  const [videoGeneration, setVideoGeneration] = useState(0);
+  const hlsHandle = useRef<HlsPlaybackHandle | null>(null);
   const noReferrer = { referrerPolicy: "no-referrer" } as const;
+
   useEffect(() => {
-    void loadVideoJs();
+    let active = true;
+    void loadVideoJs().then(loaded => {
+      if (active) setVideoJsReady(loaded);
+    });
+    return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    hlsHandle.current?.destroy();
+    hlsHandle.current = null;
+    const element = video.current;
+    if (!element || !hlsPlaylist) return;
+    let active = true;
+    let fatalReported = false;
+    void attachHlsSource(element, hlsPlaylist, {
+      onFatal(error) {
+        if (!active || fatalReported) return;
+        fatalReported = true;
+        props.onHlsFatal(error);
+      },
+    }).then(handle => {
+      if (!active) {
+        handle.destroy();
+        return;
+      }
+      hlsHandle.current = handle;
+      props.onHlsAttached();
+    }).catch(() => {
+      if (!active || fatalReported) return;
+      fatalReported = true;
+      props.onHlsFatal({ kind: "unsupported" });
+    });
+    return () => {
+      active = false;
+      hlsHandle.current?.destroy();
+      hlsHandle.current = null;
+    };
+  }, [hlsPlaylist, videoGeneration]);
+
+  const assignVideo = useCallback((element: HTMLVideoElement | null) => {
+    if (video.current !== element) {
+      video.current = element;
+      setVideoGeneration(current => current + 1);
+    }
+    assignRef(props.videoRef, element);
+  }, [props.videoRef]);
+
   return (
     <div className="video-stage">
       <video-player class="cloudframe-video-player">
-        <media-container class="cloudframe-media-container">
-          {source ? (
+        <video-skin class="cloudframe-video-skin">
+          {readyUrl ? (
             <video
-              key={source}
-              ref={props.videoRef}
+              key={`${readyUrl.sourceKind}:${readyUrl.url}`}
+              ref={assignVideo}
               className="viewer-video"
               src={source}
+              controls={videoJsReady === false}
               aria-label={`Playing ${props.item.name}`}
               preload="metadata"
               {...noReferrer}
@@ -60,19 +116,26 @@ export function VideoPlayer(props: VideoPlayerProps) {
               onError={event => props.onError(event.currentTarget)}
             />
           ) : <div className="viewer-loading" role="status">Preparing video…</div>}
-        </media-container>
+        </video-skin>
       </video-player>
-      <div className={`video-controls${props.controlsVisible ? " is-visible" : ""}`} aria-hidden={!props.controlsVisible}>
-        <span>{props.buffering ? "Buffering…" : "Play / Pause"}</span>
-        <span>−10s</span>
-        <time>{formatTime(props.currentSeconds)} / {formatTime(props.durationSeconds)}</time>
-        <span>+10s</span>
-        <span className="buffered-track" role="progressbar" aria-label="Buffered" aria-valuemin={0} aria-valuemax={100} aria-valuenow={props.bufferedPercent}>
-          <i style={{ width: `${props.bufferedPercent}%` }} />
-        </span>
-      </div>
+      {videoJsReady !== true ? (
+        <div className={`video-controls${props.controlsVisible ? " is-visible" : ""}`} aria-hidden={!props.controlsVisible}>
+          <span>{props.buffering ? "Buffering…" : "Play / Pause"}</span>
+          <span>−10s</span>
+          <time>{formatTime(props.currentSeconds)} / {formatTime(props.durationSeconds)}</time>
+          <span>+10s</span>
+          <span className="buffered-track" role="progressbar" aria-label="Buffered" aria-valuemin={0} aria-valuemax={100} aria-valuenow={props.bufferedPercent}>
+            <i style={{ width: `${props.bufferedPercent}%` }} />
+          </span>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function assignRef<T>(ref: Ref<T>, value: T | null) {
+  if (typeof ref === "function") ref(value);
+  else if (ref) ref.current = value;
 }
 
 function formatTime(seconds: number) {

@@ -1,6 +1,4 @@
 import {
-  googleMediaAlias,
-  sanitizeMediaFilename,
   validSingleRange,
   type GoogleMediaGrant,
   type GoogleMediaPageMessage,
@@ -14,7 +12,6 @@ const REHYDRATION_TIMEOUT_MS = 500;
 const SESSION_ID = /^session_[A-Za-z0-9_-]{1,128}$/u;
 const REQUEST_ID = /^request_[A-Za-z0-9_-]{1,128}$/u;
 const FINGERPRINT = /^[A-Za-z0-9_-]{43}$/u;
-const ALIAS_PATH = /^\/__cloudframe_media__\/(session_[A-Za-z0-9_-]{1,128})\/([^/]+)$/u;
 const RESPONSE_HEADERS = [
   "accept-ranges",
   "content-length",
@@ -61,14 +58,9 @@ interface BoundGrant {
   clientId: string;
 }
 
-interface AliasLookup {
-  sessionId: string;
-  pathname: string;
-}
-
 interface PendingGrant {
   clientId: string;
-  lookup: { kind: "fingerprint" | "session"; value: string };
+  lookup: { kind: "fingerprint"; value: string };
   resolve(value: BoundGrant | null): void;
   timer: ReturnType<typeof globalThis.setTimeout>;
 }
@@ -107,9 +99,8 @@ export function installGoogleMediaWorker(
   });
   scope.addEventListener("fetch", event => {
     const raw = allowedRawUrl(event.request.url);
-    const alias = raw === null ? aliasLookup(event.request.url, scope.location.origin) : null;
-    if (raw === null && alias === null) return;
-    event.respondWith(handleFetch(event, raw, alias));
+    if (raw === null) return;
+    event.respondWith(handleFetch(event, raw));
   });
 
   function allowedRawUrl(value: string): string | null {
@@ -135,8 +126,7 @@ export function installGoogleMediaWorker(
     const waiting = pending.get(message.requestId);
     if (waiting && (
       waiting.clientId !== source.id ||
-      (waiting.lookup.kind === "fingerprint" && waiting.lookup.value !== message.grant.fingerprint) ||
-      (waiting.lookup.kind === "session" && waiting.lookup.value !== message.grant.sessionId)
+      waiting.lookup.value !== message.grant.fingerprint
     )) return;
     const mutation = advanceMessageMutation(source.id, message.grant.sessionId);
     if (!await validGrantFingerprint(message.grant)) return;
@@ -182,7 +172,6 @@ export function installGoogleMediaWorker(
       "expiresAtEpoch",
       "kind",
       "mimeType",
-      "filename",
       "size",
     ])) return null;
     const expiresAtEpoch = value.expiresAtEpoch;
@@ -201,10 +190,6 @@ export function installGoogleMediaWorker(
       value.mimeType.length < 3 || value.mimeType.length > 256 ||
       !/^(?:image|video)\/[A-Za-z0-9!#$&^_.+-]+$/u.test(value.mimeType) ||
       !value.mimeType.startsWith(`${value.kind}/`) ||
-      typeof value.filename !== "string" ||
-      value.filename.length < 1 || codePointLength(value.filename) > 255 ||
-      hasControlCharacters(value.filename) ||
-      sanitizeMediaFilename(value.filename) !== value.filename ||
       typeof expiresAtEpoch !== "number" ||
       !Number.isSafeInteger(expiresAtEpoch) ||
       expiresAtEpoch <= dependencies.now() ||
@@ -220,7 +205,6 @@ export function installGoogleMediaWorker(
       expiresAtEpoch,
       kind: value.kind,
       mimeType: value.mimeType,
-      filename: value.filename,
       size,
     };
   }
@@ -273,47 +257,30 @@ export function installGoogleMediaWorker(
 
   async function handleFetch(
     event: GoogleMediaFetchEvent,
-    rawUrl: string | null,
-    alias: AliasLookup | null,
+    rawUrl: string,
   ): Promise<Response> {
     const client = await fetchClient(event.clientId);
     if (!client) return Response.error();
     pruneExpired();
 
-    let bound = rawUrl !== null
-      ? findRawGrant(rawUrl, client.id)
-      : findAliasGrant(alias!, client.id);
-    const conflicting = rawUrl !== null
-      ? hasRawGrantForAnotherClient(rawUrl, client.id)
-      : hasAliasConflict(alias!, client.id);
+    let bound = findRawGrant(rawUrl, client.id);
+    const conflicting = hasRawGrantForAnotherClient(rawUrl, client.id);
     if (!bound && conflicting) return Response.error();
 
     if (!bound) {
-      let lookup: { kind: "fingerprint" | "session"; value: string };
-      if (rawUrl !== null) {
-        try {
-          lookup = { kind: "fingerprint", value: await dependencies.fingerprint(rawUrl) };
-        } catch {
-          return Response.error();
-        }
-      } else {
-        lookup = { kind: "session", value: alias!.sessionId };
+      let lookup: { kind: "fingerprint"; value: string };
+      try {
+        lookup = { kind: "fingerprint", value: await dependencies.fingerprint(rawUrl) };
+      } catch {
+        return Response.error();
       }
       bound = await requestGrant(client, lookup);
-      if (!bound) {
-        if (alias) postResult(client, alias.sessionId, "google-filename", "bridge-error");
-        return Response.error();
-      }
-      bound = rawUrl !== null
-        ? findRawGrant(rawUrl, client.id)
-        : findAliasGrant(alias!, client.id);
-      if (!bound) {
-        if (alias) postResult(client, alias.sessionId, "google-filename", "bridge-error");
-        return Response.error();
-      }
+      if (!bound) return Response.error();
+      bound = findRawGrant(rawUrl, client.id);
+      if (!bound) return Response.error();
     }
 
-    const attempt = rawUrl === null ? "google-filename" : "google-raw";
+    const attempt = "google-raw" as const;
     if (event.request.method !== "GET" && event.request.method !== "HEAD") {
       postResult(client, bound.grant.sessionId, attempt, "bridge-error");
       return Response.error();
@@ -377,25 +344,9 @@ export function installGoogleMediaWorker(
     return false;
   }
 
-  function findAliasGrant(alias: AliasLookup, clientId: string): BoundGrant | null {
-    const bound = grants.get(alias.sessionId);
-    return bound && bound.clientId === clientId &&
-      googleMediaAlias(bound.grant.sessionId, bound.grant.filename) === alias.pathname
-      ? bound
-      : null;
-  }
-
-  function hasAliasConflict(alias: AliasLookup, clientId: string): boolean {
-    const bound = grants.get(alias.sessionId);
-    return Boolean(bound && (
-      bound.clientId !== clientId ||
-      googleMediaAlias(bound.grant.sessionId, bound.grant.filename) !== alias.pathname
-    ));
-  }
-
   function requestGrant(
     client: GoogleMediaWorkerClient,
-    lookup: { kind: "fingerprint" | "session"; value: string },
+    lookup: { kind: "fingerprint"; value: string },
   ): Promise<BoundGrant | null> {
     requestSequence += 1;
     const requestId = `request_worker_${requestSequence}`;
@@ -420,20 +371,6 @@ export function installGoogleMediaWorker(
     } catch {
       return null;
     }
-  }
-}
-
-function aliasLookup(value: string, origin: string): AliasLookup | null {
-  try {
-    const url = new URL(value);
-    if (
-      url.origin !== origin || url.username !== "" || url.password !== "" ||
-      url.search !== "" || url.hash !== ""
-    ) return null;
-    const match = ALIAS_PATH.exec(url.pathname);
-    return match ? { sessionId: match[1]!, pathname: url.pathname } : null;
-  } catch {
-    return null;
   }
 }
 
@@ -553,7 +490,7 @@ function concreteInterval(
 function postResult(
   client: GoogleMediaWorkerClient,
   sessionId: string,
-  attempt: "google-raw" | "google-filename",
+  attempt: "google-raw",
   outcome: "response" | "network-error" | "bridge-error",
   status?: number,
 ): void {
@@ -618,20 +555,4 @@ function hasControlCharacters(value: string): boolean {
     if (code <= 31 || code === 127) return true;
   }
   return false;
-}
-
-function codePointLength(value: string): number {
-  let length = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    const first = value.charCodeAt(index);
-    if (
-      first >= 0xd800 && first <= 0xdbff &&
-      index + 1 < value.length
-    ) {
-      const second = value.charCodeAt(index + 1);
-      if (second >= 0xdc00 && second <= 0xdfff) index += 1;
-    }
-    length += 1;
-  }
-  return length;
 }

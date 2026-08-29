@@ -148,7 +148,6 @@ describe("Google media page bridge", () => {
       token: "ya29.test-token",
       kind: "video",
       mimeType: "video/mpeg",
-      filename: "MOV00516.MPG",
       size: 100,
     });
     expect(posted.grant).not.toHaveProperty("clientId");
@@ -202,20 +201,6 @@ describe("Google media page bridge", () => {
       lookup: { kind: "fingerprint", value: "A".repeat(43) },
     } satisfies GoogleMediaWorkerMessage);
     expect(fake.controller?.postMessage).toHaveBeenCalledTimes(callCount);
-  });
-
-  it("regrants the same live credential only for an exact alias session lookup", async () => {
-    const { prepared, fake } = await prepareAndAck();
-    fake.emitMessage({
-      type: "cloudframe-media-grant-request",
-      requestId: "request_worker_alias",
-      lookup: { kind: "session", value: prepared.sessionId },
-    } satisfies GoogleMediaWorkerMessage);
-    expect(fake.controller?.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({
-      type: "cloudframe-media-grant",
-      requestId: "request_worker_alias",
-      grant: expect.objectContaining({ sessionId: prepared.sessionId }),
-    }));
   });
 
   it("ignores result evidence from a worker source not bound to the live session", async () => {
@@ -296,57 +281,9 @@ describe("Google media page bridge", () => {
     await expect(bridge.waitForEvidence(prepared.sessionId, 300)).resolves.toEqual({
       attempt: "google-raw", outcome: "response", status: 206,
     });
-    expect(bridge.filenameSource(prepared.sessionId)?.sourceUrl)
-      .toBe(`/__cloudframe_media__/${prepared.sessionId}/MOV00516.MPG`);
     bridge.release(prepared.sessionId);
     expect(fake.controller?.postMessage).toHaveBeenLastCalledWith({
       type: "cloudframe-media-revoke", sessionId: prepared.sessionId,
-    });
-    expect(bridge.filenameSource(prepared.sessionId)).toBeNull();
-  });
-
-  it("resets raw evidence and waits only for exact filename evidence after selecting the alias", async () => {
-    const { bridge, fake, prepared } = await prepareAndAck();
-    fake.emitMessage({
-      type: "cloudframe-media-result",
-      sessionId: prepared.sessionId,
-      attempt: "google-raw",
-      outcome: "response",
-      status: 206,
-    } satisfies GoogleMediaWorkerMessage);
-    expect(bridge.evidence(prepared.sessionId)).toEqual({
-      attempt: "google-raw", outcome: "response", status: 206,
-    });
-
-    expect(bridge.filenameSource(prepared.sessionId)?.sourceKind).toBe("google-filename");
-    expect(bridge.evidence(prepared.sessionId)).toEqual({
-      attempt: "google-filename", outcome: "none",
-    });
-    const pending = bridge.waitForEvidence(prepared.sessionId, 300);
-    let settled = false;
-    void pending.then(() => { settled = true; });
-
-    fake.emitMessage({
-      type: "cloudframe-media-result",
-      sessionId: prepared.sessionId,
-      attempt: "google-raw",
-      outcome: "response",
-      status: 206,
-    } satisfies GoogleMediaWorkerMessage);
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    expect(bridge.evidence(prepared.sessionId)).toEqual({
-      attempt: "google-filename", outcome: "none",
-    });
-
-    fake.emitMessage({
-      type: "cloudframe-media-result",
-      sessionId: prepared.sessionId,
-      attempt: "google-filename",
-      outcome: "network-error",
-    } satisfies GoogleMediaWorkerMessage);
-    await expect(pending).resolves.toEqual({
-      attempt: "google-filename", outcome: "network-error",
     });
   });
 
@@ -356,7 +293,7 @@ describe("Google media page bridge", () => {
     fake.emitMessage({
       type: "cloudframe-media-grant-request",
       requestId: "request_worker_regrant",
-      lookup: { kind: "session", value: prepared.sessionId },
+      lookup: { kind: "fingerprint", value: prepared.fingerprint },
     } satisfies GoogleMediaWorkerMessage, fake.restartedWorker);
 
     bridge.release(prepared.sessionId);
@@ -392,7 +329,7 @@ describe("Google media page bridge", () => {
     fake.emitMessage({
       type: "cloudframe-media-grant-request",
       requestId: "request_worker_pending",
-      lookup: { kind: "session", value: posted.grant.sessionId },
+      lookup: { kind: "fingerprint", value: posted.grant.fingerprint },
     } satisfies GoogleMediaWorkerMessage, fake.restartedWorker);
 
     await vi.advanceTimersByTimeAsync(5_001);
@@ -424,7 +361,12 @@ describe("Google media page bridge", () => {
     const posted = await postedGrant(fake);
 
     timestamp = TEST_NOW + 60_001;
-    expect(bridge.filenameSource(posted.grant.sessionId)).toBeNull();
+    void bridge.evidence(posted.grant.sessionId);
+    fake.emitMessage({
+      type: "cloudframe-media-grant-request",
+      requestId: "request_worker_expiry_probe",
+      lookup: { kind: "fingerprint", value: posted.grant.fingerprint },
+    } satisfies GoogleMediaWorkerMessage);
     await rejection;
 
     const isRevoke = ([message]: [GoogleMediaPageMessage]) => message.type === "cloudframe-media-revoke";
@@ -491,15 +433,14 @@ describe("Google media page bridge", () => {
 
   it("resolves a pending evidence wait when a matching result arrives", async () => {
     const { bridge, fake, prepared } = await prepareAndAck();
-    expect(bridge.filenameSource(prepared.sessionId)?.sourceKind).toBe("google-filename");
     const pending = bridge.waitForEvidence(prepared.sessionId, 300);
     fake.emitMessage({
       type: "cloudframe-media-result",
       sessionId: prepared.sessionId,
-      attempt: "google-filename",
+      attempt: "google-raw",
       outcome: "network-error",
     } satisfies GoogleMediaWorkerMessage);
-    await expect(pending).resolves.toEqual({ attempt: "google-filename", outcome: "network-error" });
+    await expect(pending).resolves.toEqual({ attempt: "google-raw", outcome: "network-error" });
   });
 
   it("returns none when the bounded evidence wait expires", async () => {
