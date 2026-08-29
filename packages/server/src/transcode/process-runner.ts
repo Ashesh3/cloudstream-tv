@@ -28,8 +28,8 @@ export function createProcessRunner(dependencies: { spawn?: SpawnLike; terminati
     const terminate = (error: ProcessRunnerError) => {
       if (terminalError) return;
       terminalError = error;
-      try { child.kill("SIGTERM"); } catch {}
-      killTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} }, grace);
+      try { child.kill("SIGTERM"); } catch { /* The close event remains authoritative. */ }
+      killTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* The child may already be gone. */ } }, grace);
     };
     const abort = () => terminate(new ProcessRunnerError("PROCESS_ABORTED"));
     options.signal.addEventListener("abort", abort, { once: true });
