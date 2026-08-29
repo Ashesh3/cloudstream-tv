@@ -108,11 +108,14 @@ describe("provider token encryption", () => {
       keys: { v1: Buffer.alloc(32, 3) }
     };
     const encrypted = encryptProviderToken("provider-secret", keys);
+    const ciphertext = Buffer.from(encrypted.ciphertext, "base64url");
+    ciphertext[0] ^= 1;
     const tampered = {
       ...encrypted,
-      ciphertext: `${encrypted.ciphertext.slice(0, -1)}A`
+      ciphertext: ciphertext.toString("base64url")
     };
 
+    expect(tampered.ciphertext).not.toBe(encrypted.ciphertext);
     expect(() => decryptProviderToken(tampered, keys.keys)).toThrow();
   });
 });

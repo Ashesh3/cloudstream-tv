@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Target LG webOS 5+ and Chromium 68; Video.js 10 must never be required for native playback.
-- Preserve current device, source, root, browse-handle, Google proxy, OneDrive direct-media, watch-history, slideshow, and remote-navigation boundaries.
+- Preserve current device, source, root, browse-handle, watch-history, slideshow, and remote-navigation boundaries. Preserve browser-side authenticated direct delivery: media bytes go directly from Google and Microsoft, OneDrive keeps its provider-signed URL, and the approved TV keeps a short-lived Google access token only in memory while its root-scoped service worker attaches it to exact raw Drive or filename-alias requests. Vercel must not proxy, cache, remux, or transcode provider bodies.
 - Do not expose provider IDs, tokens, provider response bodies, or raw preview URLs in browse JSON.
 - Keep virtualized card rendering; optimize URL vending and browser cache readiness rather than mounting the full folder.
 - Request at most one provider page ahead and keep thumbnail URL-vending requests sequential.

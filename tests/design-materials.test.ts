@@ -14,6 +14,10 @@ const activeDocumentationPaths = [
   `${root}docs/operations/webos-acceptance.md`,
   `${root}.env.example`
 ];
+const activeCompatibilityDocumentationPaths = [
+  `${root}docs/superpowers/specs/2026-08-29-video-player-thumbnail-compatibility-design.md`,
+  `${root}docs/superpowers/plans/2026-08-29-video-player-thumbnail-compatibility.md`
+];
 
 describe("screening room material contract", () => {
   it("uses the authored program stock raster without generated faux grain", () => {
@@ -59,6 +63,16 @@ describe("screening room material contract", () => {
       "authenticated streaming through Vercel"
     ]) {
       expect(documentation).not.toContain(retired);
+    }
+  });
+
+  it("keeps active player and thumbnail documents on the direct-media boundary", () => {
+    for (const path of activeCompatibilityDocumentationPaths) {
+      const documentation = readFileSync(path, "utf8");
+      expect(documentation, path).toContain("browser-side authenticated direct delivery");
+      expect(documentation, path).toContain("media bytes go directly from Google and Microsoft");
+      expect(documentation, path).toContain("short-lived Google access token");
+      expect(documentation, path).not.toMatch(/authorized same-origin range proxy|Google proxy|\/api\/tv\/google-media\//i);
     }
   });
 });

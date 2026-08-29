@@ -19,7 +19,7 @@ Restore the more compatible July playback experience inside Cloudframe's current
 - Keep Cloudframe's existing full-screen viewer shell, remote-key routing, image viewer, slideshow, URL renewal, and authorization behavior.
 - Use Video.js as progressive enhancement. If the v10 registration or custom-element runtime is unavailable, the same native `<video>` remains rendered and playable with Cloudframe controls. Playback must never depend on successful Video.js initialization on Chromium 68.
 - Preserve original provider media URLs and MIME types. Video.js may improve player lifecycle and source selection, but Cloudframe still does not transcode and cannot add codecs absent from the TV.
-- Keep the current provider-specific media boundary: OneDrive remains direct and Google Drive remains the authorized same-origin range proxy.
+- Keep the current provider-specific media boundary: browser-side authenticated direct delivery means media bytes go directly from Google and Microsoft. OneDrive retains its provider-signed URL. For Google, the approved TV holds a short-lived Google access token only in memory while the root-scoped service worker attaches it to exact raw Drive or filename-alias requests. Vercel authorizes and vends the descriptor but never proxies, caches, remuxes, or transcodes provider bodies.
 
 ## Thumbnail data contract
 
