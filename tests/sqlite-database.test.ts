@@ -25,7 +25,7 @@ async function temporaryDataDirectory(): Promise<string> {
 }
 
 describe("local SQLite database", () => {
-  it("opens with durable pragmas, applies migration one, and creates data paths", async () => {
+  it("opens with durable pragmas, applies all migrations, and creates data paths", async () => {
     const dataDir = await temporaryDataDirectory();
 
     const local = await openLocalDatabase({ dataDir, now: () => now });
@@ -40,7 +40,7 @@ describe("local SQLite database", () => {
         .toMatchObject({ synchronous: 2 });
       expect(local.connection.prepare(
         "SELECT version FROM schema_migrations ORDER BY version",
-      ).all()).toEqual([{ version: 1 }]);
+      ).all()).toEqual([{ version: 1 }, { version: 2 }]);
       expect(existsSync(join(dataDir, "transcodes"))).toBe(true);
       expect(existsSync(join(dataDir, "staging"))).toBe(true);
       expect(existsSync(join(dataDir, "backups"))).toBe(true);
@@ -61,7 +61,11 @@ describe("local SQLite database", () => {
       },
       {
         version: 2,
-        sql: "CREATE TABLE migration_two_marker (value TEXT NOT NULL);",
+        sql: "",
+      },
+      {
+        version: 3,
+        sql: "CREATE TABLE migration_three_marker (value TEXT NOT NULL);",
       },
     ];
     const second = await openLocalDatabase({
@@ -72,10 +76,10 @@ describe("local SQLite database", () => {
     try {
       expect(second.connection.prepare(
         "SELECT version FROM schema_migrations ORDER BY version",
-      ).all()).toEqual([{ version: 1 }, { version: 2 }]);
+      ).all()).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
       expect(second.connection.prepare(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration_two_marker'",
-      ).get()).toMatchObject({ name: "migration_two_marker" });
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration_three_marker'",
+      ).get()).toMatchObject({ name: "migration_three_marker" });
 
       const backupNames = (await readdir(second.backupDir))
         .filter((name) => name.endsWith(".sqlite"));
@@ -84,9 +88,9 @@ describe("local SQLite database", () => {
       try {
         expect(backup.prepare(
           "SELECT version FROM schema_migrations ORDER BY version",
-        ).all()).toEqual([{ version: 1 }]);
+        ).all()).toEqual([{ version: 1 }, { version: 2 }]);
         expect(backup.prepare(
-          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration_two_marker'",
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'migration_three_marker'",
         ).get()).toBeUndefined();
       } finally {
         backup.close();
@@ -115,7 +119,8 @@ describe("local SQLite database", () => {
       now: () => now,
       migrations: [
         { version: 1, sql: "" },
-        { version: 2, sql: "CREATE TABLE retention_marker (value TEXT);" },
+        { version: 2, sql: "" },
+        { version: 3, sql: "CREATE TABLE retention_marker (value TEXT);" },
       ],
     });
     migrated.close();
@@ -124,7 +129,7 @@ describe("local SQLite database", () => {
       .filter((name) => name.startsWith("auto-") && name.endsWith(".sqlite"))
       .sort();
     expect(names).toHaveLength(5);
-    expect(names.at(-1)).toContain("20260829T123456.000Z-v1");
+    expect(names.at(-1)).toContain("20260829T123456.000Z-v2");
     expect(names).not.toContain("auto-20260828T120000.000Z-v0.sqlite");
     expect(names).not.toContain("auto-20260828T120001.000Z-v0.sqlite");
   });

@@ -35,6 +35,41 @@ export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    sql: `
+      CREATE TABLE transcode_assets (
+        cache_key TEXT PRIMARY KEY,
+        profile_id TEXT NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        segment_count INTEGER NOT NULL,
+        probe_json TEXT NOT NULL,
+        total_bytes INTEGER NOT NULL DEFAULT 0,
+        last_accessed_at INTEGER NOT NULL
+      );
+      CREATE TABLE transcode_windows (
+        cache_key TEXT NOT NULL REFERENCES transcode_assets(cache_key) ON DELETE CASCADE,
+        window_index INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('partial', 'complete')),
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (cache_key, window_index)
+      );
+      CREATE TABLE transcode_segments (
+        cache_key TEXT NOT NULL REFERENCES transcode_assets(cache_key) ON DELETE CASCADE,
+        segment_index INTEGER NOT NULL,
+        window_index INTEGER NOT NULL,
+        duration_ms INTEGER NOT NULL,
+        relative_path TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        completed_at INTEGER NOT NULL,
+        last_accessed_at INTEGER NOT NULL,
+        PRIMARY KEY (cache_key, segment_index)
+      );
+      CREATE INDEX transcode_assets_lru ON transcode_assets(last_accessed_at);
+      CREATE INDEX transcode_segments_lru ON transcode_segments(last_accessed_at);
+    `,
+  },
 ];
 
 export function validateSqliteMigrations(
