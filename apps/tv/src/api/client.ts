@@ -25,7 +25,9 @@ export interface TvApi {
   home(): Promise<TvHomeResponse>;
   folder(handle: string, cursor?: string | null): Promise<TvFolderPageResponse>;
   thumbnailUrls(handles: string[], signal?: AbortSignal, options?: { refresh?: boolean }): Promise<{ items: DirectThumbnailItem[] }>;
-  mediaUrl(handle: string, signal?: AbortSignal, expected?: { itemId: string; kind: "image" | "video" }): Promise<DirectMediaUrlResponse>;
+  mediaUrl(handle: string, signal?: AbortSignal, expected?: { itemId: string; kind: "image" | "video" }, options?: { fallback?: "hls" }): Promise<DirectMediaUrlResponse>;
+  heartbeatTranscode(sessionId: string, signal?: AbortSignal): Promise<void>;
+  releaseTranscode(sessionId: string, signal?: AbortSignal): Promise<void>;
 }
 
 export class TvApiError extends Error {
@@ -68,6 +70,16 @@ async function request<T>(path: string, decoder: Decoder<T>, init: RequestInit =
   }
 }
 
+async function requestNoContent(path: string, init: RequestInit): Promise<void> {
+  let response: Response;
+  try { response = await fetch(path, { ...init, credentials: "include" }); }
+  catch { throw new TvApiError(0, "NETWORK_ERROR", "Cloudframe could not reach the server."); }
+  if (!response.ok) throw normalizeError(await safeJson(response), response.status);
+  if (response.status !== 204) throw invalidResponse(response.status);
+  const text = await response.text();
+  if (text.length !== 0) throw invalidResponse(response.status);
+}
+
 export const tvApi: TvApi = {
   bootstrap: () => request("/api/bootstrap", decodeBootstrap),
   createDeviceRequest: name => request("/api/device-requests", decodeCreateRequest, {
@@ -87,11 +99,13 @@ export const tvApi: TvApi = {
     body: JSON.stringify({ handles, maxDimension: 720, ...(options?.refresh ? { refresh: true } : {}) }),
     signal
   }),
-  mediaUrl: (handle, signal, expected) => request("/api/tv/media-url", value => decodeDirectMediaUrlResponse(value, expected), {
+  mediaUrl: (handle, signal, expected, options) => request("/api/tv/media-url", value => decodeDirectMediaUrlResponse(value, expected), {
     method: "POST",
-    body: JSON.stringify({ handle }),
+    body: JSON.stringify({ handle, ...(options?.fallback ? { fallback: options.fallback } : {}) }),
     signal
-  })
+  }),
+  heartbeatTranscode: (sessionId, signal) => requestNoContent(`/api/tv/transcodes/${encodeURIComponent(sessionId)}/heartbeat`, { method: "POST", signal }),
+  releaseTranscode: (sessionId, signal) => requestNoContent(`/api/tv/transcodes/${encodeURIComponent(sessionId)}`, { method: "DELETE", signal })
 };
 
 function decodeBootstrap(value: unknown): TvBootstrapResponse | null {

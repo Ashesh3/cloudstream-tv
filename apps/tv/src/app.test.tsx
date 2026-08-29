@@ -14,7 +14,9 @@ const api = (): TvApi => ({
   home: vi.fn(),
   folder: vi.fn(),
   thumbnailUrls: vi.fn(async () => ({ items: [] })),
-  mediaUrl: vi.fn()
+  mediaUrl: vi.fn(),
+  heartbeatTranscode: vi.fn(),
+  releaseTranscode: vi.fn()
 });
 
 describe("TV enrollment and browse states", () => {

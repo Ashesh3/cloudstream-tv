@@ -4,6 +4,37 @@ import { decodeDirectMediaUrlResponse } from "./media-response";
 const expiresAt = new Date(Date.now() + 60_000).toISOString();
 
 describe("TV media response decoder", () => {
+  it("accepts only one exact same-origin HLS descriptor", () => {
+    const sessionId = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
+    const hls = {
+      itemId: "item_video",
+      kind: "video" as const,
+      transport: "hls" as const,
+      playlistUrl: `/api/tv/transcodes/${sessionId}/master.m3u8`,
+      playbackSessionId: sessionId,
+      durationSeconds: 65.832,
+      profile: "h264-aac-1080p-v1" as const,
+      expiresAt,
+      revision: "revision-7",
+    };
+    expect(decodeDirectMediaUrlResponse(hls, { itemId: "item_video", kind: "video" })).toEqual(hls);
+    for (const mutation of [
+      { playlistUrl: `https://evil.example/api/tv/transcodes/${sessionId}/master.m3u8` },
+      { playlistUrl: `//evil.example/api/tv/transcodes/${sessionId}/master.m3u8` },
+      { playlistUrl: `/api/tv/transcodes/${sessionId}%2Fextra/master.m3u8` },
+      { playlistUrl: `/api/tv/transcodes/${sessionId}/master.m3u8?x=1` },
+      { playbackSessionId: "otherabcdefghijklmnopqrstuvwxyz0123456" },
+      { kind: "image" },
+      { profile: "other-profile" },
+      { durationSeconds: 0 },
+      { durationSeconds: Number.NaN },
+      { durationSeconds: 86_401 },
+      { extra: true },
+    ]) {
+      expect(decodeDirectMediaUrlResponse({ ...hls, ...mutation }, { itemId: "item_video", kind: "video" })).toBeNull();
+    }
+  });
+
   it("accepts an exact Google bearer descriptor", () => {
     expect(decodeDirectMediaUrlResponse({
       itemId: "item_video",

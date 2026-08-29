@@ -65,7 +65,7 @@ export async function installTvFixture(
       : status === "pending"
         ? { state: "pending", request: { id: "request-1", requestedName: "Living Room", status: "pending", createdAt: now, expiresAt: new Date(Date.now()+3600000).toISOString(), resolvedAt: null, approvedDeviceId: null } }
         : { state: "unenrolled" };
-    const calls = { folder: [] as Array<{ handle: string; cursor: string | null }>, thumbnails: [] as string[][], media: [] as string[] };
+    const calls = { folder: [] as Array<{ handle: string; cursor: string | null }>, thumbnails: [] as string[][], media: [] as Array<{ handle: string; fallback: string | null }>, heartbeat: [] as string[], release: [] as string[] };
     window.__CLOUDFRAME_TEST_TV_CALLS__ = calls;
     const reject = (code: string) => Promise.reject(Object.assign(new Error(code), { code }));
     window.__CLOUDFRAME_TEST_TV_API__ = {
@@ -87,12 +87,18 @@ export async function installTvFixture(
           return { itemId: item.id, status: "ready", url: item.kind === "folder" ? media.folderThumbnail : media.thumbnail, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" };
         }) };
       },
-      mediaUrl: async handle => {
-        calls.media.push(handle);
+      mediaUrl: async (handle, _signal, _expected, options) => {
+        calls.media.push({ handle, fallback: options?.fallback ?? null });
         const item = itemByHandle.get(handle);
         if (!item || item.kind === "folder") return reject("ITEM_NOT_FOUND");
+        if (options?.fallback === "hls" && item.kind === "video") {
+          const sessionId = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
+          return { itemId: item.id, kind: "video", transport: "hls", playlistUrl: `/api/tv/transcodes/${sessionId}/master.m3u8`, playbackSessionId: sessionId, durationSeconds: 65.832, profile: "h264-aac-1080p-v1", expiresAt: new Date(Date.now()+45000).toISOString(), revision: "1" };
+        }
         return { itemId: item.id, kind: item.kind, transport: "direct", url: item.kind === "video" ? media.video : media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" };
-      }
+      },
+      heartbeatTranscode: async sessionId => { calls.heartbeat.push(sessionId); },
+      releaseTranscode: async sessionId => { calls.release.push(sessionId); }
     };
   }, { state, media, longFolder: options.longFolder === true });
 }
@@ -116,8 +122,10 @@ export async function installAdminFixture(page: Page, scenario: AdminFixtureScen
     const source = { id: sourceId, provider: "google", accountLabel: "family@example.test", status: "healthy", createdAt: now };
     const rootByProviderNode = new Map<string, string>();
     let revision = 1;
-    const snapshot = () => ({ revision, household, pendingRequests: requests, devices, sources: [source], roots, recoveryCopy: { status: "current", revision } });
+    const snapshot = () => ({ revision, household, pendingRequests: requests, devices, sources: [source], roots, storage: { mode: "local", revision } });
     window.__CLOUDFRAME_TEST_ADMIN_API__ = {
+      installationStatus: async () => ({ state: "configured" }),
+      claimInstallation: async () => ({ configured: true }),
       login: async () => ({ authenticated: true }), logout: async () => ({ authenticated: false }), snapshot: async () => snapshot(),
       updateSettings: async body => { Object.assign(household, body); revision += 1; return { revision }; }, rotatePassphrase: async () => ({ authenticated: false, revision: ++revision }),
       authorizeSource: async provider => ({ authorizationUrl: provider === "google" ? "https://accounts.google.com/o/oauth2/v2/auth?client_id=test" : "https://login.microsoftonline.com/common/oauth2/v2.0/authorize?client_id=test" }), sourceImpact: async () => ({ roots, devices }), removeSource: async () => ({ removed: true, roots, devices }),

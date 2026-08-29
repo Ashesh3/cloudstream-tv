@@ -57,13 +57,14 @@ export function decodeDirectMediaUrlResponse(
       const playlistUrl = typeof value.playlistUrl === "string" && /^\/api\/tv\/transcodes\/[A-Za-z0-9_-]{16,128}\/master\.m3u8$/.test(value.playlistUrl)
         ? value.playlistUrl
         : null;
-      const playbackSessionId = typeof value.playbackSessionId === "string" && /^[A-Za-z0-9_-]{16,128}$/.test(value.playbackSessionId)
+      const playbackSessionId = typeof value.playbackSessionId === "string" && /^[A-Za-z0-9_-]{43}$/.test(value.playbackSessionId)
         ? value.playbackSessionId
         : null;
-      const durationSeconds = typeof value.durationSeconds === "number" && Number.isFinite(value.durationSeconds) && value.durationSeconds > 0
+      const durationSeconds = typeof value.durationSeconds === "number" && Number.isFinite(value.durationSeconds) && value.durationSeconds > 0 && value.durationSeconds <= 86_400
         ? value.durationSeconds
         : null;
       if (!playlistUrl || !playbackSessionId || durationSeconds === null || value.profile !== "h264-aac-1080p-v1") return null;
+      if (playlistUrl !== `/api/tv/transcodes/${playbackSessionId}/master.m3u8`) return null;
       return {
         itemId,
         kind: "video",

@@ -7,6 +7,7 @@ import {
   createViewerState,
   historySnapshot,
   viewerReducer,
+  pendingViewerUrlRequests,
   type ViewerMediaItem
 } from "@cloudframe/tv-core";
 
@@ -18,6 +19,40 @@ const media: ViewerMediaItem[] = [
 ];
 
 describe("viewer reducer", () => {
+  it("requests the active video and adjacent images, never adjacent videos", () => {
+    const sequence: ViewerMediaItem[] = [
+      { id: "before-video", name: "Before.mp4", kind: "video", mimeType: "video/mp4", revision: null },
+      { id: "before-image", name: "Before.jpg", kind: "image", mimeType: "image/jpeg", revision: null },
+      { id: "active-video", name: "Active.mpg", kind: "video", mimeType: "video/mpeg", revision: null },
+      { id: "after-image", name: "After.jpg", kind: "image", mimeType: "image/jpeg", revision: null },
+      { id: "after-video", name: "After.mp4", kind: "video", mimeType: "video/mp4", revision: null },
+    ];
+    let state = createViewerState(sequence, "active-video");
+    expect(pendingViewerUrlRequests(state).map((request) => request.nodeId).sort())
+      .toEqual(["active-video", "after-image", "before-image"]);
+    state = viewerReducer(state, { type: "navigate", direction: 1 });
+    state = viewerReducer(state, { type: "navigate", direction: 1 });
+    expect(pendingViewerUrlRequests(state).map((request) => request.nodeId)).toContain("after-video");
+  });
+
+  it("stores HLS session identity without static URL expiry scheduling", () => {
+    let state = createViewerState(media, "video-1");
+    const initial = state.urls["video-1"]!;
+    state = viewerReducer(state, {
+      type: "url-ready",
+      nodeId: "video-1",
+      requestId: initial.requestId,
+      url: "/api/tv/transcodes/session/master.m3u8",
+      sourceKind: "hls",
+      playbackSessionId: "session",
+      expiresAtEpoch: 10_000,
+      revision: "r1",
+    });
+    expect(state.urls["video-1"]).toMatchObject({ sourceKind: "hls", playbackSessionId: "session" });
+    state = viewerReducer(state, { type: "navigate", direction: 1 });
+    expect(state.urls["video-1"]).toBeUndefined();
+  });
+
   it("opens on the exact selected media ID and requests only the active and adjacent window", () => {
     const state = createViewerState(media, "video-1");
 
@@ -38,7 +73,7 @@ describe("viewer reducer", () => {
     state = viewerReducer(state, { type: "navigate", direction: 1 });
     expect(activeViewerItem(state).id).toBe("image-2");
     expect(state.playbackIntent).toBe("pause");
-    expect(Object.keys(state.urls).sort()).toEqual(["image-2", "image-3", "video-1"]);
+    expect(Object.keys(state.urls).sort()).toEqual(["image-2", "image-3"]);
 
     state = viewerReducer(state, { type: "navigate", direction: 1 });
     state = viewerReducer(state, { type: "navigate", direction: 1 });
@@ -110,13 +145,9 @@ describe("viewer reducer", () => {
       expiresAtEpoch: 10_000,
       revision: "r1"
     });
-    const adjacent = state.urls["video-1"]!;
-    state = viewerReducer(state, { type: "url-failed", nodeId: "video-1", requestId: adjacent.requestId, kind: "bridge" });
-    expect(state.mediaError).toBeNull();
-
     state = viewerReducer(state, { type: "navigate", direction });
     expect(activeViewerItem(state).id).toBe("video-1");
-    expect(state.mediaError).toEqual({ nodeId: "video-1", kind: "bridge" });
+    expect(state.urls["video-1"]?.status).toBe("loading");
 
     state = viewerReducer(state, { type: "navigate", direction: returnDirection });
     expect(activeViewerItem(state).id).toBe(startId);
@@ -140,21 +171,14 @@ describe("viewer reducer", () => {
     expect(activeViewerItem(state).id).toBe("image-2");
   });
 
-  it("pauses when an active slideshow reaches a cached failed video", () => {
+  it("requests a video only when an active slideshow reaches it", () => {
     let state = createViewerState(media.slice(0, 3), "image-1");
     state = viewerReducer(state, { type: "enter" });
-    const failed = state.urls["video-1"]!;
-    state = viewerReducer(state, { type: "url-failed", nodeId: "video-1", requestId: failed.requestId, kind: "bridge" });
-
     state = viewerReducer(state, { type: "slideshow-tick" });
     expect(activeViewerItem(state).id).toBe("video-1");
-    expect(state.mediaError).toEqual({ nodeId: "video-1", kind: "bridge" });
-    expect(state.slideshowActive).toBe(false);
-    expect(state.playbackIntent).toBe("pause");
-    expect(state.videoPlaying).toBe(false);
-
-    state = viewerReducer(state, { type: "slideshow-tick" });
-    expect(activeViewerItem(state).id).toBe("video-1");
+    expect(state.urls["video-1"]?.status).toBe("loading");
+    expect(state.slideshowActive).toBe(true);
+    expect(state.playbackIntent).toBe("play");
   });
 
   it("pauses an active slideshow video when its URL preparation fails", () => {
@@ -352,6 +376,10 @@ describe("viewer reducer", () => {
   ] as const)("ignores compatibility substitution for a %s", (_label, target, status, sourceKind) => {
     let state = createViewerState(media, target === "active" ? "video-1" : "image-1");
     const current = state.urls["video-1"]!;
+    if (!current) {
+      expect(target).toBe("inactive");
+      return;
+    }
     if (status === "ready") {
       state = viewerReducer(state, {
         type: "url-ready",

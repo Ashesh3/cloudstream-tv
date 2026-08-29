@@ -38,7 +38,7 @@ test("folder browse opens a unified image and video viewer", async ({ page }) =>
   expect(calls.thumbnails.length).toBeGreaterThan(0);
   expect(calls.thumbnails.flat()).toEqual(expect.arrayContaining(["sealed-child-folder", "sealed-image", "sealed-video"]));
   expect(calls.thumbnails.flat()).not.toEqual(expect.arrayContaining(["item_image", "item_video"]));
-  expect(calls.media).toEqual(expect.arrayContaining(["sealed-image", "sealed-video"]));
+  expect(calls.media.map(call => call.handle)).toEqual(expect.arrayContaining(["sealed-image", "sealed-video"]));
   expect(requests.some(url => url.includes("/api/tv/google-media/"))).toBe(false);
 });
 
@@ -164,6 +164,8 @@ async function tvApiCalls(page: import("@playwright/test").Page) {
   return page.evaluate(() => (window as Window & { __CLOUDFRAME_TEST_TV_CALLS__: {
     folder: Array<{ handle: string; cursor: string | null }>;
     thumbnails: string[][];
-    media: string[];
+    media: Array<{ handle: string; fallback: string | null }>;
+    heartbeat: string[];
+    release: string[];
   } }).__CLOUDFRAME_TEST_TV_CALLS__);
 }

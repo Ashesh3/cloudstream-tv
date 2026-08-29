@@ -8,7 +8,7 @@ export interface ViewerMediaItem {
 
 export type ViewerUrlStatus = "loading" | "ready" | "error";
 export type ViewerMediaErrorKind = "authorization" | "bridge" | "transport" | "decoder" | "generic";
-export type ViewerMediaSourceKind = "direct" | "google-raw" | "google-filename";
+export type ViewerMediaSourceKind = "direct" | "google-raw" | "google-filename" | "hls";
 
 export interface ViewerUrlState {
   status: ViewerUrlStatus;
@@ -20,6 +20,7 @@ export interface ViewerUrlState {
   resumeSeconds: number;
   errorKind?: ViewerMediaErrorKind;
   sourceKind?: ViewerMediaSourceKind;
+  playbackSessionId?: string;
 }
 
 export interface ViewerUrlRequest {
@@ -60,7 +61,7 @@ export type ViewerAction =
   | { type: "video-playing"; nodeId: string }
   | { type: "video-paused"; nodeId: string }
   | { type: "media-error"; nodeId: string; kind: ViewerMediaErrorKind }
-  | { type: "url-ready"; nodeId: string; requestId: number; url: string; sourceKind: ViewerMediaSourceKind; expiresAtEpoch: number; revision: string | null }
+  | { type: "url-ready"; nodeId: string; requestId: number; url: string; sourceKind: ViewerMediaSourceKind; playbackSessionId?: string; expiresAtEpoch: number; revision: string | null }
   | { type: "url-failed"; nodeId: string; requestId: number; kind: ViewerMediaErrorKind }
   | { type: "url-expired"; nodeId: string; requestId: number; resumeSeconds: number }
   | { type: "authorization-expired"; nodeId: string; resumeSeconds: number }
@@ -170,6 +171,7 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
             status: "ready",
             url: action.url,
             sourceKind: action.sourceKind,
+            playbackSessionId: action.sourceKind === "hls" ? action.playbackSessionId : undefined,
             expiresAtEpoch: finiteNonNegative(action.expiresAtEpoch),
             revision: action.revision,
             refreshUsed: retry.used,
@@ -274,6 +276,7 @@ function withUrlWindow(state: ViewerState): ViewerState {
   const end = Math.min(state.items.length - 1, state.index + 1);
   for (let index = start; index <= end; index += 1) {
     const item = state.items[index]!;
+    if (index !== state.index && item.kind !== "image") continue;
     const existing = state.urls[item.id];
     if (existing) nextUrls[item.id] = existing;
     else {
