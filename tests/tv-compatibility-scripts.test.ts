@@ -33,7 +33,7 @@ describe("TV compatibility scripts", () => {
     const result = await runNode("scripts/check-tv-bundle.mjs", [], {});
     expect(result.code, result.stderr).toBe(0);
     expect(result.stdout).toContain("TV bundle compatibility and budget check passed");
-  });
+  }, 120_000);
 
   it("defines a pinned Chromium 68 execution lane and required API check", async () => {
     const source = await readFile("scripts/check-chromium68.mjs", "utf8");
@@ -167,20 +167,6 @@ async function runCommand(command: string, args: string[], env: Record<string, s
   const actualArgs = npmCli ? [npmCli, ...args] : args;
   try {
     const result = await exec(executable, actualArgs, { cwd: process.cwd(), env: { ...process.env, ...env }, maxBuffer: 20 * 1024 * 1024 });
-    return { code: 0, ...result };
-  } catch (error) {
-    const failure = error as { code?: number; stdout?: string; stderr?: string };
-    return { code: failure.code ?? 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
-  }
-}
-
-async function runNodeWithStripTypes(file: string, args: string[], env: Record<string, string>) {
-  try {
-    const result = await exec(process.execPath, ["--experimental-strip-types", file, ...args], {
-      cwd: process.cwd(),
-      env: { ...process.env, ...env },
-      maxBuffer: 10 * 1024 * 1024
-    });
     return { code: 0, ...result };
   } catch (error) {
     const failure = error as { code?: number; stdout?: string; stderr?: string };

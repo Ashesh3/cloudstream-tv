@@ -287,7 +287,7 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
         }
         if (isAuthorizationEvidence(error)) dispatch({ type: "authorization-expired", nodeId, resumeSeconds: entry.resumeSeconds });
         else if (error instanceof GoogleMediaBridgeError) dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: "bridge" });
-        else dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: "generic" });
+        else dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: transcodeMediaErrorKind(error) ?? "generic" });
       });
     });
   }, [api, googleMedia, invalidateNavigation, itemHandles, items, propagateNavigationExpired, propagateUnauthorized, releaseHlsSession, releasePreparedSession, urlRequestKey]);
@@ -556,6 +556,18 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
           <ViewerError title="Transcoded playback is unsupported on this TV" item={active} body="This browser cannot attach the HLS stream produced by Cloudframe." />
         ) : state.mediaError?.kind === "transcode" ? (
           <ViewerError title="The transcoded playback session ended" item={active} body="Return to the collection and open this video again." />
+        ) : state.mediaError?.kind === "transcode-busy" ? (
+          <ViewerError title="Another TV is using the transcoder" item={active} body="Wait for playback on the other TV to finish, then open this video again." />
+        ) : state.mediaError?.kind === "transcode-cache-full" ? (
+          <ViewerError title="The transcode cache is full" item={active} body="Ask the Cloudframe administrator to free storage or increase the transcode cache limit." />
+        ) : state.mediaError?.kind === "transcode-timeout" ? (
+          <ViewerError title="Transcoding took too long" item={active} body="Cloudframe could not prepare this part of the video before the safety timeout." />
+        ) : state.mediaError?.kind === "transcode-unsupported" ? (
+          <ViewerError title="This video cannot be transcoded" item={active} body="Cloudframe does not support this video's source format or stream layout." />
+        ) : state.mediaError?.kind === "transcode-source" ? (
+          <ViewerError title="Cloudframe could not read this video" item={active} body="The provider source is unavailable or needs attention in Cloudframe Admin." />
+        ) : state.mediaError?.kind === "transcode-failed" ? (
+          <ViewerError title="Cloudframe could not transcode this video" item={active} body="The server stopped while preparing a compatible playback stream." />
         ) : state.mediaError ? (
           <ViewerError title="This media could not be opened" item={active} body={activeUrl?.refreshUsed ? "A fresh link did not solve this media error." : "The provider link failed. You can request one fresh link safely."}
             onRetry={state.mediaError.kind === "generic" && !activeUrl?.refreshUsed ? retry : undefined} />
@@ -574,7 +586,7 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
             }}
             onHlsFatal={error => {
               releaseHlsSession(active.id);
-              dispatch({ type: "media-error", nodeId: active.id, kind: error.kind === "unsupported" ? "unsupported" : "transcode" });
+              dispatch({ type: "media-error", nodeId: active.id, kind: hlsMediaErrorKind(error.kind) });
             }}
             onLoadedMetadata={element => {
               const resumeSeconds = latestResumeOverrides.current[active.id] || resumeOverrides[active.id] || activeUrl?.resumeSeconds || historyResume;
@@ -665,6 +677,30 @@ function isAutoplayRejection(error: unknown): boolean {
 function isTranscodeSessionExpired(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error &&
     String((error as { code: unknown }).code) === "TRANSCODER_SESSION_EXPIRED";
+}
+
+function transcodeMediaErrorKind(error: unknown): import("@cloudframe/tv-core").ViewerMediaErrorKind | null {
+  const code = typeof error === "object" && error !== null && "code" in error
+    ? String((error as { code: unknown }).code)
+    : "";
+  if (code === "TRANSCODER_BUSY") return "transcode-busy";
+  if (code === "TRANSCODER_CACHE_FULL") return "transcode-cache-full";
+  if (code === "TRANSCODER_WINDOW_TIMEOUT") return "transcode-timeout";
+  if (code === "TRANSCODER_UNSUPPORTED") return "transcode-unsupported";
+  if (code === "TRANSCODER_SOURCE_UNAVAILABLE") return "transcode-source";
+  if (code === "TRANSCODER_FAILED") return "transcode-failed";
+  return null;
+}
+
+function hlsMediaErrorKind(kind: import("../media/hls-playback").HlsPlaybackErrorKind): import("@cloudframe/tv-core").ViewerMediaErrorKind {
+  if (kind === "unsupported") return "unsupported";
+  if (kind === "busy") return "transcode-busy";
+  if (kind === "cache-full") return "transcode-cache-full";
+  if (kind === "timeout") return "transcode-timeout";
+  if (kind === "unsupported-source") return "transcode-unsupported";
+  if (kind === "source") return "transcode-source";
+  if (kind === "failed") return "transcode-failed";
+  return "transcode";
 }
 
 function formatResume(seconds: number): string {

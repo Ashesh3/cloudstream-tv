@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const exec = promisify(execFile);
 const TEST_HOOKS = /__CLOUDFRAME_TEST_(?:TV|ADMIN)_API__/;
+const CONTAINER_FIXTURE = /api\/admin\/test-fixture|fixture-legacy-mpeg|legacy-mpeg\.mpg/;
 
 describe("browser acceptance harness", () => {
   it("keeps synthetic API injection out of ordinary production builds", async () => {
@@ -42,6 +43,9 @@ describe("browser acceptance harness", () => {
         expect(content.toString("utf8"), path).not.toMatch(TEST_HOOKS);
       }
     }
+    const server = await readFile("build/self-hosted/server/index.js", "utf8");
+    expect(server).not.toMatch(CONTAINER_FIXTURE);
+    expect(await filesUnder("build/self-hosted")).not.toContain(expect.stringContaining("test-fixtures"));
   }, 120_000);
 
   it("defines TV and admin screenshot projects", async () => {

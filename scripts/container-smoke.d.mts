@@ -7,7 +7,7 @@ export interface ContainerSmokeCommandResult {
 export interface ContainerSmokeHttpResult {
   status: number;
   headers: Headers | Record<string, string>;
-  json?: any;
+  json?: unknown;
   bytes?: Uint8Array;
   text?: string;
 }

@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { isIP } from "node:net";
 import { once } from "node:events";
 import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type { ProviderMediaSourceService, ValidatedProviderMediaSource } from "../services/provider-media-source.ts";
 import type { TranscodeSourceAuthorizer } from "./source-authorizer.ts";
 import { TranscodeError, type TranscodeSourceBinding } from "./types.ts";
@@ -64,7 +65,8 @@ export function createTranscodeSourceGateway(options: {
     if (range !== undefined && !/^bytes=\d+-\d*$/.test(range)) return finish(response, 400);
     const controller = new AbortController();
     state.active.add(controller);
-    response.once("close", () => controller.abort());
+    const abortOnClose = () => controller.abort();
+    response.once("close", abortOnClose);
     try {
       let source;
       try {
@@ -77,6 +79,7 @@ export function createTranscodeSourceGateway(options: {
       try { upstream = await requestUpstream(source, request.method, range, controller.signal); }
       catch (error) { logFailure("upstream", error); return finish(response, 502); }
       if (upstream.status === 401 || upstream.status === 403) {
+        await upstream.body?.cancel();
         source = await options.authorizer.withReauthorizedItem(
           state.binding,
           (current) => options.mediaSources.resolve(current, { refresh: true }),
@@ -85,11 +88,19 @@ export function createTranscodeSourceGateway(options: {
       }
       response.statusCode = upstream.status;
       for (const name of ["accept-ranges", "content-length", "content-range", "content-type", "etag", "last-modified"]) { const value = upstream.headers.get(name); if (value !== null) response.setHeader(name, value); }
-      if (request.method === "HEAD" || !upstream.body) response.end(); else Readable.fromWeb(upstream.body as import("node:stream/web").ReadableStream).pipe(response);
+      if (request.method === "HEAD" || !upstream.body) {
+        response.end();
+        if (!response.writableFinished) await once(response, "finish");
+      } else {
+        await pipeline(Readable.fromWeb(upstream.body as import("node:stream/web").ReadableStream), response);
+      }
     } catch (error) {
       logFailure("request", error);
-      finish(response, 502);
-    } finally { state.active.delete(controller); }
+      if (response.headersSent) response.destroy(); else finish(response, 502);
+    } finally {
+      response.removeListener("close", abortOnClose);
+      state.active.delete(controller);
+    }
   }
 
   function logFailure(stage: "media-source" | "upstream" | "request", error: unknown) {

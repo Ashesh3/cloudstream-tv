@@ -1,5 +1,5 @@
 import type { TranscodeDiagnosticResponse } from "@cloudframe/shared";
-import { ActivityIcon, DatabaseIcon } from "lucide-react";
+import { ActivityIcon } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function TranscodeDiagnostics({ diagnostic, error = "" }: { diagnostic: TranscodeDiagnosticResponse | null; error?: string }) {

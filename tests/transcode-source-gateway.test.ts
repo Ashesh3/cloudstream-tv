@@ -84,7 +84,7 @@ describe("loopback transcode source gateway", () => {
 
   it("allows the sequential requests FFprobe uses for an MPEG program stream", async () => {
     const current = harness();
-    const { origin } = await current.gateway.start();
+    await current.gateway.start();
     try {
       const grant = current.gateway.grant(binding, "job_" + "a".repeat(32));
       for (const range of ["bytes=0-", "bytes=50-", "bytes=0-"]) {
@@ -102,7 +102,7 @@ describe("loopback transcode source gateway", () => {
       return response("ok", { status: 200, url: "https://www.googleapis.com/drive/v3/files/video-1?alt=media&supportsAllDrives=true" });
     });
     const current = harness(fetcher as typeof fetch);
-    const { origin } = await current.gateway.start();
+    await current.gateway.start();
     try {
       const grant = current.gateway.grant(binding, "job_" + "a".repeat(32));
       const first = fetch(grant.inputUrl);
@@ -114,6 +114,46 @@ describe("loopback transcode source gateway", () => {
       expect((await second).status).toBe(200);
       expect((await fetch(grant.inputUrl)).status).toBe(200);
     } finally { release(); await current.gateway.close(); }
+  });
+
+  it("keeps streamed bodies inside the connection cap and aborts them when revoked", async () => {
+    const signals: AbortSignal[] = [];
+    const bodies: ReadableStreamDefaultController<Uint8Array>[] = [];
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (signal) signals.push(signal);
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          bodies.push(controller);
+          controller.enqueue(new Uint8Array([7]));
+          signal?.addEventListener("abort", () => controller.error(new DOMException("Aborted", "AbortError")), { once: true });
+        },
+      });
+      return response(body, { status: 200, url: "https://www.googleapis.com/drive/v3/files/video-1?alt=media&supportsAllDrives=true" });
+    });
+    const current = harness(fetcher as typeof fetch);
+    await current.gateway.start();
+    const grant = current.gateway.grant(binding, "job_" + "a".repeat(32));
+    try {
+      const first = await fetch(grant.inputUrl);
+      const second = await fetch(grant.inputUrl);
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect((await fetch(grant.inputUrl)).status).toBe(404);
+
+      grant.revoke();
+
+      await vi.waitFor(() => expect(signals).toHaveLength(2));
+      expect(signals.every(signal => signal.aborted)).toBe(true);
+      await expect(first.arrayBuffer()).rejects.toBeDefined();
+      await expect(second.arrayBuffer()).rejects.toBeDefined();
+    } finally {
+      grant.revoke();
+      for (const body of bodies) {
+        try { body.close(); } catch { /* The revoked stream may already be errored. */ }
+      }
+      await current.gateway.close();
+    }
   });
 
   it("resolves provider credentials only while the reauthorization context is active", async () => {
@@ -137,7 +177,7 @@ describe("loopback transcode source gateway", () => {
         },
       };
     });
-    const { origin } = await current.gateway.start();
+    await current.gateway.start();
     try {
       const grant = current.gateway.grant(binding, "job_" + "a".repeat(32));
       expect((await fetch(grant.inputUrl)).status).toBe(200);
@@ -150,7 +190,7 @@ describe("loopback transcode source gateway", () => {
       .mockResolvedValueOnce(response(null, { status: 401, url: "https://www.googleapis.com/drive/v3/files/video-1?alt=media&supportsAllDrives=true" }))
       .mockResolvedValueOnce(response("ok", { status: 200, url: "https://www.googleapis.com/drive/v3/files/video-1?alt=media&supportsAllDrives=true" }));
     const current = harness(fetcher as typeof fetch);
-    const { origin } = await current.gateway.start();
+    await current.gateway.start();
     try {
       const first = current.gateway.grant(binding, "job_" + "a".repeat(32));
       expect((await fetch(first.inputUrl, { headers: { range: "bytes=100-" } })).status).toBe(416);

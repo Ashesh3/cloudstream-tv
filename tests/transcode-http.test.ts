@@ -65,6 +65,7 @@ async function harness() {
     session: vi.fn().mockReturnValue(session),
     heartbeat: vi.fn(),
     segment: vi.fn().mockResolvedValue({ path: segmentPath, sizeBytes: 188, sha256: "b".repeat(64), durationMs: 4_000, segmentIndex: 0 }),
+    playbackFailure: vi.fn().mockReturnValue(null),
     release: vi.fn().mockResolvedValue(undefined),
     diagnostic: vi.fn().mockReturnValue({
       active: { sessionIdSuffix: "12345678", itemName: "MOV00516.MPG", provider: "google", stage: "encoding", windowIndex: 2, progressPercent: 61, speed: "1.4x" },
@@ -152,6 +153,24 @@ describe("authenticated HLS routes", () => {
       const denied = await current.app(request(`/api/tv/transcodes/${current.session.id}/heartbeat`, "POST", badOrigin ? { origin: badOrigin } : {}));
       expect(denied?.status).toBe(403);
     }
+  });
+
+  it("returns the exact latest playback failure without probing another segment", async () => {
+    const current = await harness();
+    vi.mocked(current.coordinator.playbackFailure).mockReturnValueOnce({ code: "TRANSCODER_WINDOW_TIMEOUT" });
+
+    const response = await current.app(request(`/api/tv/transcodes/${current.session.id}/failure`));
+
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("cache-control")).toBe("private, no-store");
+    expect(await response?.json()).toEqual({ ok: true, data: { code: "TRANSCODER_WINDOW_TIMEOUT" } });
+    expect(current.coordinator.segment).not.toHaveBeenCalled();
+    expect(current.coordinator.playbackFailure).toHaveBeenCalledWith(current.session.id);
+  });
+
+  it("returns no content when the session has no recorded playback failure", async () => {
+    const current = await harness();
+    expect((await current.app(request(`/api/tv/transcodes/${current.session.id}/failure`)))?.status).toBe(204);
   });
 
   it.each([

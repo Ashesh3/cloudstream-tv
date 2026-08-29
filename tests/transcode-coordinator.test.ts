@@ -78,6 +78,7 @@ function harness() {
   const windows = new Map<string, "partial" | "complete">();
   const activePins = new Set<string>();
   const generatingPins = new Set<string>();
+  const invalidSegments = new Set<string>();
   const capacityCalls: number[] = [];
   const encoderInputs: EncodeWindowInput[] = [];
   const encoderDeferred: Array<ReturnType<typeof deferred<EncodeWindowResult>>> = [];
@@ -111,6 +112,14 @@ function harness() {
   };
   const cache = {
     segmentPath(cacheKey: string, segmentIndex: number) { return `/cache/${cacheKey}/${segmentIndex}.ts`; },
+    async loadSegment(cacheKey: string, segmentIndex: number) {
+      const key = `${cacheKey}:${segmentIndex}`;
+      if (invalidSegments.has(key)) {
+        segments.delete(key);
+        return null;
+      }
+      return segments.get(key) ?? null;
+    },
     ensureCapacity: async (bytes: number) => { capacityCalls.push(bytes); },
     pinActive(cacheKey: string) { activePins.add(cacheKey); return () => activePins.delete(cacheKey); },
     pinGenerating(cacheKey: string, windowIndex: number) { const key = `${cacheKey}:${windowIndex}`; generatingPins.add(key); return () => generatingPins.delete(key); },
@@ -152,6 +161,7 @@ function harness() {
     encoderDeferred,
     assets,
     segments,
+    invalidSegments,
     activePins,
     generatingPins,
     capacityCalls,
@@ -234,7 +244,7 @@ describe("one-TV transcode coordinator", () => {
     const current = harness();
     const session = await current.coordinator.createSession(source());
     current.segments.set(`${session.cacheKey}:3`, { path: "cached", sizeBytes: 188, sha256: "a".repeat(64), durationMs: 4_000, segmentIndex: 3 });
-    await expect(current.coordinator.segment(session.id, 3, new AbortController().signal)).resolves.toMatchObject({ path: expect.stringContaining("/3.ts") });
+    await expect(current.coordinator.segment(session.id, 3, new AbortController().signal)).resolves.toMatchObject({ path: "cached" });
     expect(current.encoderInputs).toHaveLength(0);
 
     const first = current.coordinator.segment(session.id, 0, new AbortController().signal);
@@ -246,6 +256,37 @@ describe("one-TV transcode coordinator", () => {
     expect(current.encoderInputs).toHaveLength(2);
     expect(current.maxActiveEncodes).toBe(1);
     current.promote(1, 6); await second; current.complete(1);
+    await current.coordinator.close();
+  });
+
+  it("regenerates a cataloged segment when its promoted file is missing", async () => {
+    const current = harness();
+    const session = await current.coordinator.createSession(source());
+    const key = `${session.cacheKey}:3`;
+    current.segments.set(key, { path: "missing", sizeBytes: 188, sha256: "a".repeat(64), durationMs: 4_000, segmentIndex: 3 });
+    current.invalidSegments.add(key);
+
+    const pending = current.coordinator.segment(session.id, 3, new AbortController().signal);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(current.encoderInputs).toHaveLength(1);
+    current.invalidSegments.delete(key);
+    current.promote(0, 3);
+    await expect(pending).resolves.toMatchObject({ segmentIndex: 3 });
+    current.complete(0);
+    await current.coordinator.close();
+  });
+
+  it("reports and clears the exact latest playback failure for its session", async () => {
+    const current = harness();
+    const session = await current.coordinator.createSession(source());
+    const pending = current.coordinator.segment(session.id, 0, new AbortController().signal);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    current.encoderDeferred[0]!.reject(new TranscodeError("TRANSCODER_CACHE_FULL"));
+    await expect(pending).rejects.toMatchObject({ code: "TRANSCODER_CACHE_FULL" });
+
+    expect(current.coordinator.playbackFailure(session.id)).toEqual({ code: "TRANSCODER_CACHE_FULL" });
+    expect(current.coordinator.playbackFailure(session.id)).toBeNull();
     await current.coordinator.close();
   });
 

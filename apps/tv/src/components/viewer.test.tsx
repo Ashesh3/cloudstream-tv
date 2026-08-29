@@ -6,14 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DirectMediaUrlResponse, GoogleBearerMediaUrlResponse, TvBrowseItemDto } from "@cloudframe/shared";
 import type { TvApi } from "../api/client";
 import {
-  createGoogleMediaBridge,
   GoogleMediaBridgeError,
   unavailableGoogleMediaBridge,
   type GoogleMediaBridge,
-  type GoogleMediaDeliveryEvidence,
   type PreparedGoogleMediaSource
 } from "../media/google-media-bridge";
-import type { GoogleMediaPageMessage, GoogleMediaWorkerMessage } from "../media/google-media-protocol";
 import { createLocalWatchHistory, type LocalWatchHistory } from "../state/local-watch-history";
 import { Viewer } from "./viewer";
 import { attachHlsSource } from "../media/hls-playback";
@@ -21,9 +18,11 @@ import { loadVideoJs } from "../videojs";
 
 vi.mock("../videojs", () => ({ loadVideoJs: vi.fn(async () => false) }));
 vi.mock("../media/hls-playback", () => ({
-  attachHlsSource: vi.fn(async (video: HTMLVideoElement, playlistUrl: string) => {
+  attachHlsSource: vi.fn(async (video: HTMLVideoElement, playlistUrl: string, options: { onFatal(error: { kind: string }): void }) => {
     video.src = playlistUrl;
-    return { mode: "native-hls", destroy() { video.removeAttribute("src"); } };
+    const error = () => options.onFatal({ kind: "media" });
+    video.addEventListener("error", error);
+    return { mode: "native-hls", handlesElementErrors: true, destroy() { video.removeEventListener("error", error); video.removeAttribute("src"); } };
   }),
 }));
 
@@ -95,6 +94,63 @@ describe("unified TV viewer", () => {
 
     expect(await screen.findByRole("heading", { name: "Direct Google playback is unavailable on this browser" })).toBeVisible();
     expect(document.body.innerHTML).not.toContain("ya29.test-token");
+    expect(screen.queryByRole("button", { name: "Try fresh URL" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["TRANSCODER_BUSY", "Another TV is using the transcoder"],
+    ["TRANSCODER_CACHE_FULL", "The transcode cache is full"],
+    ["TRANSCODER_WINDOW_TIMEOUT", "Transcoding took too long"],
+    ["TRANSCODER_UNSUPPORTED", "This video cannot be transcoded"],
+    ["TRANSCODER_SOURCE_UNAVAILABLE", "Cloudframe could not read this video"],
+    ["TRANSCODER_FAILED", "Cloudframe could not transcode this video"],
+  ])("shows an actionable %s fallback error without offering a fresh provider URL", async (code, title) => {
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockImplementation(async (_handle, _signal, expected, options) => {
+      if (expected?.itemId === "item_video_1" && options?.fallback === "hls") throw Object.assign(new Error(code), { code });
+      return mediaResponse(`sealed-${expected?.itemId ?? "item_image_1"}`);
+    });
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(video, "error", { configurable: true, value: { code: 4 } });
+    fireEvent.error(video);
+
+    expect(await screen.findByRole("heading", { name: title })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try fresh URL" })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["busy", "Another TV is using the transcoder"],
+    ["cache-full", "The transcode cache is full"],
+    ["timeout", "Transcoding took too long"],
+    ["unsupported-source", "This video cannot be transcoded"],
+    ["source", "Cloudframe could not read this video"],
+    ["failed", "Cloudframe could not transcode this video"],
+  ] as const)("shows the actionable %s state when an HLS segment request fails", async (kind, title) => {
+    const api = viewerApi();
+    const sessionId = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFG";
+    vi.mocked(api.mediaUrl).mockResolvedValue({
+      itemId: "item_video_1",
+      kind: "video",
+      transport: "hls",
+      playlistUrl: `/api/tv/transcodes/${sessionId}/master.m3u8`,
+      playbackSessionId: sessionId,
+      durationSeconds: 65,
+      profile: "h264-aac-1080p-v1",
+      expiresAt: new Date(Date.now() + 45_000).toISOString(),
+      revision: "revision-1",
+    });
+    vi.mocked(attachHlsSource).mockImplementationOnce(async (video, playlistUrl, options) => {
+      video.src = playlistUrl;
+      const onError = () => { void Promise.resolve().then(() => options.onFatal({ kind })); };
+      video.addEventListener("error", onError);
+      return { mode: "native-hls", handlesElementErrors: true, destroy() { video.removeEventListener("error", onError); video.removeAttribute("src"); } };
+    });
+    render(<TestViewer history={viewerHistory()} api={api} items={[items[1]!]} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    const video = await screen.findByLabelText("Playing Clip.mp4");
+    fireEvent.error(video);
+
+    expect(await screen.findByRole("heading", { name: title })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Try fresh URL" })).not.toBeInTheDocument();
   });
 
@@ -1181,9 +1237,6 @@ function fakeGoogleMediaBridge(): FakeGoogleMediaBridge {
   };
 }
 
-function deliveredMpegHarness(): { bridge: FakeGoogleMediaBridge; api: TvApi } {
-  return deliveredGoogleHarness(mpegItem, "session_mpeg");
-}
 
 function deliveredGoogleHarness(
   item: TvBrowseItemDto,
@@ -1202,62 +1255,6 @@ function deliveredGoogleHarness(
   return { bridge, api };
 }
 
-function liveGoogleMediaBridgeHarness(): {
-  bridge: GoogleMediaBridge;
-  emitEvidence(evidence: Exclude<GoogleMediaDeliveryEvidence, { outcome: "none" }>): void;
-} {
-  const listeners = new Set<(event: MessageEvent<unknown>) => void>();
-  let sessionId: string | null = null;
-  const worker = {
-    postMessage: vi.fn<(message: GoogleMediaPageMessage) => void>(message => {
-      if (message.type !== "cloudframe-media-grant") return;
-      sessionId = message.grant.sessionId;
-      const ack = {
-        type: "cloudframe-media-grant-ack",
-        requestId: message.requestId,
-        sessionId,
-      } satisfies GoogleMediaWorkerMessage;
-      for (const listener of listeners) {
-        listener({ data: ack, source: worker } as unknown as MessageEvent<unknown>);
-      }
-    }),
-  };
-  const serviceWorker = {
-    controller: worker,
-    ready: Promise.resolve({} as ServiceWorkerRegistration),
-    register: vi.fn().mockResolvedValue({} as ServiceWorkerRegistration),
-    addEventListener(type: string, listener: EventListener) {
-      if (type === "message") listeners.add(listener as (event: MessageEvent<unknown>) => void);
-    },
-    removeEventListener(type: string, listener: EventListener) {
-      if (type === "message") listeners.delete(listener as (event: MessageEvent<unknown>) => void);
-    },
-  };
-  let random = 0;
-  const bridge = createGoogleMediaBridge({
-    serviceWorker: serviceWorker as unknown as ServiceWorkerContainer,
-    crypto: {
-      getRandomValues<T extends ArrayBufferView | null>(array: T): T {
-        random += 1;
-        if (array instanceof Uint8Array) array.fill(random);
-        return array;
-      },
-    },
-    now: () => Date.now(),
-  });
-  return {
-    bridge,
-    emitEvidence(evidence) {
-      if (!sessionId) throw new Error("Google media session has not been prepared");
-      const message: GoogleMediaWorkerMessage = evidence.outcome === "response"
-        ? { type: "cloudframe-media-result", sessionId, attempt: evidence.attempt, outcome: evidence.outcome, status: evidence.status }
-        : { type: "cloudframe-media-result", sessionId, attempt: evidence.attempt, outcome: evidence.outcome };
-      for (const listener of listeners) {
-        listener({ data: message, source: worker } as unknown as MessageEvent<unknown>);
-      }
-    },
-  };
-}
 
 function googleDescriptor(itemId: string, kind: "image" | "video"): GoogleBearerMediaUrlResponse {
   return {

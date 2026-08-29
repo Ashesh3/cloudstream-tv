@@ -36,4 +36,22 @@ describe("TV transcode API", () => {
     expect(fetcher).toHaveBeenNthCalledWith(3, `/api/tv/transcodes/${sessionId}`, expect.objectContaining({ method: "DELETE", credentials: "include" }));
     expect(new Headers(fetcher.mock.calls[1]![1].headers).has("origin")).toBe(false);
   });
+
+  it.each([
+    ["TRANSCODER_BUSY", "Another TV is using the transcoder."],
+    ["TRANSCODER_CACHE_FULL", "The transcode cache does not have enough free space."],
+    ["TRANSCODER_WINDOW_TIMEOUT", "Cloudframe could not prepare this part of the video in time."],
+    ["TRANSCODER_UNSUPPORTED", "Cloudframe cannot transcode this video format."],
+    ["TRANSCODER_SOURCE_UNAVAILABLE", "Cloudframe could not read this video from its source."],
+    ["TRANSCODER_FAILED", "Cloudframe could not transcode this video."],
+  ])("keeps the %s code and maps it to a safe TV message", async (code, message) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ ok: false, error: { code } }), {
+      status: code === "TRANSCODER_BUSY" ? 409 : 502,
+      headers: { "content-type": "application/json" },
+    })));
+    const { tvApi } = await import("./client");
+
+    await expect(tvApi.mediaUrl("sealed", undefined, { itemId: "item_video", kind: "video" }, { fallback: "hls" }))
+      .rejects.toMatchObject({ code, message });
+  });
 });

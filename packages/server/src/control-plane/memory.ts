@@ -2,7 +2,7 @@ import type { ControlPlaneDocumentV2 } from "@cloudframe/shared";
 import { cloneControlPlaneDocument, parseControlPlaneDocument } from "./schema.ts";
 import { ControlPlaneStoreError, type ControlPlaneStore } from "./store.ts";
 
-export function controlStoreHarness(document: ControlPlaneDocumentV2, _options: Record<string, unknown> = {}): {
+export function controlStoreHarness(document: ControlPlaneDocumentV2, options: Record<string, unknown> = {}): {
   store: ControlPlaneStore;
   current(): ControlPlaneDocumentV2;
   replace(document: ControlPlaneDocumentV2): void;
@@ -23,7 +23,6 @@ export function controlStoreHarness(document: ControlPlaneDocumentV2, _options: 
 } {
   let current = cloneControlPlaneDocument(document);
   let loadCount = 0;
-  let mutateCount = 0;
   let writeCount = 0;
   const ifNoneMatches: Array<string | undefined> = [];
   const store: ControlPlaneStore = {
@@ -32,7 +31,6 @@ export function controlStoreHarness(document: ControlPlaneDocumentV2, _options: 
       return { document: cloneControlPlaneDocument(current), etag: `memory:${current.revision}` };
     },
     async mutate(_name, reducer) {
-      mutateCount += 1;
       const mutation = reducer(cloneControlPlaneDocument(current));
       if (!mutation.changed) return mutation.result;
       if (mutation.next.revision !== current.revision + 1) throw new ControlPlaneStoreError("CONTROL_PLANE_INVALID");
@@ -53,7 +51,7 @@ export function controlStoreHarness(document: ControlPlaneDocumentV2, _options: 
       get currentRevision() { return current.revision; },
       get currentEtag() { return `memory:${current.revision}`; },
       ifNoneMatches,
-      replaceOutOfBand(next: ControlPlaneDocumentV2, ..._ignored: unknown[]) { current = cloneControlPlaneDocument(next); },
+      replaceOutOfBand(next: ControlPlaneDocumentV2, ...ignored: unknown[]) { void ignored; current = cloneControlPlaneDocument(next); },
     },
     cache: { get setCount() { return writeCount; } },
     mirror: { get writeCount() { return writeCount; } },
@@ -63,5 +61,6 @@ export function controlStoreHarness(document: ControlPlaneDocumentV2, _options: 
     loadCount: { enumerable: true, get: () => loadCount },
     mutateCount: { enumerable: true, get: () => writeCount },
   });
+  void options;
   return result as typeof result & { readonly loadCount: number; readonly mutateCount: number };
 }

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createSelfHostedComposition,
   parseSelfHostedConfig,
+  type ProcessRunner,
 } from "@cloudframe/server";
 import {
   ProviderError,
@@ -21,6 +22,9 @@ afterEach(async () => {
 });
 
 const adapter = {} as ProviderAdapter;
+const healthyRunner: ProcessRunner = {
+  run: vi.fn(async () => ({ exitCode: 0, signal: null, stdout: Buffer.alloc(0), stderrTail: "" })),
+};
 
 describe("self-hosted composition", () => {
   it("allows optional providers and fails safely for an omitted provider", () => {
@@ -60,6 +64,7 @@ describe("self-hosted composition", () => {
       log: logger,
       now: () => new Date("2026-08-29T12:00:00.000Z"),
       randomBytes: (size) => Buffer.alloc(size, 4),
+      processRunner: healthyRunner,
     });
     try {
       const response = await composition.app(new Request("https://tv.example.com/api/setup/status"));
@@ -70,6 +75,24 @@ describe("self-hosted composition", () => {
     } finally {
       await composition.close();
     }
+  });
+
+  it("does not become ready when FFmpeg or FFprobe is unavailable", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "cloudframe-composition-tools-"));
+    directories.push(dataDir);
+    const publicRoot = join(dataDir, "public");
+    await mkdir(join(publicRoot, "admin"), { recursive: true });
+    await writeFile(join(publicRoot, "index.html"), "tv");
+    await writeFile(join(publicRoot, "admin", "index.html"), "admin");
+    const runner: ProcessRunner = {
+      run: vi.fn(async command => ({ exitCode: command === "ffprobe" ? 1 : 0, signal: null, stdout: Buffer.alloc(0), stderrTail: "" })),
+    };
+
+    await expect(createSelfHostedComposition(parseSelfHostedConfig({
+      APP_ORIGIN: "https://tv.example.com",
+      DATA_DIR: dataDir,
+    }), { publicRoot, providerAdapters: {}, processRunner: runner, log: vi.fn() }))
+      .rejects.toThrow("FFPROBE_UNAVAILABLE");
   });
 
   it("declares the production server build and start commands", async () => {

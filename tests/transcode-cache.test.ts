@@ -59,9 +59,54 @@ describe("transcode disk cache", () => {
       await mkdir(directory, { recursive: true });
       await writeFile(join(directory, "0.ts.tmp"), "temporary");
       await writeFile(join(directory, "1.ts.part"), "partial");
+      await writeFile(join(directory, "ffmpeg.log"), "abandoned job output");
       await cache.reconcile();
       await expect(access(join(directory, "0.ts.tmp"))).rejects.toMatchObject({ code: "ENOENT" });
       await expect(access(join(directory, "1.ts.part"))).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(access(join(directory, "ffmpeg.log"))).rejects.toMatchObject({ code: "ENOENT" });
+    } finally { local.close(); }
+  });
+
+  it("reconciles promoted files and catalog metadata after an interrupted commit", async () => {
+    const { local, catalog, cache } = await harness();
+    try {
+      seedAsset(catalog, keyA, 100);
+      catalog.recordSegment({ cacheKey: keyA, segmentIndex: 0, windowIndex: 0, durationMs: 4_000, relativePath: `aa/${keyA}/0.ts`, sizeBytes: 7, sha256: createHash("sha256").update("missing").digest("hex"), completedAt: 100, lastAccessedAt: 100 });
+
+      seedAsset(catalog, keyB, 200);
+      await mkdir(cache.assetDirectory(keyB), { recursive: true });
+      const orphan = cache.segmentPath(keyB, 0);
+      await writeFile(orphan, "orphaned-before-catalog-commit");
+
+      seedAsset(catalog, keyC, 300);
+      const valid = Buffer.from("durable segment");
+      await mkdir(cache.assetDirectory(keyC), { recursive: true });
+      await writeFile(cache.segmentPath(keyC, 0), valid);
+      catalog.recordSegment({ cacheKey: keyC, segmentIndex: 0, windowIndex: 0, durationMs: 4_000, relativePath: `cc/${keyC}/0.ts`, sizeBytes: valid.length, sha256: createHash("sha256").update(valid).digest("hex"), completedAt: 300, lastAccessedAt: 300 });
+
+      await cache.reconcile();
+
+      expect(catalog.loadAsset(keyA)).toBeNull();
+      await expect(access(orphan)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readFile(cache.segmentPath(keyC, 0))).toEqual(valid);
+      expect(catalog.segment(keyC, 0)).not.toBeNull();
+    } finally { local.close(); }
+  });
+
+  it("uses metadata-only startup reconciliation and defers content hashing until serve", async () => {
+    const { local, catalog, cache } = await harness();
+    try {
+      seedAsset(catalog, keyA, 100);
+      const body = Buffer.from("durable segment");
+      await mkdir(cache.assetDirectory(keyA), { recursive: true });
+      await writeFile(cache.segmentPath(keyA, 0), body);
+      catalog.recordSegment({ cacheKey: keyA, segmentIndex: 0, windowIndex: 0, durationMs: 4_000, relativePath: `aa/${keyA}/0.ts`, sizeBytes: body.length, sha256: createHash("sha256").update("different same-size").digest("hex"), completedAt: 100, lastAccessedAt: 100 });
+
+      await cache.reconcile();
+
+      expect(catalog.segment(keyA, 0)).not.toBeNull();
+      expect(await cache.loadSegment(keyA, 0)).toBeNull();
+      expect(catalog.segment(keyA, 0)).toBeNull();
     } finally { local.close(); }
   });
 

@@ -48,6 +48,7 @@ export interface TranscodeCoordinator {
   session(sessionId: string): TranscodePlaybackSession | null;
   heartbeat(sessionId: string, deviceId: string): void;
   segment(sessionId: string, segmentIndex: number, signal: AbortSignal): Promise<TranscodeSegmentFile>;
+  playbackFailure(sessionId: string): { code: TranscodeErrorCode } | null;
   release(sessionId: string, deviceId: string): Promise<void>;
   diagnostic(): TranscodeDiagnosticSnapshot;
   close(): Promise<void>;
@@ -58,6 +59,7 @@ type TimerHandle = ReturnType<typeof setInterval>;
 interface SessionState extends TranscodePlaybackSession {
   deviceName: string;
   releaseActivePin: () => void;
+  playbackFailureCode: TranscodeErrorCode | null;
 }
 
 interface SegmentWaiter {
@@ -82,9 +84,9 @@ export function createTranscodeCoordinator(options: {
   gateway: Pick<TranscodeSourceGateway, "grant">;
   probe: MediaProbeService;
   catalog: Pick<TranscodeCatalog,
-    "loadAsset" | "upsertProbe" | "segment" | "window" | "touchAsset" | "touchSegment" | "totalBytes">;
+    "loadAsset" | "upsertProbe" | "window" | "touchAsset" | "touchSegment" | "totalBytes">;
   cache: Pick<TranscodeCache,
-    "segmentPath" | "ensureCapacity" | "pinActive" | "pinGenerating" | "totalBytes">;
+    "loadSegment" | "ensureCapacity" | "pinActive" | "pinGenerating" | "totalBytes">;
   encoder: WindowEncoder;
   profile: TranscodeProfile;
   now?: () => Date;
@@ -171,6 +173,7 @@ export function createTranscodeCoordinator(options: {
       expiresAt: now().getTime() + LEASE_MS,
       deviceName: source.auth.device.name,
       releaseActivePin: options.cache.pinActive(cacheKey),
+      playbackFailureCode: null,
     };
     sessions.set(id, state);
     leaseSessionId = id;
@@ -211,7 +214,7 @@ export function createTranscodeCoordinator(options: {
       signal.aborted
     ) throw expired();
     renew(sessionState);
-    const cached = cachedSegment(sessionState, segmentIndex);
+    const cached = await cachedSegment(sessionState, segmentIndex);
     if (cached) return cached;
 
     const waiterKey = segmentWaiterKey(sessionState.cacheKey, segmentIndex);
@@ -235,7 +238,7 @@ export function createTranscodeCoordinator(options: {
       signal.addEventListener("abort", waiter.abort, { once: true });
     });
 
-    const raced = cachedSegment(sessionState, segmentIndex);
+    const raced = await cachedSegment(sessionState, segmentIndex);
     if (raced) resolveSegmentWaiters(sessionState.cacheKey, segmentIndex, raced);
     else enqueueDemand(sessionState, Math.floor(segmentIndex / sessionState.profile.segmentsPerWindow));
     return promised;
@@ -245,6 +248,14 @@ export function createTranscodeCoordinator(options: {
     const state = sessions.get(sessionId);
     if (!state || state.binding.deviceId !== deviceId) throw expired();
     await expireSession(state, true);
+  }
+
+  function playbackFailure(sessionId: string): { code: TranscodeErrorCode } | null {
+    const state = sessions.get(sessionId);
+    if (!state?.playbackFailureCode) return null;
+    const code = state.playbackFailureCode;
+    state.playbackFailureCode = null;
+    return { code };
   }
 
   function diagnostic(): TranscodeDiagnosticSnapshot {
@@ -387,18 +398,22 @@ export function createTranscodeCoordinator(options: {
         signal: job.controller.signal,
         onProgress: (progress) => { job.progress = progress; },
         onSegmentPromoted: (segmentIndex) => {
-          const file = cachedSegment(sessionState, segmentIndex);
-          if (file) resolveSegmentWaiters(sessionState.cacheKey, segmentIndex, file);
+          void cachedSegment(sessionState, segmentIndex).then((file) => {
+            if (file) resolveSegmentWaiters(sessionState.cacheKey, segmentIndex, file);
+          });
         },
       });
       completed = result.complete;
       if (!completed) throw new TranscodeError("TRANSCODER_FAILED");
-      rejectMissingWindowWaiters(sessionState, job.windowIndex, new TranscodeError("TRANSCODER_FAILED"));
+      await rejectMissingWindowWaiters(sessionState, job.windowIndex, new TranscodeError("TRANSCODER_FAILED"));
     } catch (error) {
       const normalized = job.controller.signal.aborted
         ? expired()
         : normalizeError(error, "TRANSCODER_FAILED");
-      if (!job.controller.signal.aborted) lastErrorCode = normalized.code;
+      if (!job.controller.signal.aborted) {
+        lastErrorCode = normalized.code;
+        sessionState.playbackFailureCode = normalized.code;
+      }
       rejectWindowWaiters(sessionState.cacheKey, job.windowIndex, normalized);
     } finally {
       job.releaseGeneratingPin?.();
@@ -410,17 +425,11 @@ export function createTranscodeCoordinator(options: {
     }
   }
 
-  function cachedSegment(sessionState: SessionState, segmentIndex: number): TranscodeSegmentFile | null {
-    const stored = options.catalog.segment(sessionState.cacheKey, segmentIndex);
+  async function cachedSegment(sessionState: SessionState, segmentIndex: number): Promise<TranscodeSegmentFile | null> {
+    const stored = await options.cache.loadSegment(sessionState.cacheKey, segmentIndex);
     if (!stored) return null;
     options.catalog.touchSegment(sessionState.cacheKey, segmentIndex, now().getTime());
-    return {
-      path: options.cache.segmentPath(sessionState.cacheKey, segmentIndex),
-      sizeBytes: stored.sizeBytes,
-      sha256: stored.sha256,
-      durationMs: stored.durationMs,
-      segmentIndex,
-    };
+    return stored;
   }
 
   function resolveSegmentWaiters(cacheKey: string, segmentIndex: number, file: TranscodeSegmentFile): void {
@@ -448,10 +457,10 @@ export function createTranscodeCoordinator(options: {
     }
   }
 
-  function rejectMissingWindowWaiters(sessionState: SessionState, windowIndex: number, error: TranscodeError): void {
+  async function rejectMissingWindowWaiters(sessionState: SessionState, windowIndex: number, error: TranscodeError): Promise<void> {
     for (let offset = 0; offset < sessionState.profile.segmentsPerWindow; offset += 1) {
       const index = windowIndex * sessionState.profile.segmentsPerWindow + offset;
-      const file = cachedSegment(sessionState, index);
+      const file = await cachedSegment(sessionState, index);
       if (file) resolveSegmentWaiters(sessionState.cacheKey, index, file);
     }
     rejectWindowWaiters(sessionState.cacheKey, windowIndex, error);
@@ -523,7 +532,7 @@ export function createTranscodeCoordinator(options: {
     state.expiresAt = now().getTime() + LEASE_MS;
   }
 
-  return { createSession, session, heartbeat, segment, release, diagnostic, close };
+  return { createSession, session, heartbeat, segment, playbackFailure, release, diagnostic, close };
 }
 
 function sameBinding(left: TranscodeSourceBinding, right: TranscodeSourceBinding): boolean {

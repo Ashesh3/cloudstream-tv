@@ -5,6 +5,7 @@ export default tseslint.config(
   {
     ignores: [
       "dist/**",
+      "build/**",
       "apps/*/dist/**",
       "node_modules/**",
       ".superpowers/**",
@@ -12,6 +13,7 @@ export default tseslint.config(
       ".next/**",
       "playwright-report/**",
       "test-results/**",
+      "e2e/fixtures/hls-long/**",
       "src/**",
       "tests/**/*.mjs"
     ]
@@ -22,11 +24,14 @@ export default tseslint.config(
     languageOptions: {
       globals: {
         Buffer: "readonly",
+        Headers: "readonly",
         Response: "readonly",
+        TextDecoder: "readonly",
         URL: "readonly",
         console: "readonly",
         fetch: "readonly",
-        process: "readonly"
+        process: "readonly",
+        setTimeout: "readonly"
       }
     }
   },
@@ -35,6 +40,12 @@ export default tseslint.config(
     files: ["**/*.ts", "**/*.tsx"],
     rules: {
       "@typescript-eslint/no-explicit-any": "off"
+    }
+  },
+  {
+    files: ["scripts/*.mjs"],
+    rules: {
+      "no-empty": "off"
     }
   }
 );

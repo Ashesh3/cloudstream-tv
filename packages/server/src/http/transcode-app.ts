@@ -24,7 +24,7 @@ export function createTranscodeApiApp(options: {
   requestContext: ControlRequestContextScope;
   auth: ControlAuth;
   sourceAuthorizer: Pick<TranscodeSourceAuthorizer, "validateCurrent">;
-  coordinator: Pick<TranscodeCoordinator, "session" | "heartbeat" | "segment" | "release" | "diagnostic">;
+  coordinator: Pick<TranscodeCoordinator, "session" | "heartbeat" | "segment" | "playbackFailure" | "release" | "diagnostic">;
   cache: Pick<TranscodeCache, "pinServed">;
   cacheMaxBytes: number;
   allowedOrigin: string;
@@ -60,7 +60,7 @@ export function createTranscodeApiApp(options: {
           lastErrorCode: diagnostic.lastErrorCode,
         }, { headers: { "x-csrf-token": admin.csrfToken, "cache-control": "private, no-store" } });
       }
-      const match = /^\/api\/tv\/transcodes\/([A-Za-z0-9_-]{16,128})(?:\/(master\.m3u8|stream\.m3u8|heartbeat|segments\/(\d+)\.ts))?$/.exec(url.pathname);
+      const match = /^\/api\/tv\/transcodes\/([A-Za-z0-9_-]{16,128})(?:\/(master\.m3u8|stream\.m3u8|heartbeat|failure|segments\/(\d+)\.ts))?$/.exec(url.pathname);
       if (!match) {
         if (/\/segments\/-?\d+\.ts$/.test(url.pathname)) {
           throw new HttpError(400, "INVALID_SEGMENT", "Segment index is invalid.");
@@ -79,6 +79,10 @@ export function createTranscodeApiApp(options: {
 
       if (action === "master.m3u8") return playlist(renderMasterPlaylist(sessionId, session.probe, session.profile));
       if (action === "stream.m3u8") return playlist(renderMediaPlaylist(session.probe, session.profile));
+      if (action === "failure") {
+        const failure = options.coordinator.playbackFailure(sessionId);
+        return failure ? ok(failure, { headers: { "cache-control": "private, no-store" } }) : new Response(null, { status: 204, headers: { "cache-control": "private, no-store" } });
+      }
       if (action === "heartbeat") {
         requireOrigin(request, options.allowedOrigin);
         options.coordinator.heartbeat(sessionId, device.deviceId);

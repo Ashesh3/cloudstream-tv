@@ -61,7 +61,7 @@ In Admin, connect Google Drive and/or OneDrive, choose read-only folder roots, a
 ## 7. Health and readiness
 
 - `GET /healthz` reports process health.
-- `GET /readyz` returns success only after local storage, static assets, the loopback source gateway, and runtime composition are ready. It returns unavailable while draining or after startup failure.
+- `GET /readyz` returns success only after local storage, static assets, working `ffmpeg` and `ffprobe` executables, the loopback source gateway, and runtime composition are ready. It returns unavailable while draining or after startup failure.
 
 Use readiness for orchestration. Do not send public traffic until it succeeds.
 
@@ -77,6 +77,8 @@ Cloudframe allows one active TV transcode lease and one FFmpeg job. Reopening th
 - `TRANSCODE_THREADS` is `auto` or a positive integer.
 
 Before committing a segment, Cloudframe checks both limits and evicts least-recently-used unpinned assets. Active, generating, and currently served assets are protected. If no safe candidate exists, playback fails with `TRANSCODER_CACHE_FULL`; the reserved free-space floor is not consumed.
+
+At startup, Cloudframe removes abandoned staging files, verifies cataloged segment paths and sizes, deletes incomplete assets, and removes promoted files that never reached their SQLite commit. SHA-256 verification is deferred to segment use so readiness does not reread the complete cache; a missing or corrupt segment is invalidated and regenerated on demand instead of being served from stale metadata.
 
 ## 10. Explicit backup and restore
 
@@ -105,7 +107,7 @@ Automatic migration backups supplement but do not replace an operator backup of 
 5. Wait for `/readyz`, then verify Admin and one direct-media item before testing HLS.
 6. For rollback, stop the candidate and restore the pre-upgrade `/data` backup before starting the previous immutable image. Do not run an older binary against a database already migrated beyond its supported schema.
 
-SIGTERM begins drain, stops new transcode work, terminates FFmpeg/FFprobe and the loopback gateway, waits for tracked commits, checkpoints SQLite, and exits.
+SIGTERM begins drain, stops accepting new HTTP work, waits for active responses, and only then stops transcode work, terminates FFmpeg/FFprobe and the loopback gateway, waits for tracked commits, checkpoints SQLite, and exits. If the bounded HTTP drain expires, active request signals and sockets are closed and shutdown proceeds rather than waiting indefinitely for a cancellation-ignoring operation.
 
 ## 13. Reverse-proxy requirements
 

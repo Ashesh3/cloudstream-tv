@@ -2,7 +2,7 @@ import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSelfHostedComposition, parseSelfHostedConfig, type ProviderAdapter } from "@cloudframe/server";
+import { createSelfHostedComposition, parseSelfHostedConfig, type ProcessRunner, type ProviderAdapter } from "@cloudframe/server";
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -17,14 +17,16 @@ describe("self-hosted production composition", () => {
     await writeFile(join(publicRoot, "admin", "index.html"), "admin");
     const log = vi.fn();
     const adapter = {} as ProviderAdapter;
+    const processRunner: ProcessRunner = { run: vi.fn(async () => ({ exitCode: 0, signal: null, stdout: Buffer.alloc(0), stderrTail: "" })) };
     const composition = await createSelfHostedComposition(parseSelfHostedConfig({
       APP_ORIGIN: "https://cloudframe.example",
       DATA_DIR: dataDir,
       GOOGLE_CLIENT_ID: "client",
       GOOGLE_CLIENT_SECRET: "secret",
-    }), { publicRoot, providerAdapters: { google: adapter }, log, now: () => new Date("2026-08-29T12:00:00.000Z") });
+    }), { publicRoot, providerAdapters: { google: adapter }, processRunner, log, now: () => new Date("2026-08-29T12:00:00.000Z") });
     expect(composition.readiness.snapshot()).toMatchObject({ ready: true });
     expect(log).toHaveBeenCalledWith(expect.stringMatching(/^CLOUDFRAME_SETUP_CODE=/u));
+    expect(processRunner.run).toHaveBeenCalledTimes(2);
     await Promise.all([access(join(dataDir, "secrets", "master.key")), access(join(dataDir, "cloudframe.sqlite"))]);
     await composition.close();
     await composition.close();

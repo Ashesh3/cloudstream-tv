@@ -1,7 +1,6 @@
 import {
   ProviderError,
   type ProviderAdapter,
-  type AuthenticatedMediaRequest,
   type ProviderCredentials,
   type ProviderKind,
   type ProviderRegistry,
@@ -211,43 +210,6 @@ function providerAdapter(
   }
 }
 
-function queryKeys(url: URL): string[] {
-  return [...url.searchParams.keys()];
-}
-
-function exactlyOneQueryValue(
-  url: URL,
-  key: string,
-  expected: string,
-): boolean {
-  const values = url.searchParams.getAll(key);
-  return values.length === 1 && values[0] === expected;
-}
-
-function validGoogleRequest(
-  value: TemporaryUrl | AuthenticatedMediaRequest,
-  url: URL,
-  item: AuthorizedBrowseItem,
-  credentials: ProviderCredentials,
-): boolean {
-  const allowedQueryKeys = new Set(["alt", "supportsAllDrives"]);
-  const keys = queryKeys(url);
-  if (!("headers" in value)) return false;
-  const headers = new Headers(value.headers);
-  return (
-    url.origin === "https://www.googleapis.com" &&
-    url.pathname ===
-      `/drive/v3/files/${encodeURIComponent(item.claims.providerNodeId)}` &&
-    keys.length === 2 &&
-    new Set(keys).size === 2 &&
-    keys.every((key) => allowedQueryKeys.has(key)) &&
-    exactlyOneQueryValue(url, "alt", "media") &&
-    exactlyOneQueryValue(url, "supportsAllDrives", "true") &&
-    headers.get("authorization") === `Bearer ${credentials.accessToken}` &&
-    [...headers.keys()].length === 1
-  );
-}
-
 function validGoogleThumbnailUrl(url: URL): boolean {
   const hostname = url.hostname.toLowerCase();
   return (
@@ -322,54 +284,6 @@ function validOneDriveUrl(url: URL, rawUrl: string): boolean {
   if (hostnameMatchesSubdomain(hostname, "files.1drv.com")) return true;
   if (hostname === "storage.live.com" || hostnameMatchesSubdomain(hostname, "storage.live.com")) return true;
   return hostnameMatchesSubdomain(hostname, "microsoftusercontent.com");
-}
-
-function validTemporaryUrl(
-  value: TemporaryUrl | AuthenticatedMediaRequest,
-  item: AuthorizedBrowseItem,
-  credentials: ProviderCredentials,
-  now: Date,
-): TemporaryUrl | AuthenticatedMediaRequest {
-  try {
-    const rawUrl = value?.url;
-    const rawExpiry = value?.expiresAt;
-    const expiryEpoch = Date.prototype.getTime.call(rawExpiry);
-    if (
-      !value ||
-      typeof value !== "object" ||
-      typeof rawUrl !== "string" ||
-      !(rawExpiry instanceof Date) ||
-      !Number.isFinite(expiryEpoch) ||
-      expiryEpoch <= now.getTime()
-    ) {
-      throw directMediaError("INVALID_PROVIDER_URL");
-    }
-    const url = new URL(rawUrl);
-    if (
-      url.protocol !== "https:" ||
-      url.port !== "" ||
-      url.username !== "" ||
-      url.password !== "" ||
-      url.hash !== "" ||
-      !(
-        item.source.provider === "google"
-          ? "headers" in value
-            ? validGoogleRequest(value, url, item, credentials)
-            : validGoogleThumbnailUrl(url)
-          : validOneDriveUrl(url, rawUrl)
-      )
-    ) {
-      throw directMediaError("INVALID_PROVIDER_URL");
-    }
-    return {
-      url: rawUrl,
-      expiresAt: new Date(expiryEpoch),
-      ...("headers" in value ? { headers: new Headers(value.headers) } : {}),
-    };
-  } catch (error) {
-    if (error instanceof DirectMediaError) throw error;
-    throw directMediaError("INVALID_PROVIDER_URL");
-  }
 }
 
 function validThumbnailUrl(

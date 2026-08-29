@@ -27,6 +27,7 @@ export * from "./runtime/self-hosted-config";
 export * from "./runtime/local-cache";
 export * from "./runtime/readiness";
 export * from "./runtime/deferred-tasks";
+export * from "./runtime/http-request-tracker";
 export * from "./runtime/self-hosted-composition";
 export * from "./sqlite/database";
 export * from "./sqlite/control-store";

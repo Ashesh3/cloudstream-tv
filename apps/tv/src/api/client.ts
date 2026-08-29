@@ -425,5 +425,11 @@ function safeMessage(code: string): string {
   if (code === "PROVIDER_REAUTH_REQUIRED") return "This source needs attention in Cloudframe Admin.";
   if (code === "PROVIDER_THROTTLED") return "The provider is busy. Try again shortly.";
   if (code === "NETWORK_ERROR" || code === "PROVIDER_TIMEOUT" || code === "PROVIDER_UNAVAILABLE") return "This source is temporarily unavailable.";
+  if (code === "TRANSCODER_BUSY") return "Another TV is using the transcoder.";
+  if (code === "TRANSCODER_CACHE_FULL") return "The transcode cache does not have enough free space.";
+  if (code === "TRANSCODER_WINDOW_TIMEOUT") return "Cloudframe could not prepare this part of the video in time.";
+  if (code === "TRANSCODER_UNSUPPORTED") return "Cloudframe cannot transcode this video format.";
+  if (code === "TRANSCODER_SOURCE_UNAVAILABLE") return "Cloudframe could not read this video from its source.";
+  if (code === "TRANSCODER_FAILED") return "Cloudframe could not transcode this video.";
   return "The request could not be completed.";
 }

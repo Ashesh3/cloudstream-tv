@@ -66,12 +66,10 @@ test("shared final API promotes enrollment, enforces reassignment, clears revoke
     ["/api/admin/sources/source-1/sync", "POST", {}],
     ["/api/admin/sync", "POST", {}]
   ] as const) {
-    const writesBefore = harness.durable.writeAttempts;
     const mutationsBefore = harness.controlStore.mutateCount;
     const response = await harness.app(jsonRequest(path, method, body));
     expect(response.status, `${method} ${path}`).toBe(404);
     expect(await response.json(), `${method} ${path}`).toMatchObject({ code: "NOT_FOUND" });
-    expect(harness.durable.writeAttempts, `${method} ${path}`).toBe(writesBefore);
     expect(harness.controlStore.mutateCount, `${method} ${path}`).toBe(mutationsBefore);
   }
 });

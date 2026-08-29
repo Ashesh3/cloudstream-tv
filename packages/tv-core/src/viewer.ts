@@ -7,7 +7,10 @@ export interface ViewerMediaItem {
 }
 
 export type ViewerUrlStatus = "loading" | "ready" | "error";
-export type ViewerMediaErrorKind = "authorization" | "bridge" | "transport" | "decoder" | "transcode" | "unsupported" | "generic";
+export type ViewerMediaErrorKind =
+  | "authorization" | "bridge" | "transport" | "decoder" | "transcode" | "unsupported" | "generic"
+  | "transcode-busy" | "transcode-cache-full" | "transcode-timeout" | "transcode-unsupported"
+  | "transcode-source" | "transcode-failed";
 export type ViewerMediaSourceKind = "direct" | "google-raw" | "hls";
 
 export interface ViewerUrlState {

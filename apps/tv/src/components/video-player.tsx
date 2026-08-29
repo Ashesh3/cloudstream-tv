@@ -2,7 +2,7 @@ import type { Ref } from "preact";
 import type { ViewerMediaItem, ViewerUrlState } from "@cloudframe/tv-core";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
-import { attachHlsSource, type HlsPlaybackHandle } from "../media/hls-playback";
+import { attachHlsSource, type HlsPlaybackErrorKind, type HlsPlaybackHandle } from "../media/hls-playback";
 import { loadVideoJs } from "../videojs";
 
 export interface VideoPlayerProps {
@@ -15,7 +15,7 @@ export interface VideoPlayerProps {
   durationSeconds: number;
   bufferedPercent: number;
   onHlsAttached: () => void;
-  onHlsFatal: (error: { kind: "network" | "media" | "unsupported" }) => void;
+  onHlsFatal: (error: { kind: HlsPlaybackErrorKind }) => void;
   onLoadedMetadata: (element: HTMLVideoElement) => void;
   onPlaying: () => void;
   onPlay: () => void;
@@ -37,6 +37,7 @@ export function VideoPlayer(props: VideoPlayerProps) {
   const video = useRef<HTMLVideoElement | null>(null);
   const [videoGeneration, setVideoGeneration] = useState(0);
   const hlsHandle = useRef<HlsPlaybackHandle | null>(null);
+  const hlsOwnsElementErrors = useRef(false);
   const noReferrer = { referrerPolicy: "no-referrer" } as const;
 
   useEffect(() => {
@@ -50,6 +51,7 @@ export function VideoPlayer(props: VideoPlayerProps) {
   useEffect(() => {
     hlsHandle.current?.destroy();
     hlsHandle.current = null;
+    hlsOwnsElementErrors.current = false;
     const element = video.current;
     if (!element || !hlsPlaylist) return;
     let active = true;
@@ -66,6 +68,7 @@ export function VideoPlayer(props: VideoPlayerProps) {
         return;
       }
       hlsHandle.current = handle;
+      hlsOwnsElementErrors.current = handle.handlesElementErrors;
       props.onHlsAttached();
     }).catch(() => {
       if (!active || fatalReported) return;
@@ -76,6 +79,7 @@ export function VideoPlayer(props: VideoPlayerProps) {
       active = false;
       hlsHandle.current?.destroy();
       hlsHandle.current = null;
+      hlsOwnsElementErrors.current = false;
     };
   }, [hlsPlaylist, videoGeneration]);
 
@@ -113,7 +117,7 @@ export function VideoPlayer(props: VideoPlayerProps) {
               onLoadedData={event => props.onProgress(event.currentTarget)}
               onSeeked={event => props.onSeeked(event.currentTarget)}
               onEnded={event => props.onEnded(event.currentTarget)}
-              onError={event => props.onError(event.currentTarget)}
+              onError={event => { if (!hlsOwnsElementErrors.current) props.onError(event.currentTarget); }}
             />
           ) : <div className="viewer-loading" role="status">Preparing video…</div>}
         </video-skin>

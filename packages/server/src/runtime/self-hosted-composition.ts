@@ -45,7 +45,7 @@ import { createTranscodeCatalog } from "../transcode/catalog.ts";
 import { createTranscodeCache } from "../transcode/cache.ts";
 import { createTranscodeSourceAuthorizer } from "../transcode/source-authorizer.ts";
 import { createTranscodeSourceGateway } from "../transcode/source-gateway.ts";
-import { createProcessRunner } from "../transcode/process-runner.ts";
+import { createProcessRunner, type ProcessRunner } from "../transcode/process-runner.ts";
 import { createMediaProbeService } from "../transcode/probe.ts";
 import { transcodeProfile } from "../transcode/profile.ts";
 import { createWindowEncoder } from "../transcode/window-encoder.ts";
@@ -67,6 +67,7 @@ export interface SelfHostedCompositionDependencies {
   randomBytes?: (size: number) => Uint8Array;
   log?: (line: string) => void;
   containerTestFixturePath?: string;
+  processRunner?: ProcessRunner;
 }
 
 export async function createSelfHostedComposition(
@@ -195,9 +196,10 @@ export async function createSelfHostedComposition(
       now,
     });
     await transcodeCache.reconcile();
+    const runner = dependencies.processRunner ?? createProcessRunner();
+    await verifyMediaTools(runner);
     const gateway = createTranscodeSourceGateway({ authorizer: sourceAuthorizer, mediaSources, fetch: containerFixture?.fetcher ?? realFetch, now, log });
     await gateway.start();
-    const runner = createProcessRunner();
     const probe = createMediaProbeService({ runner });
     const profile = transcodeProfile(config.transcode.threads);
     const encoder = createWindowEncoder({ runner, gateway, cache: transcodeCache, catalog, profile, firstSegmentTimeoutMs: config.transcode.firstSegmentTimeoutMs });
@@ -274,6 +276,22 @@ export async function createSelfHostedComposition(
     readiness.fail(startupErrorCode(error));
     localDatabase?.close();
     throw error;
+  }
+}
+
+async function verifyMediaTools(runner: ProcessRunner): Promise<void> {
+  for (const command of ["ffmpeg", "ffprobe"] as const) {
+    let result;
+    try {
+      result = await runner.run(command, ["-version"], {
+        signal: AbortSignal.timeout(10_000),
+        timeoutMs: 10_000,
+        stdoutLimitBytes: 64 * 1024,
+      });
+    } catch {
+      throw new Error(`${command.toUpperCase()}_UNAVAILABLE`);
+    }
+    if (result.exitCode !== 0) throw new Error(`${command.toUpperCase()}_UNAVAILABLE`);
   }
 }
 

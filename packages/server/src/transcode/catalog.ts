@@ -35,6 +35,7 @@ export interface TranscodeCatalog {
   loadAsset(cacheKey: string): TranscodeAssetRecord | null;
   recordSegment(segment: TranscodeSegmentRecord): void;
   segment(cacheKey: string, segmentIndex: number): TranscodeSegmentRecord | null;
+  segments(cacheKey: string): TranscodeSegmentRecord[];
   deleteSegment(cacheKey: string, segmentIndex: number): void;
   markWindow(cacheKey: string, windowIndex: number, state: "partial" | "complete", updatedAt: number): void;
   window(cacheKey: string, windowIndex: number): TranscodeWindowRecord | null;
@@ -77,12 +78,18 @@ export function createTranscodeCatalog(database: DatabaseSync): TranscodeCatalog
     return row ? decodeSegment(row) : null;
   }
 
+  function segments(cacheKey: string): TranscodeSegmentRecord[] {
+    return (database.prepare(`SELECT cache_key,segment_index,window_index,duration_ms,relative_path,size_bytes,sha256,completed_at,last_accessed_at FROM transcode_segments WHERE cache_key=? ORDER BY segment_index`).all(cacheKey) as Record<string, unknown>[])
+      .map(decodeSegment);
+  }
+
   function deleteSegment(cacheKey: string, segmentIndex: number) {
     transaction(database, () => {
-      const row = database.prepare("SELECT size_bytes FROM transcode_segments WHERE cache_key=? AND segment_index=?").get(cacheKey, segmentIndex) as { size_bytes?: number | bigint } | undefined;
+      const row = database.prepare("SELECT size_bytes, window_index FROM transcode_segments WHERE cache_key=? AND segment_index=?").get(cacheKey, segmentIndex) as { size_bytes?: number | bigint; window_index?: number | bigint } | undefined;
       if (!row) return;
       database.prepare("DELETE FROM transcode_segments WHERE cache_key=? AND segment_index=?").run(cacheKey, segmentIndex);
       database.prepare("UPDATE transcode_assets SET total_bytes = MAX(0, total_bytes - ?) WHERE cache_key=?").run(Number(row.size_bytes), cacheKey);
+      database.prepare("UPDATE transcode_windows SET state='partial' WHERE cache_key=? AND window_index=?").run(cacheKey, Number(row.window_index));
     });
   }
 
@@ -100,7 +107,7 @@ export function createTranscodeCatalog(database: DatabaseSync): TranscodeCatalog
   function totalBytes() { return Number((database.prepare("SELECT COALESCE(SUM(total_bytes),0) AS total FROM transcode_assets").get() as { total: number | bigint }).total); }
 
   return {
-    upsertProbe, loadAsset, recordSegment, segment, deleteSegment, markWindow, window,
+    upsertProbe, loadAsset, recordSegment, segment, segments, deleteSegment, markWindow, window,
     touchAsset: (cacheKey, at) => { database.prepare("UPDATE transcode_assets SET last_accessed_at=? WHERE cache_key=?").run(at, cacheKey); },
     touchSegment: (cacheKey, segmentIndex, at) => { transaction(database, () => { database.prepare("UPDATE transcode_segments SET last_accessed_at=? WHERE cache_key=? AND segment_index=?").run(at, cacheKey, segmentIndex); database.prepare("UPDATE transcode_assets SET last_accessed_at=? WHERE cache_key=?").run(at, cacheKey); }); },
     deleteAsset, lruCandidates, totalBytes,
@@ -120,4 +127,4 @@ function text(value: unknown) { if (typeof value !== "string") throw new Error("
 function integer(value: unknown) { const n = Number(value); if (!Number.isSafeInteger(n) || n < 0) throw new Error("CATALOG_INVALID"); return n; }
 function positive(value: unknown) { return typeof value === "number" && Number.isFinite(value) && value > 0; }
 function requireKey(value: string) { if (!/^[a-f0-9]{64}$/.test(value)) throw new Error("TRANSCODER_PATH_INVALID"); }
-function transaction(database: DatabaseSync, operation: () => void) { database.exec("BEGIN IMMEDIATE"); try { operation(); database.exec("COMMIT"); } catch (error) { try { database.exec("ROLLBACK"); } catch {} throw error; } }
+function transaction(database: DatabaseSync, operation: () => void) { database.exec("BEGIN IMMEDIATE"); try { operation(); database.exec("COMMIT"); } catch (error) { try { database.exec("ROLLBACK"); } catch { /* Preserve the original transaction failure. */ } throw error; } }
