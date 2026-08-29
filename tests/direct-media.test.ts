@@ -13,6 +13,7 @@ import {
   createDirectMediaService,
   createLiveBrowseService,
   createProviderMediaSourceService,
+  transcodeProfile,
   type AuthenticatedControlDevice,
   type BrowseItemClaims,
   type CredentialBroker,
@@ -26,6 +27,99 @@ import {
 } from "./helpers/control-plane";
 
 describe("direct provider URL vending", () => {
+  it("selects HLS for legacy MPEG and only when full-size media is requested", async () => {
+    const harness = createHarness();
+    const legacy = harness.mediaItem("source-google", "root-google", "legacy-video", "video");
+    legacy.claims.name = "MOV00516.MPG";
+    legacy.claims.mimeType = "video/mpeg";
+    const createSession = vi.fn().mockResolvedValue({
+      id: "playback-session-1",
+      binding: {},
+      cacheKey: "a".repeat(64),
+      probe: { durationMs: 65_832 },
+      profile: transcodeProfile("auto"),
+      expiresAt: TEST_NOW.getTime() + 45_000,
+    });
+    const bind = vi.fn().mockReturnValue({ auth: harness.auth(), item: legacy, binding: {} });
+    const media = createDirectMediaService({
+      browse: { authorizeHandle: () => legacy },
+      credentialBroker: harness.credentialBroker,
+      providers: harness.providers,
+      mediaSources: { resolve: vi.fn() },
+      transcodes: { createSession },
+      sourceAuthorizer: { bind },
+      now: () => TEST_NOW,
+    } as never);
+
+    await expect(media.media(harness.auth(), "sealed-legacy")).resolves.toEqual({
+      itemId: legacy.id,
+      kind: "video",
+      transport: "hls",
+      playlistUrl: "/api/tv/transcodes/playback-session-1/master.m3u8",
+      playbackSessionId: "playback-session-1",
+      durationSeconds: 65.832,
+      profile: "h264-aac-1080p-v1",
+      expiresAt: new Date(TEST_NOW.getTime() + 45_000).toISOString(),
+      revision: "provider-revision-7",
+      responseHeaders: { "cache-control": "private, no-store", "referrer-policy": "no-referrer" },
+    });
+    expect(bind).toHaveBeenCalledOnce();
+    expect(createSession).toHaveBeenCalledOnce();
+
+    await harness.media.thumbnails(
+      harness.auth(),
+      [harness.handle("source-google", "root-google", "google-image", "image")],
+      720,
+    );
+    expect(createSession).toHaveBeenCalledOnce();
+  });
+
+  it("keeps MP4 direct unless HLS fallback is explicitly requested", async () => {
+    const harness = createHarness();
+    const mp4 = harness.mediaItem("source-google", "root-google", "google-video", "video");
+    const createSession = vi.fn().mockResolvedValue({
+      id: "playback-session-2",
+      binding: {},
+      cacheKey: "b".repeat(64),
+      probe: { durationMs: 2_000 },
+      profile: transcodeProfile("auto"),
+      expiresAt: TEST_NOW.getTime() + 45_000,
+    });
+    const media = createDirectMediaService({
+      browse: { authorizeHandle: () => mp4 },
+      credentialBroker: harness.credentialBroker,
+      providers: harness.providers,
+      mediaSources: createProviderMediaSourceService({ credentialBroker: harness.credentialBroker, providers: harness.providers, now: () => TEST_NOW }),
+      transcodes: { createSession },
+      sourceAuthorizer: { bind: vi.fn().mockReturnValue({ auth: harness.auth(), item: mp4, binding: {} }) },
+      now: () => TEST_NOW,
+    } as never);
+
+    await expect(media.media(harness.auth(), "sealed-mp4")).resolves.toMatchObject({ transport: "google-bearer" });
+    expect(createSession).not.toHaveBeenCalled();
+    await expect(media.media(harness.auth(), "sealed-mp4", { forceHls: true })).resolves.toMatchObject({ transport: "hls" });
+    expect(createSession).toHaveBeenCalledOnce();
+  });
+
+  it("rejects forced HLS for an image without creating a session", async () => {
+    const harness = createHarness();
+    const image = harness.mediaItem("source-google", "root-google", "google-image", "image");
+    const createSession = vi.fn();
+    const media = createDirectMediaService({
+      browse: { authorizeHandle: () => image },
+      credentialBroker: harness.credentialBroker,
+      providers: harness.providers,
+      mediaSources: createProviderMediaSourceService({ credentialBroker: harness.credentialBroker, providers: harness.providers, now: () => TEST_NOW }),
+      transcodes: { createSession },
+      sourceAuthorizer: { bind: vi.fn() },
+      now: () => TEST_NOW,
+    } as never);
+
+    await expect(media.media(harness.auth(), "sealed-image", { forceHls: true }))
+      .rejects.toMatchObject({ code: "INVALID_MEDIA_REQUEST" });
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
   it("delegates full-size media retrieval to the shared resolver exactly once", async () => {
     const harness = createHarness();
     const item = harness.mediaItem("source-google", "root-google", "google-video", "video");
@@ -77,7 +171,7 @@ describe("direct provider URL vending", () => {
       expiresAt: harness.expiry.toISOString(),
       revision: "provider-revision-7",
     });
-    expect(result.url).not.toContain("access_token");
+    if (result.transport !== "hls") expect(result.url).not.toContain("access_token");
   });
 
   it("returns unavailable for one failed Google thumbnail without rejecting the batch", async () => {
@@ -702,7 +796,7 @@ describe("direct provider URL vending", () => {
       transport: "google-bearer",
       authorization: { scheme: "Bearer", token: "refreshed-google-access" },
     });
-    expect(result.url).not.toContain("refreshed-google-access");
+    if (result.transport !== "hls") expect(result.url).not.toContain("refreshed-google-access");
     expect(harness.credentialRefreshes).toBe(1);
     expect(harness.mediaTokens).toEqual([
       "access-token",

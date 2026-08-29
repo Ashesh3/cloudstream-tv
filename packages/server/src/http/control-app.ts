@@ -57,6 +57,7 @@ import type {
   RuntimeRateLimiter,
   RuntimeRateLimitPolicy
 } from "../services/runtime-rate-limit";
+import { TranscodeError } from "../transcode/types";
 import { HttpError } from "./errors";
 import { readUniqueCookie, requestSubject } from "./request";
 import {
@@ -1136,11 +1137,12 @@ async function mediaUrl(
   now: Date
 ): Promise<Response> {
   const body = await readBoundedJsonObject(request);
-  assertOnlyKeys(body, ["handle"], "INVALID_MEDIA_REQUEST");
+  assertOnlyKeys(body, ["handle", "fallback"], "INVALID_MEDIA_REQUEST");
   if (
     typeof body.handle !== "string" ||
     body.handle.length < 1 ||
-    body.handle.length > 8192
+    body.handle.length > 8192 ||
+    (body.fallback !== undefined && body.fallback !== "hls")
   ) {
     throw new HttpError(
       400,
@@ -1155,7 +1157,9 @@ async function mediaUrl(
     device.deviceId,
     now
   );
-  const result = await dependencies.directMedia.media(device, body.handle);
+  const result = await dependencies.directMedia.media(device, body.handle, {
+    forceHls: body.fallback === "hls"
+  });
   const { responseHeaders, ...data } = result;
   return ok(data, { headers: responseHeaders });
 }
@@ -2028,9 +2032,28 @@ function normalizeHttpError(error: unknown): HttpError {
   }
   if (error instanceof DirectMediaError) {
     return new HttpError(
-      error.code === "INVALID_THUMBNAIL_REQUEST" ? 400 : 404,
+      error.code === "INVALID_THUMBNAIL_REQUEST" || error.code === "INVALID_MEDIA_REQUEST" ? 400 : 404,
       error.code,
       "Media request could not be completed."
+    );
+  }
+  if (error instanceof TranscodeError) {
+    const status = error.code === "TRANSCODER_BUSY"
+      ? 409
+      : error.code === "TRANSCODER_CACHE_FULL"
+        ? 507
+        : error.code === "TRANSCODER_WINDOW_TIMEOUT"
+          ? 504
+          : error.code === "TRANSCODER_SOURCE_UNAVAILABLE"
+            ? 503
+            : error.code === "TRANSCODER_SESSION_EXPIRED"
+              ? 410
+              : 502;
+    return new HttpError(
+      status,
+      error.code,
+      "Transcoded playback request failed.",
+      error.code === "TRANSCODER_BUSY" ? 5 : undefined
     );
   }
   if (error instanceof CredentialBrokerError) {

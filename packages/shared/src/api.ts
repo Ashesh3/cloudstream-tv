@@ -143,9 +143,22 @@ export interface GoogleBearerMediaUrlResponse extends DirectMediaResponseBase {
   };
 }
 
+export interface HlsMediaSourceResponse {
+  itemId: string;
+  kind: "video";
+  transport: "hls";
+  playlistUrl: string;
+  playbackSessionId: string;
+  durationSeconds: number;
+  profile: "h264-aac-1080p-v1";
+  expiresAt: string;
+  revision: string | null;
+}
+
 export type DirectMediaUrlResponse =
   | DirectProviderMediaUrlResponse
-  | GoogleBearerMediaUrlResponse;
+  | GoogleBearerMediaUrlResponse
+  | HlsMediaSourceResponse;
 
 export type ApiResult<T> =
   | { ok: true; data: T }

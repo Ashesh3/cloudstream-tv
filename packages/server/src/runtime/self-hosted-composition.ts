@@ -1,4 +1,4 @@
-import { access } from "node:fs/promises";
+import { access, statfs } from "node:fs/promises";
 import { join } from "node:path";
 import {
   createGoogleDriveAdapter,
@@ -14,6 +14,7 @@ import { createSealedSessionCodec } from "../auth/sealed-sessions.ts";
 import { createControlRequestContextScope } from "../http/request-context.ts";
 import { createControlApiApp } from "../http/control-app.ts";
 import { createInstallationApiApp } from "../http/installation-app.ts";
+import { createTranscodeApiApp } from "../http/transcode-app.ts";
 import { requestSubject } from "../http/request.ts";
 import { createSelfHostedApp } from "../http/self-hosted-app.ts";
 import { createStaticApp } from "../http/static-app.ts";
@@ -40,6 +41,15 @@ import { createExpiringMemoryCache } from "./local-cache.ts";
 import { deriveLocalKeyMaterial, loadOrCreateMasterKey } from "./local-keys.ts";
 import { createReadinessController, type ReadinessController } from "./readiness.ts";
 import type { SelfHostedConfig } from "./self-hosted-config.ts";
+import { createTranscodeCatalog } from "../transcode/catalog.ts";
+import { createTranscodeCache } from "../transcode/cache.ts";
+import { createTranscodeSourceAuthorizer } from "../transcode/source-authorizer.ts";
+import { createTranscodeSourceGateway } from "../transcode/source-gateway.ts";
+import { createProcessRunner } from "../transcode/process-runner.ts";
+import { createMediaProbeService } from "../transcode/probe.ts";
+import { transcodeProfile } from "../transcode/profile.ts";
+import { createWindowEncoder } from "../transcode/window-encoder.ts";
+import { createTranscodeCoordinator } from "../transcode/coordinator.ts";
 
 export interface SelfHostedComposition {
   app(request: Request): Promise<Response>;
@@ -156,7 +166,29 @@ export async function createSelfHostedComposition(
       now,
     });
     const mediaSources = createProviderMediaSourceService({ credentialBroker, providers, now });
-    const directMedia = createDirectMediaService({ browse, credentialBroker, providers, mediaSources, now });
+    const sourceAuthorizer = createTranscodeSourceAuthorizer({ controlStore, requestContext, credentialBroker, providers, now });
+    const catalog = createTranscodeCatalog(localDatabase.connection);
+    const transcodeCache = createTranscodeCache({
+      catalog,
+      transcodeDir: localDatabase.transcodeDir,
+      stagingDir: localDatabase.stagingDir,
+      cacheMaxBytes: config.transcode.cacheMaxBytes,
+      cacheMinFreeBytes: config.transcode.cacheMinFreeBytes,
+      statfs: async (path) => {
+        const value = await statfs(path, { bigint: true });
+        return { freeBytes: Number(value.bavail * value.bsize) };
+      },
+      now,
+    });
+    await transcodeCache.reconcile();
+    const gateway = createTranscodeSourceGateway({ authorizer: sourceAuthorizer, mediaSources, fetch: dependencies.fetch ?? fetch, now });
+    await gateway.start();
+    const runner = createProcessRunner();
+    const probe = createMediaProbeService({ runner });
+    const profile = transcodeProfile(config.transcode.threads);
+    const encoder = createWindowEncoder({ runner, gateway, cache: transcodeCache, catalog, profile, firstSegmentTimeoutMs: config.transcode.firstSegmentTimeoutMs });
+    const coordinator = createTranscodeCoordinator({ gateway, probe, catalog, cache: transcodeCache, encoder, profile, now });
+    const directMedia = createDirectMediaService({ browse, credentialBroker, providers, mediaSources, transcodes: coordinator, sourceAuthorizer, now });
     const rateLimiter = createRuntimeRateLimiter({ secret: keys.rateLimitSecret, now });
     const installation = createInstallationService({
       repository: installationRepository,
@@ -185,10 +217,11 @@ export async function createSelfHostedComposition(
       now,
       requestSubject,
     });
+    const transcodeHandler = createTranscodeApiApp({ controlStore, requestContext, auth, sourceAuthorizer, coordinator, cache: transcodeCache, allowedOrigin: config.appOrigin, now });
     const app = createSelfHostedApp({
       readiness,
       setupApp,
-      transcodeApp: async () => null,
+      transcodeApp: transcodeHandler,
       controlApp: async (request) =>
         new URL(request.url).pathname.startsWith("/api/")
           ? controlHandler(request)
@@ -204,6 +237,8 @@ export async function createSelfHostedComposition(
       async close(signal) {
         if (closed) return;
         readiness.beginDrain();
+        await coordinator.close();
+        await gateway.close();
         const drain = deferred.drain(15_000);
         if (signal) {
           await Promise.race([

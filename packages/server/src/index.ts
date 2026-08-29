@@ -24,6 +24,7 @@ export * from "./http/installation-app";
 export * from "./http/node-adapter";
 export * from "./http/self-hosted-app";
 export * from "./http/static-app";
+export * from "./http/transcode-app";
 export * from "./runtime/keyrings";
 export * from "./runtime/local-keys";
 export * from "./runtime/self-hosted-config";

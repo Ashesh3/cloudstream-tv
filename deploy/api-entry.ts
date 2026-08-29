@@ -26,6 +26,7 @@ import {
   type FirestoreClientConfig,
   type FirestoreClientDependencies,
   type ControlPlaneTelemetryObserver,
+  TranscodeError,
 } from "@cloudframe/server";
 import {
   createGoogleDriveAdapter,
@@ -184,6 +185,8 @@ export function createProductionApi(
     credentialBroker,
     providers,
     mediaSources: createProviderMediaSourceService({ credentialBroker, providers, now }),
+    transcodes: { createSession: async () => { throw new TranscodeError("TRANSCODER_UNSUPPORTED"); } },
+    sourceAuthorizer: { bind: () => { throw new TranscodeError("TRANSCODER_UNSUPPORTED"); } },
     now
   });
   return createControlApiApp({

@@ -119,8 +119,9 @@ describe("unified TV viewer", () => {
     render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
       items={items} selectedItemId="item_video_1" slideshowSeconds={8}
       previews={{}} onClose={() => undefined} />);
+    const descriptor = directDescriptor("item_video_1", "video");
     expect(await screen.findByLabelText("Playing Clip.mp4"))
-      .toHaveAttribute("src", directDescriptor("item_video_1", "video").url);
+      .toHaveAttribute("src", descriptor.transport === "hls" ? descriptor.playlistUrl : descriptor.url);
     expect(bridge.prepare).not.toHaveBeenCalled();
   });
 
@@ -1047,6 +1048,7 @@ describe("unified TV viewer", () => {
     let videoCalls = 0;
     vi.mocked(api.mediaUrl).mockImplementation(async handle => {
       const result = mediaResponse(handle);
+      if (result.transport === "hls") return result;
       return {
         ...result,
         url: result.kind === "video" ? `https://provider.example/video-${++videoCalls}` : result.url,
@@ -1082,6 +1084,7 @@ describe("unified TV viewer", () => {
       if (result.kind !== "video") return Promise.resolve({ ...result, expiresAt: new Date(acceptedAt + 60_000).toISOString() });
       videoCalls += 1;
       if (videoCalls === 1) return new Promise<DirectMediaUrlResponse>(resolve => { resolveInitialVideo = resolve; });
+      if (result.transport === "hls") return Promise.resolve(result);
       return Promise.resolve({
         ...result,
         url: `https://provider.example/due-video-${videoCalls}`,
@@ -1092,7 +1095,9 @@ describe("unified TV viewer", () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     const crossedNow = vi.spyOn(Date, "now").mockReturnValue(acceptedAt + 2);
     await act(async () => {
-      resolveInitialVideo({ ...mediaResponse("sealed-item_video_1"), url: "https://provider.example/due-video-1", expiresAt: new Date(acceptedAt + 1).toISOString() });
+      const initial = mediaResponse("sealed-item_video_1");
+      if (initial.transport === "hls") throw new Error("expected direct fixture");
+      resolveInitialVideo({ ...initial, url: "https://provider.example/due-video-1", expiresAt: new Date(acceptedAt + 1).toISOString() });
       await Promise.resolve();
       await Promise.resolve();
     });
@@ -1138,6 +1143,7 @@ describe("unified TV viewer", () => {
     let videoCalls = 0;
     vi.mocked(api.mediaUrl).mockImplementation(async handle => {
       const result = mediaResponse(handle);
+      if (result.transport === "hls") return result;
       if (result.kind === "video") videoCalls += 1;
       return {
         ...result,
@@ -1286,7 +1292,7 @@ describe("unified TV viewer", () => {
     render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} onNavigationExpired={expired} />);
 
     await waitFor(() => expect(expired).toHaveBeenCalledTimes(1));
-    expect(document.body.innerHTML).not.toContain(result.url);
+    expect(document.body.innerHTML).not.toContain(result.transport === "hls" ? result.playlistUrl : result.url);
   });
 
 });

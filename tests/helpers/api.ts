@@ -34,6 +34,7 @@ import {
   MemoryControlDurableStore,
   MemoryControlHotCache,
   MemoryDeferredTasks,
+  TranscodeError,
 } from "@cloudframe/server";
 
 import {
@@ -272,6 +273,8 @@ export async function createControlApiHarness(
     credentialBroker: broker,
     providers,
     mediaSources: createProviderMediaSourceService({ credentialBroker: broker, providers, now: () => new Date(now) }),
+    transcodes: { createSession: async () => { throw new TranscodeError("TRANSCODER_UNSUPPORTED"); } },
+    sourceAuthorizer: { bind: () => { throw new TranscodeError("TRANSCODER_UNSUPPORTED"); } },
     now: () => new Date(now)
   });
   const events: ControlApiLoggerEvent[] = [];

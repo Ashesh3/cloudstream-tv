@@ -203,7 +203,11 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
             size: expected.size,
           }, controller.signal);
         } else {
-          prepared = { sourceUrl: result.url, sourceKind: "direct" as const, sessionId: null };
+          prepared = {
+            sourceUrl: result.transport === "hls" ? result.playlistUrl : result.url,
+            sourceKind: "direct" as const,
+            sessionId: null
+          };
         }
         const current = urlsRef.current[nodeId];
         if (controller.signal.aborted || unauthorized.current || navigationExpired.current || closed.current || !mounted.current ||

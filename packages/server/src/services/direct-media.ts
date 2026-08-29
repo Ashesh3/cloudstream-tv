@@ -11,6 +11,7 @@ import type {
   DirectMediaUrlResponse,
   DirectThumbnailItem,
 } from "@cloudframe/shared";
+import { isLegacyMpeg } from "@cloudframe/shared";
 
 import type { AuthenticatedControlDevice } from "./control-auth";
 import {
@@ -27,6 +28,9 @@ import {
   ProviderMediaSourceError,
   type ProviderMediaSourceService,
 } from "./provider-media-source";
+import type { TranscodeCoordinator } from "../transcode/coordinator";
+import type { TranscodeSourceAuthorizer } from "../transcode/source-authorizer";
+import { TranscodeError } from "../transcode/types";
 
 const MAX_THUMBNAIL_BATCH = 100;
 const MIN_THUMBNAIL_DIMENSION = 64;
@@ -57,6 +61,7 @@ export interface DirectMediaService {
   media(
     auth: AuthenticatedControlDevice,
     sealedHandle: string,
+    options?: { forceHls?: boolean },
   ): Promise<DirectMediaResponse>;
 }
 
@@ -65,10 +70,13 @@ export interface CreateDirectMediaServiceOptions {
   credentialBroker: CredentialBroker;
   providers: ProviderRegistry;
   mediaSources: ProviderMediaSourceService;
+  transcodes?: Pick<TranscodeCoordinator, "createSession">;
+  sourceAuthorizer?: Pick<TranscodeSourceAuthorizer, "bind">;
   now?: () => Date;
 }
 
 export type DirectMediaErrorCode =
+  | "INVALID_MEDIA_REQUEST"
   | "INVALID_PROVIDER_URL"
   | "INVALID_THUMBNAIL_REQUEST"
   | "ITEM_NOT_FOUND";
@@ -566,10 +574,40 @@ export function createDirectMediaService(
   async function media(
     auth: AuthenticatedControlDevice,
     sealedHandle: string,
+    mediaOptions: { forceHls?: boolean } = {},
   ): Promise<DirectMediaResponse> {
     const item = options.browse.authorizeHandle(auth, sealedHandle);
     if (item.claims.kind === "folder") {
       throw directMediaError("ITEM_NOT_FOUND");
+    }
+    if (mediaOptions.forceHls === true && item.claims.kind !== "video") {
+      throw directMediaError("INVALID_MEDIA_REQUEST");
+    }
+    if (
+      item.claims.kind === "video" &&
+      (mediaOptions.forceHls === true || isLegacyMpeg({
+        name: item.claims.name,
+        mimeType: item.claims.mimeType,
+      }))
+    ) {
+      if (!options.transcodes || !options.sourceAuthorizer) {
+        throw new TranscodeError("TRANSCODER_UNSUPPORTED");
+      }
+      const session = await options.transcodes.createSession(
+        options.sourceAuthorizer.bind(auth, item),
+      );
+      return {
+        itemId: item.id,
+        kind: "video",
+        transport: "hls",
+        playlistUrl: `/api/tv/transcodes/${session.id}/master.m3u8`,
+        playbackSessionId: session.id,
+        durationSeconds: session.probe.durationMs / 1000,
+        profile: session.profile.id,
+        expiresAt: new Date(session.expiresAt).toISOString(),
+        revision: item.claims.contentRevision,
+        responseHeaders: RESPONSE_HEADERS,
+      };
     }
 
     let source;
