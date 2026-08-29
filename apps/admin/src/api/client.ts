@@ -301,13 +301,17 @@ function providerFolder(value: unknown): ProviderFolderDto {
   const record = exactRecord(value, ["providerNodeId", "parentProviderId", "name", "assignedRootId"]);
   return { providerNodeId: stringValue(record.providerNodeId), parentProviderId: nullableString(record.parentProviderId), name: stringValue(record.name), assignedRootId: nullableString(record.assignedRootId) };
 }
-function recoveryCopy(value: unknown): AdminSnapshotResponse["recoveryCopy"] {
-  const record = exactRecord(value, ["status", "revision"]);
-  return { status: enumValue(record.status, ["current", "delayed"] as const), revision: record.revision === null ? null : integerValue(record.revision) };
+function localStorage(value: unknown): AdminSnapshotResponse["storage"] {
+  const record = exactRecord(value, ["mode", "revision"]);
+  if (record.mode !== "local") throw new Error("storage");
+  return { mode: "local", revision: integerValue(record.revision) };
 }
 function adminSnapshot(value: unknown): AdminSnapshotResponse {
-  const record = exactRecord(value, ["revision", "household", "pendingRequests", "devices", "sources", "roots", "recoveryCopy"]);
-  return { revision: integerValue(record.revision), household: household(record.household), pendingRequests: arrayOf(record.pendingRequests, requestDto), devices: arrayOf(record.devices, deviceDto), sources: arrayOf(record.sources, sourceDto), roots: arrayOf(record.roots, rootDto), recoveryCopy: recoveryCopy(record.recoveryCopy) };
+  const record = exactRecord(value, ["revision", "household", "pendingRequests", "devices", "sources", "roots", "storage"]);
+  const revision = integerValue(record.revision);
+  const storage = localStorage(record.storage);
+  if (storage.revision !== revision) throw new Error("storage");
+  return { revision, household: household(record.household), pendingRequests: arrayOf(record.pendingRequests, requestDto), devices: arrayOf(record.devices, deviceDto), sources: arrayOf(record.sources, sourceDto), roots: arrayOf(record.roots, rootDto), storage };
 }
 function deviceResult(value: unknown) { const record = exactRecord(value, ["device"]); return { device: deviceDto(record.device) }; }
 function requestResult(value: unknown) { const record = exactRecord(value, ["request"]); return { request: requestDto(record.request) }; }

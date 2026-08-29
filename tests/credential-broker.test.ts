@@ -11,6 +11,7 @@ import type {
 import {
   CredentialBrokerError,
   controlStoreHarness,
+  createExpiringMemoryCache,
   createCredentialBroker,
   decryptProviderToken,
   encryptProviderToken,
@@ -202,6 +203,21 @@ function cachedAccess(
 }
 
 describe("credential broker", () => {
+  it("uses a cloned process-local value until its TTL expires", async () => {
+    let clock = TEST_NOW.getTime();
+    const cache = createExpiringMemoryCache(() => new Date(clock));
+    const original = { value: 1 };
+
+    await cache.set("token", original, { ttl: 2 });
+    original.value = 2;
+    const loaded = await cache.get("token") as { value: number };
+    loaded.value = 3;
+
+    expect(await cache.get("token")).toEqual({ value: 1 });
+    clock += 2_001;
+    expect(await cache.get("token")).toBeNull();
+  });
+
   it("returns an encrypted Runtime Cache hit without loading or mutating control state", async () => {
     const harness = createHarness();
     const key = "source:source-1:credentials:1";

@@ -26,7 +26,6 @@ async function serviceHarness() {
   const harness = controlStoreHarness(document);
   const service = createControlAdminService({
     store: harness.store,
-    cache: harness.cache,
     passphrasePepper: "test-pepper",
     now: () => new Date("2026-08-27T08:10:00.000Z"),
     createId: () => "device-created"
@@ -35,7 +34,7 @@ async function serviceHarness() {
 }
 
 describe("control admin service", () => {
-  it("returns one browser-safe, sorted admin snapshot from Vercel state", async () => {
+  it("returns one browser-safe, sorted admin snapshot from local encrypted state", async () => {
     const document = testControlDocument();
     document.pendingDeviceRequests["expired"] = {
       ...document.pendingDeviceRequests["request-1"],
@@ -69,7 +68,6 @@ describe("control admin service", () => {
     const harness = controlStoreHarness(document);
     const service = createControlAdminService({
       store: harness.store,
-      cache: harness.cache,
       passphrasePepper: "pepper",
       now: () => new Date("2026-08-27T08:10:00.000Z")
     });
@@ -78,8 +76,9 @@ describe("control admin service", () => {
 
     expect(snapshot).toMatchObject({
       revision: 1,
-      recoveryCopy: { status: "current", revision: null }
+      storage: { mode: "local", revision: 1 }
     });
+    expect(snapshot).not.toHaveProperty("recoveryCopy");
     expect(snapshot.pendingRequests.map((request) => request.id)).toEqual([
       "request-2",
       "request-1"

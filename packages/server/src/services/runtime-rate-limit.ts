@@ -1,7 +1,5 @@
 import { createHmac } from "node:crypto";
 
-import { getCache } from "@vercel/functions";
-
 export const RUNTIME_RATE_LIMIT_BOUNDS = {
   bucketLength: 64,
   limit: { min: 1, max: 10_000 },
@@ -19,17 +17,7 @@ export interface RuntimeRateLimitResult {
   retryAfterSeconds: number;
 }
 
-export interface RateLimitRuntimeCache {
-  get(key: string): Promise<unknown | null>;
-  set(
-    key: string,
-    value: unknown,
-    options?: { name?: string; tags?: string[]; ttl?: number },
-  ): Promise<void>;
-}
-
 export interface RuntimeRateLimiter {
-  /** Best-effort only: Runtime Cache does not provide an atomic increment. */
   consume(
     bucket: string,
     subject: string,
@@ -40,7 +28,7 @@ export interface RuntimeRateLimiter {
 
 export interface CreateRuntimeRateLimiterOptions {
   secret: string;
-  cache?: RateLimitRuntimeCache;
+  now?: () => Date;
 }
 
 export type RuntimeRateLimitConfigurationErrorCode =
@@ -70,11 +58,7 @@ function requireSecret(value: string): string {
   return value;
 }
 
-function clampInteger(
-  value: number,
-  minimum: number,
-  maximum: number,
-): number {
+function clampInteger(value: number, minimum: number, maximum: number): number {
   if (Number.isNaN(value) || value === Number.NEGATIVE_INFINITY) return minimum;
   if (value === Number.POSITIVE_INFINITY) return maximum;
   return Math.max(minimum, Math.min(maximum, Math.trunc(value)));
@@ -102,28 +86,6 @@ function safePolicy(policy: RuntimeRateLimitPolicy): RuntimeRateLimitPolicy {
   };
 }
 
-function cachedWindow(value: unknown, expectedExpiry: number): CachedWindow | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  try {
-    const candidate = value as Partial<CachedWindow>;
-    if (
-      Object.keys(value).length !== 2 ||
-      !Number.isSafeInteger(candidate.count) ||
-      (candidate.count as number) < 0 ||
-      (candidate.count as number) > RUNTIME_RATE_LIMIT_BOUNDS.limit.max ||
-      candidate.expiresAt !== expectedExpiry
-    ) {
-      return null;
-    }
-    return {
-      count: candidate.count as number,
-      expiresAt: candidate.expiresAt,
-    };
-  } catch {
-    return null;
-  }
-}
-
 function retryAfterSeconds(nowMs: number, expiresAt: number): number {
   return Math.max(1, Math.ceil((expiresAt - nowMs) / 1_000));
 }
@@ -132,8 +94,8 @@ export function createRuntimeRateLimiter(
   options: CreateRuntimeRateLimiterOptions,
 ): RuntimeRateLimiter {
   const secret = requireSecret(options.secret);
-  const cache =
-    options.cache ?? getCache({ namespace: "cloudframe-rate-limits" });
+  const fallbackNow = options.now ?? (() => new Date());
+  const windows = new Map<string, CachedWindow>();
 
   async function consume(
     requestedBucket: string,
@@ -143,54 +105,47 @@ export function createRuntimeRateLimiter(
   ): Promise<RuntimeRateLimitResult> {
     const policy = safePolicy(requestedPolicy);
     const bucket = requireBucket(requestedBucket);
-    const nowMs = Number.isFinite(requestedNow.getTime())
-      ? requestedNow.getTime()
-      : Date.now();
+    const requestedTime = requestedNow.getTime();
+    if (!Number.isFinite(requestedTime)) {
+      const fallbackTime = fallbackNow().getTime();
+      const windowMs = policy.windowSeconds * 1_000;
+      const usableTime = Number.isFinite(fallbackTime) ? fallbackTime : Date.now();
+      const expiresAt = Math.floor(usableTime / windowMs) * windowMs + windowMs;
+      return {
+        allowed: true,
+        remaining: policy.limit,
+        retryAfterSeconds: retryAfterSeconds(usableTime, expiresAt),
+      };
+    }
+
     const windowMs = policy.windowSeconds * 1_000;
-    const windowStart = Math.floor(nowMs / windowMs) * windowMs;
+    const windowStart = Math.floor(requestedTime / windowMs) * windowMs;
     const expiresAt = windowStart + windowMs;
-    const retryAfter = retryAfterSeconds(nowMs, expiresAt);
     const hmacSubject = createHmac("sha256", secret)
       .update(subject)
       .digest("base64url");
     const key = `rate:${bucket}:${hmacSubject}:${windowStart}`;
-
-    let value: unknown;
-    try {
-      value = await cache.get(key);
-    } catch {
-      return {
-        allowed: true,
-        remaining: policy.limit,
-        retryAfterSeconds: retryAfter,
-      };
-    }
-
-    const current = cachedWindow(value, expiresAt)?.count ?? 0;
-    if (current >= policy.limit) {
+    const current = windows.get(key);
+    if (current && current.count >= policy.limit) {
       return {
         allowed: false,
         remaining: 0,
-        retryAfterSeconds: retryAfter,
+        retryAfterSeconds: retryAfterSeconds(requestedTime, expiresAt),
       };
     }
 
-    const nextCount = current + 1;
-    const result = {
+    const nextCount = (current?.count ?? 0) + 1;
+    windows.set(key, { count: nextCount, expiresAt });
+    if (windows.size > 1_024) {
+      for (const [cachedKey, value] of windows) {
+        if (value.expiresAt <= requestedTime) windows.delete(cachedKey);
+      }
+    }
+    return {
       allowed: true,
       remaining: Math.max(0, policy.limit - nextCount),
-      retryAfterSeconds: retryAfter,
+      retryAfterSeconds: retryAfterSeconds(requestedTime, expiresAt),
     };
-    try {
-      await cache.set(
-        key,
-        { count: nextCount, expiresAt },
-        { name: "", ttl: policy.windowSeconds * 2 },
-      );
-    } catch {
-      // The limiter deliberately fails open; authorization is enforced elsewhere.
-    }
-    return result;
   }
 
   return { consume };

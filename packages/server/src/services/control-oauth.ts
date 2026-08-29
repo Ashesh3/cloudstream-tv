@@ -17,8 +17,6 @@ import type {
   EncryptedSecret
 } from "@cloudframe/shared";
 import { assertProviderAuthorizationUrl } from "@cloudframe/shared";
-import { getCache, type RuntimeCache } from "@vercel/functions";
-
 import type { SealedSessionCodec } from "../auth/sealed-sessions";
 import { hashOpaqueToken } from "../auth/tokens";
 import {
@@ -95,7 +93,7 @@ export interface ControlOAuthServiceDependencies {
   providers: ProviderRegistry;
   keyring: ProviderTokenKeyring;
   redirectUris: Record<ProviderKind, string>;
-  runtimeCache?: ControlOAuthReplayCache;
+  runtimeCache: ControlOAuthReplayCache;
   now?: () => Date;
   createId?: () => string;
   randomBytes?: (size: number) => Uint8Array;
@@ -304,12 +302,7 @@ export function createControlOAuthService(
     dependencies.createId ?? (() => `source-${crypto.randomUUID()}`);
   const randomBytes =
     dependencies.randomBytes ?? ((size: number) => nodeRandomBytes(size));
-  const runtimeCache =
-    dependencies.runtimeCache ??
-    (getCache({ namespace: "cloudframe-control" }) as Pick<
-      RuntimeCache,
-      "get" | "set"
-    >);
+  const runtimeCache = dependencies.runtimeCache;
   const completingStates = new Set<string>();
 
   async function beginAuthorization(

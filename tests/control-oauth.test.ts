@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import type {
   ProviderAccount,
@@ -8,9 +11,11 @@ import type {
 } from "@cloudframe/providers";
 import {
   ControlOAuthServiceError,
+  createSqliteOAuthReplayCache,
   createControlOAuthService,
   createSealedSessionCodec,
   decryptProviderToken,
+  openLocalDatabase,
   type AuthenticatedControlAdmin,
   type ControlRequestContext
 } from "@cloudframe/server";
@@ -977,5 +982,34 @@ describe("sealed control OAuth", () => {
     expect(error).toMatchObject({ code: "OAUTH_PROVIDER_ERROR" });
     expect(String(error)).not.toMatch(/provider\.example|private-access/);
     expect(harness.replayCache.sets).toEqual([]);
+  });
+});
+
+describe("SQLite OAuth replay cache", () => {
+  it("persists replay ownership across database reopen and deletes it after expiry", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "cloudframe-oauth-replay-"));
+    let clock = TEST_NOW.getTime();
+    try {
+      const first = await openLocalDatabase({ dataDir, now: () => new Date(clock) });
+      await createSqliteOAuthReplayCache(first.connection, () => new Date(clock))
+        .set("oauth-used:state", "owner-1", { ttl: 2 });
+      first.close();
+
+      const second = await openLocalDatabase({ dataDir, now: () => new Date(clock) });
+      const cache = createSqliteOAuthReplayCache(
+        second.connection,
+        () => new Date(clock),
+      );
+      expect(await cache.get("oauth-used:state")).toBe("owner-1");
+
+      clock += 2_001;
+      expect(await cache.get("oauth-used:state")).toBeNull();
+      expect(second.connection.prepare(
+        "SELECT COUNT(*) AS count FROM oauth_replay",
+      ).get()).toEqual({ count: 0 });
+      second.close();
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
   });
 });

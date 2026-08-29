@@ -10,8 +10,6 @@ import type {
   ControlPlaneSource,
   EncryptedSecret,
 } from "@cloudframe/shared";
-import { getCache } from "@vercel/functions";
-
 import {
   markSourceReauthRequiredMutation,
   rotateSourceCredentialsMutation,
@@ -51,7 +49,7 @@ export interface CreateCredentialBrokerOptions {
   controlState: () => ControlRequestContext;
   providers: ProviderRegistry;
   providerTokenKeyring: ProviderTokenKeyring;
-  cache?: CredentialRuntimeCache;
+  cache: CredentialRuntimeCache;
   now?: () => Date;
 }
 
@@ -210,8 +208,7 @@ async function deleteBestEffort(
 export function createCredentialBroker(
   options: CreateCredentialBrokerOptions,
 ): CredentialBroker {
-  const cache: CredentialRuntimeCache =
-    options.cache ?? getCache({ namespace: "cloudframe-credentials" });
+  const cache = options.cache;
   const now = options.now ?? (() => new Date());
   const keys = options.providerTokenKeyring.keys;
 

@@ -560,7 +560,7 @@ async function adminSnapshot(
 ): Promise<Response> {
   const protectedResult = await protectedAdmin(request, dependencies, now);
   const { admin, context } = protectedResult;
-  const snapshot = await snapshotFromContext(context, dependencies.admin, now);
+  const snapshot = snapshotFromContext(context, now);
   return ok(snapshot, { headers: csrfHeaders(admin) });
 }
 
@@ -1300,12 +1300,10 @@ async function enforceRateLimit(
   }
 }
 
-async function snapshotFromContext(
+function snapshotFromContext(
   context: ControlRequestContext,
-  admin: ControlAdminService,
   now: Date
 ) {
-  const recoveryCopy = await admin.recoveryStatus();
   const currentTime = now.getTime();
   return {
     revision: context.revision,
@@ -1331,7 +1329,7 @@ async function snapshotFromContext(
     roots: Object.values(context.document.roots)
       .sort((left, right) => left.displayName.localeCompare(right.displayName))
       .map(controlRootSummary),
-    recoveryCopy
+    storage: { mode: "local" as const, revision: context.revision }
   };
 }
 

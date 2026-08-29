@@ -1,4 +1,4 @@
-import { waitUntil } from "@vercel/functions";
+import { getCache, waitUntil } from "@vercel/functions";
 
 import {
   createBrowseHandleCodec,
@@ -123,16 +123,18 @@ export function createProductionApi(
     now
   );
   const providerTokenKeyring = providerTokenKeyringFromEnv(environment);
+  const credentialCache = getCache({ namespace: "cloudframe-credentials" });
+  const oauthReplayCache = getCache({ namespace: "cloudframe-control" });
   const credentialBroker = createCredentialBroker({
     controlStore,
     controlState: () => requestContext.current(),
     providers,
     providerTokenKeyring,
+    cache: credentialCache,
     now
   });
   const admin = createControlAdminService({
     store: controlStore,
-    cache,
     passphrasePepper: requiredSecret(environment, "ADMIN_PASSPHRASE_PEPPER"),
     now
   });
@@ -159,6 +161,7 @@ export function createProductionApi(
       google: `${appOrigin}/api/admin/sources/google/callback`,
       onedrive: `${appOrigin}/api/admin/sources/onedrive/callback`
     },
+    runtimeCache: oauthReplayCache,
     now
   });
   const providerFolders = createLiveProviderFolderService({

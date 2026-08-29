@@ -18,7 +18,7 @@ const snapshot: AdminSnapshotResponse = {
   revision: 7,
   household: { allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8 },
   pendingRequests: [request("request-old", "Kitchen", "2026-08-25T00:00:00.000Z"), request("request-new", "Den TV", "2026-08-26T00:00:00.000Z")],
-  devices: [device], sources: [source], roots: [root], recoveryCopy: { status: "current", revision: 7 }
+  devices: [device], sources: [source], roots: [root], storage: { mode: "local", revision: 7 }
 };
 
 function api(initial = snapshot): AdminApi {
@@ -85,9 +85,10 @@ describe("admin snapshot workflows", () => {
     expect(screen.getByRole("region", { name: "Program figures" })).toHaveTextContent("0 connected");
   });
 
-  it("shows exact delayed recovery copy and current control-plane counts", async () => {
-    await login(api({ ...snapshot, recoveryCopy: { status: "delayed", revision: 6 } }));
-    expect(screen.getByText("Recovery copy delayed; active service remains on Vercel")).toBeVisible();
+  it("shows local encrypted storage and current control-plane counts", async () => {
+    await login(api());
+    expect(screen.getByText("Local encrypted storage")).toBeVisible();
+    expect(document.body.textContent).not.toMatch(/Vercel|recovery copy/i);
     go("Settings");
     expect(screen.getByText("Approved devices").parentElement).toHaveTextContent("1");
     expect(screen.getByText("Connected sources").parentElement).toHaveTextContent("1");

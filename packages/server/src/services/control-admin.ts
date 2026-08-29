@@ -25,7 +25,6 @@ import {
   updateSettingsMutation
 } from "../control-plane/mutations";
 import type {
-  ControlHotCache,
   ControlMutationResult,
   ControlPlaneStore
 } from "../control-plane/store";
@@ -46,10 +45,6 @@ export class ControlAdminServiceError extends Error {
 }
 
 export interface ControlAdminService {
-  recoveryStatus(): Promise<{
-    status: "current" | "delayed";
-    revision: number | null;
-  }>;
   snapshot(householdId: string): Promise<AdminSnapshotResponse>;
   updateSettings(
     householdId: string,
@@ -99,7 +94,6 @@ export interface ControlAdminService {
 
 export interface ControlAdminServiceDependencies {
   store: ControlPlaneStore;
-  cache: ControlHotCache;
   passphrasePepper: string;
   now?: () => Date;
   createId?: (prefix: string) => string;
@@ -216,7 +210,7 @@ function impactForSource(
 export function createControlAdminService(
   dependencies: ControlAdminServiceDependencies
 ): ControlAdminService {
-  const { cache, passphrasePepper, store } = dependencies;
+  const { passphrasePepper, store } = dependencies;
   const now = dependencies.now ?? (() => new Date());
   const createId =
     dependencies.createId ?? ((prefix: string) => `${prefix}-${crypto.randomUUID()}`);
@@ -244,10 +238,7 @@ export function createControlAdminService(
   }
 
   async function snapshot(householdId: string): Promise<AdminSnapshotResponse> {
-    const [document, recoveryCopy] = await Promise.all([
-      load(householdId),
-      cache.getMirrorStatus()
-    ]);
+    const document = await load(householdId);
     const currentTime = now().getTime();
     return {
       revision: document.revision,
@@ -293,7 +284,7 @@ export function createControlAdminService(
           enabled: root.enabled,
           createdAt: root.createdAt
         })),
-      recoveryCopy
+      storage: { mode: "local", revision: document.revision }
     };
   }
 
@@ -451,7 +442,6 @@ export function createControlAdminService(
   }
 
   return {
-    recoveryStatus: () => cache.getMirrorStatus(),
     snapshot,
     updateSettings,
     rotatePassphrase,

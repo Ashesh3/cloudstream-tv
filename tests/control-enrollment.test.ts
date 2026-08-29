@@ -42,7 +42,6 @@ function enrollmentHarness() {
   let id = 0;
   const admin = createControlAdminService({
     store,
-    cache: memory.cache,
     passphrasePepper: "test-pepper",
     now: () => currentNow,
     createId: () => "device-1"

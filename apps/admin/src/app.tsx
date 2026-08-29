@@ -145,7 +145,7 @@ function LedgerOverview({ snapshot, compact = false }: { snapshot: AdminSnapshot
       <Figure icon={<CloudIcon />} value={`${connectedSources.length} connected`} label="cloud sources" />
       <Figure icon={<FolderOpenIcon />} value={`${approvedRoots.length} approved`} label="program folders" />
     </section>
-    {snapshot.recoveryCopy.status === "delayed" && <p className="recovery-copy-delayed" role="status">Recovery copy delayed; active service remains on Vercel</p>}</>}
+    <p className="recovery-copy-delayed" role="status">Local encrypted storage</p></>}
   </div>;
 }
 

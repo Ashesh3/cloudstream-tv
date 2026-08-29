@@ -10,7 +10,7 @@ const snapshot = {
   devices: [],
   sources: [source],
   roots: [],
-  recoveryCopy: { status: "current", revision: 7 }
+  storage: { mode: "local", revision: 7 }
 } as const;
 
 const ok = <T>(data: T, csrf?: string) => new Response(JSON.stringify({ ok: true, data }), {

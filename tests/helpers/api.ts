@@ -202,7 +202,6 @@ export async function createControlApiHarness(
   });
   const admin = createControlAdminService({
     store,
-    cache,
     passphrasePepper: "test-passphrase-pepper",
     now: () => new Date(now),
     createId: () => "device-created"

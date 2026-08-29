@@ -23,6 +23,13 @@ describe("final control HTTP API", () => {
     );
 
     expect(snapshot.status).toBe(200);
+    await expect(snapshot.json()).resolves.toMatchObject({
+      ok: true,
+      data: {
+        revision: 1,
+        storage: { mode: "local", revision: 1 }
+      }
+    });
     expect(
       (await harness.app(jsonRequest("/api/internal/sync-due-sources", "GET")))
         .status

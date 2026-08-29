@@ -63,7 +63,7 @@ export interface AdminSnapshotResponse {
   devices: ControlDeviceDto[];
   sources: ControlSourceDto[];
   roots: ControlRootDto[];
-  recoveryCopy: { status: "current" | "delayed"; revision: number | null };
+  storage: { mode: "local"; revision: number };
 }
 
 export interface TvBootstrapResponse {
