@@ -491,6 +491,40 @@ describe("direct provider URL vending", () => {
     ]);
   });
 
+  it("bypasses a valid sealed preview when the browser requests one fresh thumbnail", async () => {
+    const harness = createHarness();
+    harness.google.thumbnailResults.set("google-decode-failed", {
+      url: "https://lh3.googleusercontent.com/fresh-after-decode=s720",
+      expiresAt: harness.expiry,
+    });
+
+    const result = await harness.media.thumbnails(
+      harness.auth(),
+      [
+        harness.handle(
+          "source-google",
+          "root-google",
+          "google-decode-failed",
+          "image",
+          {
+            url: "https://lh3.googleusercontent.com/listing-preview=s720",
+            expiresAt: TEST_NOW.getTime() + 20 * 60_000,
+          },
+        ),
+      ],
+      720,
+      true,
+    );
+
+    expect(result.items[0]).toMatchObject({
+      status: "ready",
+      url: "https://lh3.googleusercontent.com/fresh-after-decode=s720",
+    });
+    expect(harness.thumbnailInputs).toEqual([
+      { provider: "google", providerNodeId: "google-decode-failed", maxDimension: 720 },
+    ]);
+  });
+
   it("returns representative folder previews and accepts OneDrive storage subdomains", async () => {
     const harness = createHarness();
     const previewUrl =
@@ -514,6 +548,48 @@ describe("direct provider URL vending", () => {
     );
 
     expect(result.items[0]).toMatchObject({ status: "ready", url: previewUrl });
+    expect(harness.credentialGets).toBe(0);
+    expect(harness.providerCalls).toBe(0);
+  });
+
+  it("isolates a malformed sealed Google preview without rejecting the thumbnail batch", async () => {
+    const harness = createHarness();
+    const validUrl = "https://lh3.googleusercontent.com/valid-listing=s720";
+
+    const result = await harness.media.thumbnails(
+      harness.auth(),
+      [
+        harness.handle(
+          "source-google",
+          "root-google",
+          "google-invalid-listing",
+          "image",
+          {
+            url: "https://tenant.sharepoint.com/_layouts/15/download.aspx?token=wrong-provider",
+            expiresAt: TEST_NOW.getTime() + 20 * 60_000,
+          },
+        ),
+        harness.handle(
+          "source-google",
+          "root-google",
+          "google-valid-listing",
+          "image",
+          {
+            url: validUrl,
+            expiresAt: TEST_NOW.getTime() + 20 * 60_000,
+          },
+        ),
+      ],
+      720,
+    );
+
+    expect(result.items).toEqual([
+      {
+        itemId: harness.itemId("source-google", "google-invalid-listing"),
+        status: "unavailable",
+      },
+      expect.objectContaining({ status: "ready", url: validUrl }),
+    ]);
     expect(harness.credentialGets).toBe(0);
     expect(harness.providerCalls).toBe(0);
   });

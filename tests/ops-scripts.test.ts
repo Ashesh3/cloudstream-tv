@@ -196,6 +196,7 @@ describe("operations scripts", () => {
     expect(source).toContain("45 * 1024");
     expect(source).toContain("polyfills-legacy");
     expect(source).toContain("index-legacy");
+    expect(source).toContain("files.filter(name => /-legacy-.*\\.js$/.test(name))");
     const { access } = await import("node:fs/promises");
     try {
       await access("apps/tv/dist/assets");

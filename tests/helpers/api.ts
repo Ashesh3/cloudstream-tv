@@ -561,7 +561,13 @@ class ControlProviderHarness {
     };
     const root = providerNode("provider-root", "My Drive", null, "folder");
     const trips = providerNode("provider-trips", "Trips", "provider-root", "folder");
-    const video = providerNode("video-1", "Video.mp4", "provider-trips", "video");
+    const video = {
+      ...providerNode("video-1", "Video.mp4", "provider-trips", "video"),
+      preview: {
+        url: "https://lh3.googleusercontent.com/listing-preview=s720",
+        expiresAt: new Date(this.now.getTime() + 5 * 60_000)
+      }
+    } satisfies ProviderNode;
     this.adapter = {
       beginAuthorization: async ({ state }) => ({
         authorizationUrl: `https://accounts.google.com/o/oauth2/v2/auth?state=${encodeURIComponent(state)}`

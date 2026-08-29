@@ -3,13 +3,22 @@ import type { Page } from "@playwright/test";
 
 export const media = {
   thumbnail: "https://provider-assets.example/sunset-preview.svg",
+  folderThumbnail: "https://provider-assets.example/folder-preview.svg",
   image: "https://provider-assets.example/sunset-original.svg",
   video: "https://provider-assets.example/lake.mp4"
 };
 
-export async function installTvFixture(page: Page, state: "unenrolled" | "ready" = "ready") {
+export async function installTvFixture(
+  page: Page,
+  state: "unenrolled" | "ready" = "ready",
+  options: { longFolder?: boolean } = {},
+) {
   const imageBody = "<svg xmlns='http://www.w3.org/2000/svg' width='1200' height='800'><rect width='1200' height='800' fill='#15304f'/><circle cx='350' cy='310' r='130' fill='#ffd36e'/><path d='M0 720 430 350 730 610 940 430 1200 690V800H0Z' fill='#69b1d4'/></svg>";
   await page.route(media.thumbnail, route => route.fulfill({
+    contentType: "image/svg+xml",
+    body: imageBody
+  }));
+  await page.route(media.folderThumbnail, route => route.fulfill({
     contentType: "image/svg+xml",
     body: imageBody
   }));
@@ -21,7 +30,7 @@ export async function installTvFixture(page: Page, state: "unenrolled" | "ready"
     contentType: "video/mp4",
     path: fileURLToPath(new URL("./fixtures/video.mp4", import.meta.url))
   }));
-  await page.addInitScript(({ state, media }) => {
+  await page.addInitScript(({ state, media, longFolder }) => {
     const now = new Date().toISOString();
     let status = state;
     const folder = {
@@ -30,8 +39,25 @@ export async function installTvFixture(page: Page, state: "unenrolled" | "ready"
       size: null, width: null, height: null, capturedAt: null, createdAtProvider: now,
       modifiedAtProvider: now, thumbnailRevision: null, hasPreview: false
     };
+    const childFolder = {
+      ...folder,
+      id: "item_child_folder",
+      handle: "sealed-child-folder",
+      name: "Albums",
+      normalizedName: "albums",
+      hasPreview: true
+    };
     const image = { ...folder, id: "item_image", handle: "sealed-image", name: "Sunset.jpg", normalizedName: "sunset.jpg", kind: "image", mimeType: "image/jpeg", width: 1200, height: 800, hasPreview: true };
     const video = { ...folder, id: "item_video", handle: "sealed-video", name: "Lake.mp4", normalizedName: "lake.mp4", kind: "video", mimeType: "video/mp4", width: 1280, height: 720, hasPreview: true };
+    const extras = Array.from({ length: longFolder ? 30 : 0 }, (_, index) => ({
+      ...image,
+      id: `item_extra_${index}`,
+      handle: `sealed-extra-${index}`,
+      name: `Extra ${String(index).padStart(2, "0")}.jpg`,
+      normalizedName: `extra ${String(index).padStart(2, "0")}.jpg`
+    }));
+    const children = [childFolder, image, video, ...extras];
+    const itemByHandle = new Map(children.map(item => [item.handle, item]));
     const household = { id: "household-test", allowNewDeviceRequests: true, defaultMediaOrder: "captured-desc", defaultSlideshowSeconds: 8 };
     const device = { id: "device-1", name: "Living Room", enabled: true, assignedRootIds: ["root-1"], mediaOrder: null, slideshowSeconds: null, createdAt: now, approvedAt: now, lastSeenAt: now, revokedAt: null };
     const enrollment = () => status === "ready"
@@ -50,21 +76,25 @@ export async function installTvFixture(page: Page, state: "unenrolled" | "ready"
       folder: async (handle, cursor) => {
         calls.folder.push({ handle, cursor: cursor ?? null });
         if (handle !== "sealed-folder" || (cursor !== undefined && cursor !== null)) return reject("NAVIGATION_EXPIRED");
-        return { parent: folder, breadcrumbs: [folder], children: [image, video], nextCursor: null };
+        return { parent: folder, breadcrumbs: [folder], children, nextCursor: null };
       },
       thumbnailUrls: async handles => {
         calls.thumbnails.push([...handles]);
         const unique = new Set(handles);
-        if (handles.length < 1 || unique.size !== handles.length || handles.some(handle => handle !== "sealed-image" && handle !== "sealed-video")) return reject("ITEM_NOT_FOUND");
-        return { items: handles.map(handle => ({ itemId: handle === "sealed-video" ? "item_video" : "item_image", status: "ready", url: media.thumbnail, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" })) };
+        if (handles.length < 1 || unique.size !== handles.length || handles.some(handle => !itemByHandle.has(handle))) return reject("ITEM_NOT_FOUND");
+        return { items: handles.map(handle => {
+          const item = itemByHandle.get(handle)!;
+          return { itemId: item.id, status: "ready", url: item.kind === "folder" ? media.folderThumbnail : media.thumbnail, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" };
+        }) };
       },
       mediaUrl: async handle => {
         calls.media.push(handle);
-        if (handle !== "sealed-image" && handle !== "sealed-video") return reject("ITEM_NOT_FOUND");
-        return { itemId: handle === "sealed-video" ? "item_video" : "item_image", kind: handle === "sealed-video" ? "video" : "image", url: handle === "sealed-video" ? media.video : media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" };
+        const item = itemByHandle.get(handle);
+        if (!item || item.kind === "folder") return reject("ITEM_NOT_FOUND");
+        return { itemId: item.id, kind: item.kind, url: item.kind === "video" ? media.video : media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" };
       }
     };
-  }, { state, media });
+  }, { state, media, longFolder: options.longFolder === true });
 }
 
 export type AdminFixtureScenario = "enrollment" | "source-workbench";

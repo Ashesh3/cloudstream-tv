@@ -326,6 +326,30 @@ describe("live TV browsing", () => {
     );
   });
 
+  it("omits an optional preview when sealing it would exceed the public handle bound", async () => {
+    const harness = createHarness();
+    const oversizedPreview = `https://lh3.googleusercontent.com/${"x".repeat(4_000)}=s720`;
+    harness.provider.folderItems = [{
+      ...node("x".repeat(1_024), "N".repeat(1_024), "provider-trips", "image"),
+      preview: {
+        url: oversizedPreview,
+        expiresAt: new Date(TEST_NOW.getTime() + 20 * 60_000),
+      },
+    }];
+    harness.provider.nextCursor = null;
+
+    const page = await harness.service.folder(
+      harness.auth(),
+      await rootHandle(harness),
+      null,
+      50,
+    );
+
+    expect(page.children[0]?.handle.length).toBeLessThanOrEqual(8_192);
+    expect(page.children[0]).toMatchObject({ hasPreview: false });
+    expect(harness.codec.openItem(page.children[0]!.handle)).toMatchObject({ preview: null });
+  });
+
   it("builds the parent only from the requested handle and renews it", async () => {
     const harness = createHarness();
     const handle = await rootHandle(harness);
@@ -407,6 +431,25 @@ describe("live TV browsing", () => {
 
     expect(page.children.map((item) => item.name)).not.toEqual(
       expect.arrayContaining(["Missing ID", "Document", "Outside"])
+    );
+  });
+
+  it("filters provider identifiers and names beyond the public contract bounds", async () => {
+    const harness = createHarness();
+    harness.provider.folderItems.push(
+      node("x".repeat(1_025), "Oversized ID", "provider-trips", "image"),
+      node("oversized-name", "N".repeat(1_025), "provider-trips", "image"),
+    );
+
+    const page = await harness.service.folder(
+      harness.auth(),
+      await rootHandle(harness),
+      null,
+      50,
+    );
+
+    expect(page.children.map((item) => item.name)).not.toEqual(
+      expect.arrayContaining(["Oversized ID", "N".repeat(1_025)]),
     );
   });
 

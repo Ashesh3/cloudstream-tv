@@ -264,9 +264,7 @@ function normalizeOneDriveItem(item: OneDriveItem, previewNow: Date): ProviderNo
   if (!kind || !item.id || !item.name) return null;
   const dimensions = kind === "image" ? item.image : item.video;
   const previewUrl = item.thumbnails?.[0]?.large?.url;
-  const preview = previewUrl
-    ? { url: previewUrl, expiresAt: temporaryExpiry(previewNow) }
-    : null;
+  const preview = listedOneDrivePreview(previewUrl, previewNow);
   return {
     providerNodeId: item.id,
     parentProviderId: item.parentReference?.id ?? null,
@@ -283,6 +281,28 @@ function normalizeOneDriveItem(item: OneDriveItem, previewNow: Date): ProviderNo
     hasPreview: preview !== null,
     preview,
   };
+}
+
+function listedOneDrivePreview(
+  previewUrl: string | undefined,
+  previewNow: Date,
+): TemporaryUrl | null {
+  if (!previewUrl || previewUrl.length > 4_096) return null;
+  try {
+    const url = new URL(previewUrl);
+    if (
+      url.protocol !== "https:" ||
+      url.port !== "" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.hash !== ""
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return { url: previewUrl, expiresAt: temporaryExpiry(previewNow) };
 }
 
 async function graphJson<T>(

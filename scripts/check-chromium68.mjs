@@ -1,5 +1,5 @@
 import { createWriteStream } from "node:fs";
-import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
@@ -75,11 +75,11 @@ try {
     throw new Error(`Pinned snapshot is not Chromium 68: ${product.product}`);
   }
   const evaluated = await command("Runtime.evaluate", {
-    expression: "({promise:typeof Promise==='function',fetch:typeof fetch==='function',url:typeof URL==='function',abort:typeof AbortController==='function'})",
+    expression: "({promise:typeof Promise==='function',fetch:typeof fetch==='function',url:typeof URL==='function',abort:typeof AbortController==='function',textEncoder:typeof TextEncoder==='function'})",
     returnByValue: true
   });
   const value = evaluated.result.value;
-  if (!value.promise || !value.fetch || !value.url || !value.abort) {
+  if (!value.promise || !value.fetch || !value.url || !value.abort || !value.textEncoder) {
     throw new Error(`Chromium 68 required APIs missing: ${JSON.stringify(value)}`);
   }
   await command("Page.enable");
@@ -92,6 +92,37 @@ try {
   }
   if (!String(rendered?.result.value ?? "").toLocaleLowerCase().includes("cloudframe")) {
     throw new Error(`Chromium 68 did not render the TV build: ${JSON.stringify(rendered)}`);
+  }
+  const assets = await readdir(resolve("apps", "tv", "dist", "assets"));
+  const playerChunk = assets.find(name => /^player-legacy-.*\.js$/u.test(name));
+  const containerChunk = assets.find(name => /^container-legacy-.*\.js$/u.test(name));
+  if (!playerChunk) throw new Error("Video.js legacy player chunk was not emitted");
+  if (!containerChunk) throw new Error("Video.js legacy container chunk was not emitted");
+  const playerResult = await command("Runtime.evaluate", {
+    expression: `(async()=>{
+      await Promise.all([
+        System.import('/assets/${playerChunk}'),
+        System.import('/assets/${containerChunk}')
+      ]);
+      const player=document.createElement('video-player');
+      const container=document.createElement('media-container');
+      const video=document.createElement('video');
+      container.appendChild(video);
+      player.appendChild(container);
+      document.body.appendChild(player);
+      await Promise.resolve();
+      return {
+        player:Boolean(customElements.get('video-player')),
+        container:Boolean(customElements.get('media-container')),
+        nativeVideo:player.querySelector('media-container > video')===video
+      };
+    })()`,
+    awaitPromise: true,
+    returnByValue: true
+  });
+  const playerValue = playerResult.result.value;
+  if (!playerValue?.player || !playerValue.container || !playerValue.nativeVideo) {
+    throw new Error(`Chromium 68 Video.js fallback failed: ${JSON.stringify(playerResult)}`);
   }
   const unexpectedErrors = runtimeErrors.filter(error => !isExpectedLegacyProbeError(error));
   if (unexpectedErrors.length) throw new Error(`Chromium 68 runtime errors: ${JSON.stringify(unexpectedErrors)}`);

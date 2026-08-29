@@ -53,6 +53,7 @@ export interface DirectMediaService {
     auth: AuthenticatedControlDevice,
     sealedHandles: readonly string[],
     maxDimension: number,
+    refresh?: boolean,
   ): Promise<DirectThumbnailResponse>;
   media(
     auth: AuthenticatedControlDevice,
@@ -387,22 +388,28 @@ function validThumbnailUrl(
     const normalized = error instanceof DirectMediaError
       ? error
       : directMediaError("INVALID_PROVIDER_URL");
-    if (item.source.provider === "onedrive") return null;
+    if (normalized.code === "INVALID_PROVIDER_URL") return null;
     throw normalized;
   }
 }
 
+type SealedPreviewResult =
+  | { status: "absent" }
+  | { status: "invalid" }
+  | { status: "ready"; value: TemporaryUrl };
+
 function sealedPreview(
   item: AuthorizedBrowseItem,
   currentNow: Date,
-): TemporaryUrl | null {
+): SealedPreviewResult {
   const preview = item.claims.preview;
-  if (!preview || preview.expiresAt <= currentNow.getTime()) return null;
-  return validThumbnailUrl(
+  if (!preview || preview.expiresAt <= currentNow.getTime()) return { status: "absent" };
+  const value = validThumbnailUrl(
     { url: preview.url, expiresAt: new Date(preview.expiresAt) },
     item,
     currentNow,
   );
+  return value ? { status: "ready", value } : { status: "invalid" };
 }
 
 function unavailable(item: AuthorizedBrowseItem): DirectThumbnailItem {
@@ -432,6 +439,7 @@ export function createDirectMediaService(
     auth: AuthenticatedControlDevice,
     sealedHandles: readonly string[],
     maxDimension: number,
+    refresh = false,
   ): Promise<DirectThumbnailResponse> {
     validateThumbnailRequest(sealedHandles, maxDimension);
     const authorized = sealedHandles.map((sealedHandle) =>
@@ -442,9 +450,14 @@ export function createDirectMediaService(
     for (const group of groupsBySource(authorized)) {
       const vendable: typeof group.items = [];
       for (const entry of group.items) {
-        const preview = sealedPreview(entry.item, now());
-        if (preview) items[entry.index] = readyThumbnail(entry.item, preview);
-        else vendable.push(entry);
+        const preview = refresh ? { status: "absent" as const } : sealedPreview(entry.item, now());
+        if (preview.status === "ready") {
+          items[entry.index] = readyThumbnail(entry.item, preview.value);
+        } else if (preview.status === "invalid") {
+          items[entry.index] = unavailable(entry.item);
+        } else {
+          vendable.push(entry);
+        }
       }
       if (vendable.length === 0) continue;
 

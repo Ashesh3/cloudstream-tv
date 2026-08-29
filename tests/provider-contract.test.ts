@@ -382,6 +382,37 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
         maxDimension: 720
       })).rejects.toMatchObject({ code: "PROVIDER_BAD_RESPONSE" });
     });
+
+    it("keeps a listed file when its optional Google preview URL is malformed", async () => {
+      const fetch: typeof globalThis.fetch = async () => jsonResponse({
+        files: [{
+          id: "g-image-bad-list-preview",
+          name: "Still visible.jpg",
+          mimeType: "image/jpeg",
+          parents: ["g-root"],
+          thumbnailLink: "https://lh3.googleusercontent.com/missing-size"
+        }]
+      });
+      const adapter = createGoogleDriveAdapter({
+        clientId: "synthetic-client",
+        clientSecret: "synthetic-secret",
+        fetch,
+        now: () => now
+      });
+
+      await expect(adapter.listFolder({
+        credentials,
+        folderId: "g-root",
+        cursor: null,
+        pageSize: 50
+      })).resolves.toMatchObject({
+        items: [{
+          providerNodeId: "g-image-bad-list-preview",
+          hasPreview: false,
+          preview: null
+        }]
+      });
+    });
   } else {
     it("uses only live metadata fields and a thumbnail expansion for folder pages", async () => {
       const { adapter, requests } = createHarness(provider);

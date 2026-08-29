@@ -22,6 +22,9 @@ Automated compatibility proves that the legacy bundle parses and stays within bu
 ## Live folder browsing, remote, and focus
 
 - Open the Google root and the OneDrive root and confirm their current provider contents appear without a background refresh job.
+- Confirm representative folder thumbnails appear where each provider supplies one; folders without a provider preview must keep the Cloudframe collection artwork.
+- On a folder longer than one screen, begin scrolling immediately and confirm thumbnails are already present rather than appearing only after each row enters view.
+- Pause before the first page boundary and confirm the next page arrives without moving the currently focused card. Continue to a later boundary and confirm proximity prefetch still avoids duplicate requests.
 - Record first-page and nested-folder listing latency for each provider, including one page-boundary load.
 - Traverse every grid edge with Up/Down/Left/Right, including an incomplete final row.
 - Open nested folders, press Back, and verify the exact focused item and scroll position return.
@@ -36,6 +39,7 @@ Perform these checks once with Google Drive and once with OneDrive:
 - Open an image, move Right to a video, and Left back to the image.
 - Confirm the browser fetches media from the provider host rather than the Vercel application host.
 - Play the video and seek forward/backward with LG playback keys; verify range seeking resumes playback at the selected position.
+- Confirm the Video.js 10 state/container wrapper initializes on the TV. If it cannot initialize, confirm the same native video still plays, pauses, seeks, resumes, and reports errors through Cloudframe controls.
 - Enter toggles image slideshow or video play/pause; Up opens details/filmstrip; Down closes it.
 - Back returns focus to the exact grid card.
 - Cause or wait for a media URL to expire, then confirm the TV requests one renewed URL and playback recovers without a loop.

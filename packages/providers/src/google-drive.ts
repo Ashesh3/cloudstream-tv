@@ -248,12 +248,7 @@ function normalizeGoogleFile(
         : null;
   if (!kind || !file.id || !file.name) return null;
   const mediaMetadata = kind === "image" ? file.imageMediaMetadata : file.videoMediaMetadata;
-  const preview = file.thumbnailLink
-    ? {
-        url: googleThumbnailUrl(file.thumbnailLink, 720),
-        expiresAt: new Date(previewExpiresAt.getTime()),
-      }
-    : null;
+  const preview = listedGooglePreview(file.thumbnailLink, previewExpiresAt);
   return {
     providerNodeId: file.id,
     parentProviderId: file.parents?.[0] ?? null,
@@ -270,6 +265,21 @@ function normalizeGoogleFile(
     hasPreview: preview !== null,
     preview,
   };
+}
+
+function listedGooglePreview(
+  thumbnailLink: string | undefined,
+  expiresAt: Date,
+): TemporaryUrl | null {
+  if (!thumbnailLink) return null;
+  try {
+    return {
+      url: googleThumbnailUrl(thumbnailLink, 720),
+      expiresAt: new Date(expiresAt.getTime()),
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function googleJson<T>(

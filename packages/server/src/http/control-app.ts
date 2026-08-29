@@ -1106,12 +1106,13 @@ async function thumbnailUrls(
   now: Date
 ): Promise<Response> {
   const body = await readBoundedJsonObject(request);
-  assertOnlyKeys(body, ["handles", "maxDimension"], "INVALID_THUMBNAIL_REQUEST");
+  assertOnlyKeys(body, ["handles", "maxDimension", "refresh"], "INVALID_THUMBNAIL_REQUEST");
   if (
     !Array.isArray(body.handles) ||
     !Number.isInteger(body.maxDimension) ||
     (body.maxDimension as number) < 64 ||
-    (body.maxDimension as number) > 4096
+    (body.maxDimension as number) > 4096 ||
+    (body.refresh !== undefined && typeof body.refresh !== "boolean")
   ) {
     throw new HttpError(
       400,
@@ -1136,7 +1137,8 @@ async function thumbnailUrls(
   const result = await dependencies.directMedia.thumbnails(
     device,
     handles,
-    body.maxDimension as number
+    body.maxDimension as number,
+    body.refresh === true
   );
   return ok({ items: result.items }, { headers: result.responseHeaders });
 }

@@ -1,16 +1,22 @@
 type VideoJsImporter = () => Promise<unknown>;
+type CustomElementRegistryReader = Pick<CustomElementRegistry, "get">;
 
 export function createVideoJsLoader(
-  importer: VideoJsImporter = () => import("@videojs/html/video/player"),
+  importer: VideoJsImporter = async () => {
+    await Promise.all([
+      import("@videojs/html/video/player"),
+      import("@videojs/html/ui/container"),
+    ]);
+  },
+  registry: CustomElementRegistryReader | undefined = globalThis.customElements,
 ): () => Promise<boolean> {
   let loading: Promise<boolean> | null = null;
   return () => {
     if (loading) return loading;
     loading = importer()
       .then(() =>
-        typeof customElements !== "undefined" &&
-        Boolean(customElements.get("video-player")) &&
-        Boolean(customElements.get("media-container"))
+        Boolean(registry?.get("video-player")) &&
+        Boolean(registry?.get("media-container"))
       )
       .catch(() => false);
     return loading;

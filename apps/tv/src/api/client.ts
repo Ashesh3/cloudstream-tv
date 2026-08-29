@@ -22,7 +22,7 @@ export interface TvApi {
   requestStatus(): Promise<TvBootstrapResponse>;
   home(): Promise<TvHomeResponse>;
   folder(handle: string, cursor?: string | null): Promise<TvFolderPageResponse>;
-  thumbnailUrls(handles: string[], signal?: AbortSignal): Promise<{ items: DirectThumbnailItem[] }>;
+  thumbnailUrls(handles: string[], signal?: AbortSignal, options?: { refresh?: boolean }): Promise<{ items: DirectThumbnailItem[] }>;
   mediaUrl(handle: string, signal?: AbortSignal, expected?: { itemId: string; kind: "image" | "video" }): Promise<DirectMediaUrlResponse>;
 }
 
@@ -80,9 +80,9 @@ export const tvApi: TvApi = {
       : "";
     return request(`/api/tv/folders/${encodeURIComponent(handle)}${query}`, decodeFolder);
   },
-  thumbnailUrls: (handles, signal) => request("/api/tv/thumbnail-urls", decodeThumbnails, {
+  thumbnailUrls: (handles, signal, options) => request("/api/tv/thumbnail-urls", decodeThumbnails, {
     method: "POST",
-    body: JSON.stringify({ handles, maxDimension: 720 }),
+    body: JSON.stringify({ handles, maxDimension: 720, ...(options?.refresh ? { refresh: true } : {}) }),
     signal
   }),
   mediaUrl: (handle, signal, expected) => request("/api/tv/media-url", value => decodeMedia(value, expected), {
@@ -211,7 +211,7 @@ function decodeBrowseItem(value: unknown): TvBrowseItemDto | null {
   const modifiedAtProvider = nullableTimestamp(value.modifiedAtProvider);
   const thumbnailRevision = nullableRevision(value.thumbnailRevision);
   if (!id || !handle || !name || normalizedName === null || !kind || !mimeType.valid || !size.valid || !width.valid || !height.valid || !capturedAt.valid || !createdAtProvider.valid || !modifiedAtProvider.valid || !thumbnailRevision.valid || typeof value.hasPreview !== "boolean") return null;
-  if (kind === "folder" && (mimeType.value !== null || value.hasPreview)) return null;
+  if (kind === "folder" && mimeType.value !== null) return null;
   if (kind !== "folder" && (mimeType.value === null || mimeType.value.indexOf(`${kind}/`) !== 0)) return null;
   return {
     id, handle, name, normalizedName, kind, mimeType: mimeType.value, size: size.value, width: width.value,

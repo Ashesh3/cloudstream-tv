@@ -931,7 +931,8 @@ describe("final control HTTP API", () => {
     [{ handles: ["one", "one"], maxDimension: 720 }],
     [{ handles: ["one"], maxDimension: 63 }],
     [{ handles: ["one"], maxDimension: 4097 }],
-    [{ handles: ["one"], maxDimension: 64.5 }]
+    [{ handles: ["one"], maxDimension: 64.5 }],
+    [{ handles: ["one"], maxDimension: 720, refresh: "yes" }]
   ])("validates thumbnail batches and dimensions before auth or limiting", async (body) => {
     const harness = await createControlApiHarness();
     const response = await harness.app(
@@ -947,6 +948,38 @@ describe("final control HTTP API", () => {
     expect(harness.controlStore.loadCount).toBe(0);
     expect(harness.rateLimiter.consumeCount).toBe(0);
     expect(harness.provider.thumbnailUrlCalls).toBe(0);
+  });
+
+  it("passes an explicit thumbnail refresh through to direct media vending", async () => {
+    const harness = await createControlApiHarness();
+    const folder = await harness.app(harness.folderRequest());
+    const folderPayload = await folder.json() as {
+      ok: true;
+      data: { children: Array<{ handle: string }> };
+    };
+    const handle = folderPayload.data.children[0]!.handle;
+
+    const cached = await harness.app(
+      jsonRequest(
+        "/api/tv/thumbnail-urls",
+        "POST",
+        { handles: [handle], maxDimension: 720 },
+        harness.deviceHeaders()
+      )
+    );
+    expect(cached.status).toBe(200);
+    expect(harness.provider.thumbnailUrlCalls).toBe(0);
+
+    const refreshed = await harness.app(
+      jsonRequest(
+        "/api/tv/thumbnail-urls",
+        "POST",
+        { handles: [handle], maxDimension: 720, refresh: true },
+        harness.deviceHeaders()
+      )
+    );
+    expect(refreshed.status).toBe(200);
+    expect(harness.provider.thumbnailUrlCalls).toBe(1);
   });
 });
 

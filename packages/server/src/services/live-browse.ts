@@ -287,6 +287,9 @@ interface SafeProviderNode {
   preview: { url: string; expiresAt: number } | null;
 }
 
+const PUBLIC_BROWSE_HANDLE_MAX_LENGTH = 8_192;
+const PUBLIC_PROVIDER_VALUE_MAX_LENGTH = 1_024;
+
 function safePreview(value: ProviderNode["preview"]): { url: string; expiresAt: number } | null {
   if (!value || typeof value !== "object") return null;
   const url = value.url;
@@ -326,8 +329,10 @@ function safeProviderNode(
     typeof value !== "object" ||
     typeof value.providerNodeId !== "string" ||
     value.providerNodeId.length === 0 ||
+    value.providerNodeId.length > PUBLIC_PROVIDER_VALUE_MAX_LENGTH ||
     typeof value.name !== "string" ||
     value.name.length === 0 ||
+    value.name.length > PUBLIC_PROVIDER_VALUE_MAX_LENGTH ||
     value.parentProviderId !== expectedParentProviderNodeId ||
     (value.kind !== "folder" &&
       value.kind !== "image" &&
@@ -402,13 +407,24 @@ function itemDto(
   claims: BrowseItemClaims,
   metadata?: Omit<SafeProviderNode, "providerNodeId" | "name" | "kind" | "mimeType">
 ): TvBrowseItemDto {
+  let sealedClaims = claims;
+  let handle = handles.sealItem(sealedClaims);
+  if (handle.length > PUBLIC_BROWSE_HANDLE_MAX_LENGTH && claims.preview) {
+    sealedClaims = { ...claims, preview: null };
+    handle = handles.sealItem(sealedClaims);
+  }
+  if (handle.length > PUBLIC_BROWSE_HANDLE_MAX_LENGTH) {
+    throw new ProviderError("PROVIDER_BAD_RESPONSE", "Provider request failed.", {
+      retryable: false
+    });
+  }
   return {
     id: handles.stableItemId(
       claims.householdId,
       claims.sourceId,
       claims.providerNodeId
     ),
-    handle: handles.sealItem(claims),
+    handle,
     name: claims.name,
     normalizedName: normalizedName(claims.name),
     kind: claims.kind,
@@ -420,7 +436,7 @@ function itemDto(
     createdAtProvider: metadata?.createdAtProvider ?? null,
     modifiedAtProvider: metadata?.modifiedAtProvider ?? null,
     thumbnailRevision: metadata?.thumbnailRevision ?? null,
-    hasPreview: metadata?.hasPreview ?? false
+    hasPreview: sealedClaims.preview !== null && (metadata?.hasPreview ?? false)
   };
 }
 

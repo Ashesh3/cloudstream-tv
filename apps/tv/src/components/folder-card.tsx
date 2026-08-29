@@ -7,10 +7,11 @@ interface FolderCardProps {
   focused: boolean;
   program?: boolean;
   hero?: boolean;
+  onThumbnailError?: () => void;
   onSelect?: () => void;
 }
 
-export function FolderCard({ name, subtitle, thumbnailUrl, focused, program = false, hero = false, onSelect }: FolderCardProps) {
+export function FolderCard({ name, subtitle, thumbnailUrl, focused, program = false, hero = false, onThumbnailError, onSelect }: FolderCardProps) {
   const [failedUrl, setFailedUrl] = useState<string | undefined>();
   const previewReady = Boolean(thumbnailUrl && failedUrl !== thumbnailUrl);
   return (
@@ -23,7 +24,7 @@ export function FolderCard({ name, subtitle, thumbnailUrl, focused, program = fa
       tabIndex={focused ? 0 : -1}
     >
       <span className="card-visual folder-art" aria-hidden="true">
-        {previewReady ? <img src={thumbnailUrl} alt="" referrerPolicy="no-referrer" onError={() => setFailedUrl(thumbnailUrl)} /> : null}
+        {previewReady ? <img src={thumbnailUrl} alt="" referrerPolicy="no-referrer" onError={() => { setFailedUrl(thumbnailUrl); onThumbnailError?.(); }} /> : null}
         <ProgramStockArt program={program} name={name} />
         {program && <span className="program-frame-mark"><i /><i /></span>}
       </span>

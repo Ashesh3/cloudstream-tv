@@ -7,6 +7,14 @@ test("folder browse opens a unified image and video viewer", async ({ page }) =>
   await expect(page.getByRole("button", { name: "Family Trips, program" })).toBeVisible();
   await page.getByRole("button", { name: "Family Trips, program" }).click();
   await expect(page.getByRole("heading", { name: "Family Trips" })).toBeVisible();
+  await expect.poll(async () => (await tvApiCalls(page)).thumbnails.flat().length).toBe(3);
+  const beforeScroll = await tvApiCalls(page);
+  expect(beforeScroll.thumbnails.flat()).toEqual(expect.arrayContaining([
+    "sealed-child-folder",
+    "sealed-image",
+    "sealed-video"
+  ]));
+  await expect(page.getByRole("button", { name: "Albums, folder" }).locator("img")).toHaveAttribute("src", media.folderThumbnail);
   await expect(page.getByText("Sunset.jpg")).toBeVisible();
   await page.getByText("Sunset.jpg").click();
   await expect(page.getByRole("img", { name: "Sunset.jpg" })).toBeVisible();
@@ -17,13 +25,42 @@ test("folder browse opens a unified image and video viewer", async ({ page }) =>
   const video = page.getByLabel("Playing Lake.mp4");
   await expect(video).toBeVisible();
   await expect(video).toHaveAttribute("src", media.video);
+  await expect(page.locator("video-player > media-container > video")).toHaveCount(1);
+  await expect.poll(() => page.evaluate(() => ({
+    player: Boolean(customElements.get("video-player")),
+    container: Boolean(customElements.get("media-container"))
+  }))).toEqual({ player: true, container: true });
   expect(new URL(await video.getAttribute("src")!).pathname).not.toMatch(/^\/api\//);
   const calls = await tvApiCalls(page);
   expect(calls.folder).toEqual([{ handle: "sealed-folder", cursor: null }]);
   expect(calls.thumbnails.length).toBeGreaterThan(0);
-  expect(calls.thumbnails.flat()).toEqual(expect.arrayContaining(["sealed-image", "sealed-video"]));
+  expect(calls.thumbnails.flat()).toEqual(expect.arrayContaining(["sealed-child-folder", "sealed-image", "sealed-video"]));
   expect(calls.thumbnails.flat()).not.toEqual(expect.arrayContaining(["item_image", "item_video"]));
   expect(calls.media).toEqual(expect.arrayContaining(["sealed-image", "sealed-video"]));
+});
+
+test("folder browse preloads thumbnails beyond the virtual window before scrolling", async ({ page }) => {
+  await installTvFixture(page, "ready", { longFolder: true });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Family Trips, program" }).click();
+  const grid = page.getByRole("grid", { name: "Family Trips" });
+  await expect(grid).toBeVisible();
+  await expect(page.getByRole("button", { name: "Extra 29.jpg, image" })).toHaveCount(0);
+
+  await expect.poll(async () => (await tvApiCalls(page)).thumbnails.flat().length).toBe(33);
+  expect((await tvApiCalls(page)).thumbnails.flat()).toEqual(expect.arrayContaining([
+    "sealed-child-folder",
+    "sealed-video",
+    "sealed-extra-29"
+  ]));
+
+  await grid.evaluate(element => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+  const lastCard = page.getByRole("button", { name: "Extra 29.jpg, image" });
+  await expect(lastCard).toBeVisible();
+  await expect(lastCard.locator("img")).toHaveAttribute("src", media.thumbnail);
 });
 
 test("viewer saves and restores a nonzero video position", async ({ page }) => {

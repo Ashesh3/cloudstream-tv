@@ -102,6 +102,8 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   const thumbnailExpiryTimers = useRef<Record<string, { identity: string; cancel: () => void }>>({});
   const thumbnailRetryTimer = useRef<number | null>(null);
   const thumbnailInstallRetries = useRef<Record<string, boolean>>({});
+  const thumbnailDecodeRetries = useRef<Record<string, boolean>>({});
+  const thumbnailRefreshRequests = useRef<Record<string, AbortController>>({});
   const thumbnailWarmer = useRef(createThumbnailWarmer());
   const idlePrefetchCancel = useRef<(() => void) | null>(null);
   const idlePrefetchedPages = useRef<Record<string, boolean>>({});
@@ -117,6 +119,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     if (thumbnailRetryTimer.current !== null) window.clearTimeout(thumbnailRetryTimer.current);
     thumbnailWarmer.current.clear();
     idlePrefetchCancel.current?.();
+    Object.values(thumbnailRefreshRequests.current).forEach(controller => controller.abort());
   }, []);
 
   const clearThumbnailLifecycle = useCallback(() => {
@@ -124,6 +127,9 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     if (thumbnailRetryTimer.current !== null) window.clearTimeout(thumbnailRetryTimer.current);
     thumbnailRetryTimer.current = null;
     thumbnailInstallRetries.current = {};
+    thumbnailDecodeRetries.current = {};
+    Object.values(thumbnailRefreshRequests.current).forEach(controller => controller.abort());
+    thumbnailRefreshRequests.current = {};
     thumbnailWarmer.current.clear();
     idlePrefetchCancel.current?.();
     idlePrefetchCancel.current = null;
@@ -253,6 +259,16 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
       if (version !== loadVersion.current) return;
       requestedFocus.current = null;
       requestedFocusItemId.current = null;
+      const code = errorCode(error);
+      if (append && code !== "DEVICE_UNAUTHORIZED" && code !== "NAVIGATION_EXPIRED" && code !== "ITEM_NOT_FOUND") {
+        const message = code === "PROVIDER_REAUTH_REQUIRED"
+          ? "This source needs attention in Cloudframe Admin."
+          : code === "PROVIDER_THROTTLED"
+            ? "The provider is busy. Try again shortly."
+            : "This source is temporarily unavailable.";
+        setBrowse(current => ({ ...current, loading: false, error: null, paginationError: message }));
+        return;
+      }
       handleBrowseError(error, append);
     }
   }, [api, handleBrowseError, mediaOrder]);
@@ -282,6 +298,10 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     });
     pageRequest.current = promise;
   }, [browse.breadcrumbs, browse.items, browse.loadedPageCursors, browse.nextCursor, browse.parent, focusedIndex, loadFolder]);
+
+  const retryNextPage = useCallback(() => {
+    appendNextPage(undefined, focusedIndex);
+  }, [appendNextPage, focusedIndex]);
 
   useEffect(() => { void loadHome(); }, [loadHome]);
 
@@ -395,6 +415,34 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
       if (idlePrefetchCancel.current === cancel) idlePrefetchCancel.current = null;
     };
   }, [appendNextPage, browse.loadedPageCursors.length, browse.nextCursor, browse.parent]);
+
+  const refreshFailedThumbnail = useCallback((item: TvBrowseItemDto) => {
+    if (thumbnailDecodeRetries.current[item.handle]) return;
+    thumbnailDecodeRetries.current[item.handle] = true;
+    setThumbnails(current => {
+      return { ...current, [item.id]: { itemId: item.id, status: "unavailable", requestedHandle: item.handle } };
+    });
+    const controller = new AbortController();
+    thumbnailRefreshRequests.current[item.handle] = controller;
+    void api.thumbnailUrls([item.handle], controller.signal, { refresh: true }).then(response => {
+      if (controller.signal.aborted) return;
+      const result = response.items.find(candidate => candidate.itemId === item.id);
+      if (!result || result.status === "unavailable") {
+        setThumbnails(current => ({ ...current, [item.id]: { itemId: item.id, status: "unavailable", requestedHandle: item.handle } }));
+        return;
+      }
+      const expiresAtEpoch = futureExpiryEpoch(result.expiresAt);
+      if (expiresAtEpoch === null) return;
+      thumbnailWarmer.current.warm(result.url!);
+      setThumbnails(current => ({ ...current, [item.id]: { ...result, requestedHandle: item.handle, expiresAtEpoch } }));
+    }).catch(error => {
+      if (controller.signal.aborted) return;
+      const code = errorCode(error);
+      if (code === "DEVICE_UNAUTHORIZED" || code === "NAVIGATION_EXPIRED" || code === "ITEM_NOT_FOUND") handleBrowseError(error, true);
+    }).finally(() => {
+      if (thumbnailRefreshRequests.current[item.handle] === controller) delete thumbnailRefreshRequests.current[item.handle];
+    });
+  }, [api, handleBrowseError]);
 
   const goBack = useCallback(() => {
     const entry = stack[stack.length - 1];
@@ -549,6 +597,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
                 name={item.itemType === "root" ? item.displayName : item.name}
                 subtitle={item.itemType === "root" ? `${providerLabel(item.provider)} · ${item.accountLabel}` : undefined}
                 thumbnailUrl={item.itemType === "node" ? thumbnails[item.id]?.url : undefined}
+                onThumbnailError={item.itemType === "node" ? () => refreshFailedThumbnail(item) : undefined}
                 focused={state.focused}
                 program={item.itemType === "root"}
                 onSelect={() => openItem(item, state.index)}
@@ -560,13 +609,19 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
                 thumbnailUrl={thumbnails[item.id]?.url}
                 focused={state.focused}
                 resumeProgress={item.kind === "video" ? resumeProgress(history.get(item.id)) : 0}
+                onThumbnailError={() => refreshFailedThumbnail(item)}
                 onSelect={() => openItem(item, state.index)}
               />
             )}
           />
         </section>
       )}
-      {browse.paginationError ? <p className="pagination-status" role="status">{browse.paginationError}</p> : null}
+      {browse.paginationError ? (
+        <div className="pagination-status">
+          <span role="status">{browse.paginationError}</span>
+          {browse.nextCursor ? <button type="button" onClick={retryNextPage}>Retry loading more items</button> : null}
+        </div>
+      ) : null}
       <SourceDrawer open={drawerOpen} roots={browse.roots} onClose={closeDrawerAndRestore} onHome={() => { setDrawerOpen(false); void loadHome(); }} onSelect={openRootFromDrawer} />
     </main>
   );

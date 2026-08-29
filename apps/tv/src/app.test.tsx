@@ -241,6 +241,32 @@ describe("TV enrollment and browse states", () => {
     await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(2));
   });
 
+  it("keeps loaded cards and exposes a retry after speculative pagination fails", async () => {
+    vi.useFakeTimers();
+    const client = pagedClient(folderPage("root-1", 0, 10, "page-2"));
+    vi.mocked(client.folder).mockRejectedValueOnce(
+      Object.assign(new Error("provider unavailable"), { code: "PROVIDER_THROTTLED" }),
+    );
+
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await findButtonWithFakeTimers(/Family/));
+    await flushFakeTimersUntil(() => vi.mocked(client.folder).mock.calls.length === 1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); await Promise.resolve(); });
+    await flushFakeTimersUntil(() => vi.mocked(client.folder).mock.calls.length === 2);
+
+    expect(screen.getByRole("button", { name: /Node 0/ })).toBeVisible();
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("The provider is busy. Try again shortly.");
+    const retry = screen.getByRole("button", { name: "Retry loading more items" });
+
+    vi.mocked(client.folder).mockResolvedValueOnce(folderPage("root-1", 10, 2, null));
+    fireEvent.click(retry);
+    await flushFakeTimersUntil(() => vi.mocked(client.folder).mock.calls.length === 3);
+    await flushFakeTimersUntil(() => screen.queryByRole("button", { name: /Node 10/ }) !== null);
+    expect(screen.getByRole("button", { name: /Node 10/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Retry loading more items" })).not.toBeInTheDocument();
+  });
+
   it("restores accumulated pages and focus from the local stack without refetching ancestry", async () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
@@ -507,6 +533,35 @@ describe("TV enrollment and browse states", () => {
     await act(async () => { await Promise.resolve(); await Promise.resolve(); await vi.advanceTimersByTimeAsync(60_000); });
 
     expect(client.thumbnailUrls).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".media-preview img")).not.toBeInTheDocument();
+  });
+
+  it("requests one fresh provider thumbnail after an image decode failure and never loops", async () => {
+    const client = api();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [rootCards[0]!] });
+    vi.mocked(client.folder).mockResolvedValue({
+      parent: node("root-1", "folder", "Parent"),
+      children: [browseItem("item_photo", "sealed-photo", "Photo", "image")],
+      nextCursor: null,
+    });
+    vi.mocked(client.thumbnailUrls)
+      .mockResolvedValueOnce({ items: [{ itemId: "item_photo", status: "ready", url: "https://provider.example/listing", expiresAt: futureIso(), revision: null }] })
+      .mockResolvedValueOnce({ items: [{ itemId: "item_photo", status: "ready", url: "https://provider.example/fresh", expiresAt: futureIso(), revision: null }] });
+
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    await waitFor(() => expect(document.querySelector(".media-preview img")).not.toBeNull());
+    const listingImage = document.querySelector<HTMLImageElement>(".media-preview img")!;
+    expect(listingImage.src).toBe("https://provider.example/listing");
+
+    fireEvent.error(listingImage);
+    await waitFor(() => expect(document.querySelector<HTMLImageElement>(".media-preview img")?.src).toBe("https://provider.example/fresh"));
+    expect(client.thumbnailUrls).toHaveBeenNthCalledWith(2, ["sealed-photo"], expect.any(AbortSignal), { refresh: true });
+
+    fireEvent.error(document.querySelector<HTMLImageElement>(".media-preview img")!);
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(client.thumbnailUrls).toHaveBeenCalledTimes(2);
     expect(document.querySelector(".media-preview img")).not.toBeInTheDocument();
   });
 
@@ -811,6 +866,7 @@ describe("TV API live browse contract", () => {
         nextCursor: null
       }))
       .mockResolvedValueOnce(apiResponse({ items: [] }))
+      .mockResolvedValueOnce(apiResponse({ items: [] }))
       .mockResolvedValueOnce(apiResponse({
         itemId: "item_video",
         kind: "video",
@@ -823,11 +879,13 @@ describe("TV API live browse contract", () => {
 
     await tvApi.folder("sealed/folder", "sealed cursor");
     await tvApi.thumbnailUrls(["sealed-image"], controller.signal);
+    await tvApi.thumbnailUrls(["sealed-image"], controller.signal, { refresh: true });
     await tvApi.mediaUrl("sealed-video", controller.signal);
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/tv/folders/sealed%2Ffolder?cursor=sealed%20cursor", expect.objectContaining({ credentials: "include" }));
     expect(JSON.parse(fetchMock.mock.calls[1]![1]!.body as string)).toEqual({ handles: ["sealed-image"], maxDimension: 720 });
-    expect(JSON.parse(fetchMock.mock.calls[2]![1]!.body as string)).toEqual({ handle: "sealed-video" });
+    expect(JSON.parse(fetchMock.mock.calls[2]![1]!.body as string)).toEqual({ handles: ["sealed-image"], maxDimension: 720, refresh: true });
+    expect(JSON.parse(fetchMock.mock.calls[3]![1]!.body as string)).toEqual({ handle: "sealed-video" });
   });
 
   it("accepts a same-origin Google media path without exposing a provider token", async () => {
@@ -841,6 +899,19 @@ describe("TV API live browse contract", () => {
 
     await expect(tvApi.mediaUrl("sealed-google-handle")).resolves.toMatchObject({
       url: "/api/tv/google-media/sealed-google-handle"
+    });
+  });
+
+  it("accepts previewable folders without exposing a preview URL in browse JSON", async () => {
+    const folder = { ...browseItem("item_folder", "sealed-folder", "Albums", "folder"), hasPreview: true };
+    vi.stubGlobal("fetch", vi.fn(async () => apiResponse({
+      parent: browseItem("item_parent", "sealed-parent", "Parent", "folder"),
+      children: [folder],
+      nextCursor: null,
+    })));
+
+    await expect(tvApi.folder("sealed-parent")).resolves.toMatchObject({
+      children: [{ id: "item_folder", kind: "folder", hasPreview: true }],
     });
   });
 

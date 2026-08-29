@@ -10,9 +10,10 @@ const legacyPolyfills = files.find(name => /^polyfills-legacy-.*\.js$/.test(name
 if (!legacyEntry || !legacyPolyfills) {
   throw new Error("TV legacy entry and polyfills-legacy chunks are required");
 }
+const legacyJavaScript = files.filter(name => /-legacy-.*\.js$/.test(name));
 
 let compressedJavaScript = 0;
-for (const name of [legacyEntry, legacyPolyfills]) {
+for (const name of legacyJavaScript) {
   const source = await readFile(join(directory, name), "utf8");
   new Script(source, { filename: name });
   if (/\?\.|\?\?/.test(source)) {
