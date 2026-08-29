@@ -108,6 +108,7 @@ export interface ProviderAdapter {
 
 export type ProviderErrorCode =
   | "PROVIDER_BAD_RESPONSE"
+  | "PROVIDER_NOT_CONFIGURED"
   | "PROVIDER_NOT_FOUND"
   | "PROVIDER_REAUTH_REQUIRED"
   | "PROVIDER_THROTTLED"

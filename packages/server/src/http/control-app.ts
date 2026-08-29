@@ -2038,7 +2038,9 @@ function normalizeHttpError(error: unknown): HttpError {
   }
   if (error instanceof ProviderError) {
     const providerStatus =
-      error.code === "PROVIDER_REAUTH_REQUIRED"
+      error.code === "PROVIDER_NOT_CONFIGURED"
+        ? 503
+        : error.code === "PROVIDER_REAUTH_REQUIRED"
         ? 409
         : error.code === "PROVIDER_NOT_FOUND"
           ? 404
@@ -2051,7 +2053,9 @@ function normalizeHttpError(error: unknown): HttpError {
     return new HttpError(
       providerStatus,
       error.code,
-      "Provider request failed.",
+      error.code === "PROVIDER_NOT_CONFIGURED"
+        ? "This provider is not configured."
+        : "Provider request failed.",
       boundedRetryAfterSeconds(error.retryAfterSeconds)
     );
   }

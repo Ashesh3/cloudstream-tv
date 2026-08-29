@@ -11,13 +11,15 @@
     "build": "npm run build -w @cloudframe/tv && npm run build -w @cloudframe/admin && node scripts/build-site.mjs",
     "build:e2e": "cross-env CLOUDFRAME_E2E_BUILD=1 npm run build",
     "build:vercel": "npm run build && node scripts/build-vercel.mjs",
+    "build:server": "npm run build && node scripts/build-server.mjs",
     "check:chromium68": "node scripts/check-chromium68.mjs",
     "dev:tv": "npm run dev -w @cloudframe/tv",
     "dev:admin": "npm run dev -w @cloudframe/admin",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -p tsconfig.base.json --noEmit && tsc -p apps/tv/tsconfig.json --noEmit && tsc -p apps/admin/tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.base.json --noEmit && tsc -p apps/tv/tsconfig.json --noEmit && tsc -p apps/admin/tsconfig.json --noEmit",
+    "start": "node build/self-hosted/server/index.js"
   },
   "dependencies": {
     "@cloudframe/shared": "*",

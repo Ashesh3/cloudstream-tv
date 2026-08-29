@@ -1,4 +1,5 @@
 import { HttpError } from "./errors";
+import { isIP } from "node:net";
 
 export async function readJsonObject(request: Request): Promise<Record<string, unknown>> {
   if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
@@ -56,20 +57,8 @@ export function readUniqueCookie(
 export type RequestSubjectResolver = (request: Request) => string;
 
 export const requestSubject: RequestSubjectResolver = request => {
-  const forwarded = firstForwardedAddress(
-    request.headers.get("x-vercel-forwarded-for")
-  );
-  return forwarded || "unknown";
+  const peer = request.headers.get("x-cloudframe-peer-address");
+  return peer !== null && peer.length <= 64 && isIP(peer) !== 0
+    ? peer
+    : "unknown";
 };
-
-function firstForwardedAddress(value: string | null): string | null {
-  const address = value?.split(",")[0]?.trim();
-  if (
-    !address ||
-    address.length > 64 ||
-    [...address].some(character => character.charCodeAt(0) <= 32)
-  ) {
-    return null;
-  }
-  return address;
-}

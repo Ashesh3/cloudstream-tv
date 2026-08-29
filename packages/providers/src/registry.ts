@@ -1,11 +1,19 @@
-import type { ProviderAdapter, ProviderKind, ProviderRegistry } from "./types";
+import { ProviderError, type ProviderAdapter, type ProviderKind, type ProviderRegistry } from "./types";
 
 export function createProviderRegistry(
-  adapters: Record<ProviderKind, ProviderAdapter>
+  adapters: Partial<Record<ProviderKind, ProviderAdapter>>
 ): ProviderRegistry {
   return {
     get(provider) {
-      return adapters[provider];
+      const adapter = adapters[provider];
+      if (!adapter) {
+        throw new ProviderError(
+          "PROVIDER_NOT_CONFIGURED",
+          "This provider is not configured.",
+          { retryable: false },
+        );
+      }
+      return adapter;
     }
   };
 }
