@@ -45,6 +45,7 @@ export * from "./services/direct-media";
 export * from "./services/live-provider-folders";
 export * from "./services/live-browse";
 export * from "./services/runtime-rate-limit";
+export * from "./services/provider-media-source";
 export type {
   ProviderAdapter,
   ProviderCredentials,

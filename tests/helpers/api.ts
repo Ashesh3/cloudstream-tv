@@ -20,6 +20,7 @@ import {
   createFirestoreRecoveryMirror,
   createLiveBrowseService,
   createLiveProviderFolderService,
+  createProviderMediaSourceService,
   createSealedSessionCodec,
   encryptControlPlaneDocument,
   encryptProviderToken,
@@ -270,6 +271,7 @@ export async function createControlApiHarness(
     browse,
     credentialBroker: broker,
     providers,
+    mediaSources: createProviderMediaSourceService({ credentialBroker: broker, providers, now: () => new Date(now) }),
     now: () => new Date(now)
   });
   const events: ControlApiLoggerEvent[] = [];

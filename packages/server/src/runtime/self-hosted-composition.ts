@@ -27,6 +27,7 @@ import { createInstallationService } from "../services/installation.ts";
 import { createLiveBrowseService } from "../services/live-browse.ts";
 import { createLiveProviderFolderService } from "../services/live-provider-folders.ts";
 import { createRuntimeRateLimiter } from "../services/runtime-rate-limit.ts";
+import { createProviderMediaSourceService } from "../services/provider-media-source.ts";
 import { createSqliteControlPlaneStore } from "../sqlite/control-store.ts";
 import { openLocalDatabase } from "../sqlite/database.ts";
 import {
@@ -154,7 +155,8 @@ export async function createSelfHostedComposition(
       providers,
       now,
     });
-    const directMedia = createDirectMediaService({ browse, credentialBroker, providers, now });
+    const mediaSources = createProviderMediaSourceService({ credentialBroker, providers, now });
+    const directMedia = createDirectMediaService({ browse, credentialBroker, providers, mediaSources, now });
     const rateLimiter = createRuntimeRateLimiter({ secret: keys.rateLimitSecret, now });
     const installation = createInstallationService({
       repository: installationRepository,

@@ -15,6 +15,7 @@ import {
   createFirestoreRecoveryMirror,
   createLiveBrowseService,
   createLiveProviderFolderService,
+  createProviderMediaSourceService,
   createRuntimeRateLimiter,
   createSealedSessionCodec,
   createVercelBlobControlStore,
@@ -182,6 +183,7 @@ export function createProductionApi(
     browse,
     credentialBroker,
     providers,
+    mediaSources: createProviderMediaSourceService({ credentialBroker, providers, now }),
     now
   });
   return createControlApiApp({

@@ -23,6 +23,10 @@ import {
   type AuthorizedBrowseItem,
   type LiveBrowseService,
 } from "./live-browse";
+import {
+  ProviderMediaSourceError,
+  type ProviderMediaSourceService,
+} from "./provider-media-source";
 
 const MAX_THUMBNAIL_BATCH = 100;
 const MIN_THUMBNAIL_DIMENSION = 64;
@@ -60,6 +64,7 @@ export interface CreateDirectMediaServiceOptions {
   browse: Pick<LiveBrowseService, "authorizeHandle">;
   credentialBroker: CredentialBroker;
   providers: ProviderRegistry;
+  mediaSources: ProviderMediaSourceService;
   now?: () => Date;
 }
 
@@ -567,68 +572,23 @@ export function createDirectMediaService(
       throw directMediaError("ITEM_NOT_FOUND");
     }
 
-    let credentials: BrokeredProviderCredentials;
-    let adapter: ProviderAdapter;
+    let source;
     try {
-      credentials = compatibleCredentials(
-        item,
-        await options.credentialBroker.get(
-          item.source.id,
-          item.claims.householdId,
-        ),
-      );
-      adapter = providerAdapter(options.providers, item.source.provider);
+      source = await options.mediaSources.resolve(item);
     } catch (error) {
-      normalizeDependencyError(error);
+      if (error instanceof ProviderMediaSourceError) throw directMediaError(error.code);
+      throw error;
     }
-
-    const operation = (activeCredentials: ProviderCredentials) =>
-      adapter!.getMediaUrl({
-        credentials: activeCredentials,
-        providerNodeId: item.claims.providerNodeId,
-      });
-
-    let temporary: TemporaryUrl | AuthenticatedMediaRequest;
-    try {
-      temporary = await operation(credentials!);
-    } catch (error) {
-      if (
-        error instanceof ProviderError &&
-        error.code === "PROVIDER_REAUTH_REQUIRED" &&
-        error.reauthReason !== "invalid_grant"
-      ) {
-        try {
-          credentials = compatibleCredentials(
-            item,
-            await options.credentialBroker.refresh(
-              item.source.id,
-              item.claims.householdId,
-            ),
-          );
-          temporary = await operation(credentials);
-        } catch (retryError) {
-          normalizeDependencyError(retryError);
-        }
-      } else {
-        normalizeDependencyError(error);
-      }
-    }
-
-    const safe = validTemporaryUrl(
-      temporary!,
-      item,
-      credentials!,
-      now(),
-    );
-    if (item.source.provider === "google") {
-      if (!("headers" in safe)) throw directMediaError("INVALID_PROVIDER_URL");
+    if (source.provider === "google") {
+      const authorization = source.request.headers.get("authorization");
+      if (!authorization?.startsWith("Bearer ")) throw directMediaError("INVALID_PROVIDER_URL");
       return {
         itemId: item.id,
         kind: item.claims.kind,
         transport: "google-bearer",
-        url: safe.url,
-        authorization: { scheme: "Bearer", token: credentials!.accessToken },
-        expiresAt: safe.expiresAt.toISOString(),
+        url: source.request.url,
+        authorization: { scheme: "Bearer", token: authorization.slice(7) },
+        expiresAt: source.request.expiresAt.toISOString(),
         revision: item.claims.contentRevision,
         responseHeaders: RESPONSE_HEADERS,
       };
@@ -637,8 +597,8 @@ export function createDirectMediaService(
       itemId: item.id,
       kind: item.claims.kind,
       transport: "direct",
-      url: safe.url,
-      expiresAt: safe.expiresAt.toISOString(),
+      url: source.request.url,
+      expiresAt: source.request.expiresAt.toISOString(),
       revision: item.claims.contentRevision,
       responseHeaders: RESPONSE_HEADERS,
     };

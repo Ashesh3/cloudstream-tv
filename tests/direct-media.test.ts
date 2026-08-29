@@ -12,11 +12,12 @@ import {
   createBrowseHandleCodec,
   createDirectMediaService,
   createLiveBrowseService,
+  createProviderMediaSourceService,
   type AuthenticatedControlDevice,
   type BrowseItemClaims,
   type CredentialBroker,
 } from "@cloudframe/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   TEST_NOW,
@@ -25,6 +26,41 @@ import {
 } from "./helpers/control-plane";
 
 describe("direct provider URL vending", () => {
+  it("delegates full-size media retrieval to the shared resolver exactly once", async () => {
+    const harness = createHarness();
+    const item = harness.mediaItem("source-google", "root-google", "google-video", "video");
+    const resolve = vi.fn().mockResolvedValue({
+      item,
+      provider: "google",
+      request: {
+        url: "https://www.googleapis.com/drive/v3/files/google-video?alt=media&supportsAllDrives=true",
+        headers: new Headers({ authorization: "Bearer access-token" }),
+        expiresAt: harness.expiry,
+      },
+      credentialVersion: 1,
+    });
+    const media = createDirectMediaService({
+      browse: { authorizeHandle: () => item },
+      credentialBroker: harness.credentialBroker,
+      providers: harness.providers,
+      mediaSources: { resolve },
+      now: () => TEST_NOW,
+    });
+
+    await expect(media.media(harness.auth(), "sealed-media")).resolves.toEqual({
+      itemId: item.id,
+      kind: "video",
+      transport: "google-bearer",
+      url: "https://www.googleapis.com/drive/v3/files/google-video?alt=media&supportsAllDrives=true",
+      authorization: { scheme: "Bearer", token: "access-token" },
+      expiresAt: harness.expiry.toISOString(),
+      revision: "provider-revision-7",
+      responseHeaders: { "cache-control": "private, no-store", "referrer-policy": "no-referrer" },
+    });
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(resolve).toHaveBeenCalledWith(item);
+  });
+
   it("returns the validated raw Google URL and short-lived bearer credential", async () => {
     const harness = createHarness();
     const result = await harness.media.media(
@@ -1281,6 +1317,7 @@ function createHarness(currentNow: () => Date = () => new Date(TEST_NOW)) {
     },
     credentialBroker: broker,
     providers,
+    mediaSources: createProviderMediaSourceService({ credentialBroker: broker, providers, now: currentNow }),
     now: currentNow,
   });
 
@@ -1328,11 +1365,22 @@ function createHarness(currentNow: () => Date = () => new Date(TEST_NOW)) {
 
   return {
     media,
+    credentialBroker: broker,
+    providers,
     google,
     oneDrive,
     expiry,
     auth,
     handle,
+    mediaItem: (
+      sourceId: "source-google" | "source-onedrive",
+      rootId: "root-google" | "root-onedrive",
+      providerNodeId: string,
+      kind: BrowseItemClaims["kind"],
+    ) => liveBrowse.authorizeHandle(
+      auth(),
+      handle(sourceId, rootId, providerNodeId, kind),
+    ),
     itemId: (sourceId: string, providerNodeId: string) =>
       codec.stableItemId(document.householdId, sourceId, providerNodeId),
     credentialGetsBySource,
