@@ -1304,7 +1304,7 @@ function media(id: string, kind: "image" | "video", name: string, mimeType: stri
     id, handle: `sealed-${id}`, name,
     normalizedName: name.toLowerCase(), kind, mimeType, size: 1_000, width: kind === "image" ? 1920 : 1280,
     height: kind === "image" ? 1080 : 720, capturedAt: "2026-08-01T00:00:00.000Z",
-    createdAtProvider: null, modifiedAtProvider: null, thumbnailRevision: "revision-1", hasPreview: true
+    createdAtProvider: null, modifiedAtProvider: null, thumbnailRevision: "thumbnail-1", contentRevision: "revision-1", hasPreview: true
   };
 }
 

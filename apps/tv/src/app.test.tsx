@@ -1131,7 +1131,7 @@ function browseItem(id: string, handle: string, name: string, kind: "folder" | "
     id, handle, name, normalizedName: name.toLowerCase(), kind,
     mimeType: kind === "folder" ? null : kind === "video" ? "video/mp4" : "image/jpeg",
     size: null, width: null, height: null, capturedAt: null, createdAtProvider: null,
-    modifiedAtProvider: null, thumbnailRevision: null, hasPreview: kind !== "folder"
+    modifiedAtProvider: null, thumbnailRevision: null, contentRevision: null, hasPreview: kind !== "folder"
   };
 }
 

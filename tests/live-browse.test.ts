@@ -46,6 +46,7 @@ function node(
     createdAt: new Date("2026-08-19T10:00:00.000Z"),
     modifiedAt: new Date("2026-08-21T10:00:00.000Z"),
     thumbnailRevision: kind === "folder" ? null : "thumb-7",
+    contentRevision: kind === "folder" ? null : "provider-revision-7",
     hasPreview: kind !== "folder",
     preview: kind === "folder" ? null : {
       url: `https://lh3.googleusercontent.com/${providerNodeId}=s720`,
@@ -305,6 +306,7 @@ describe("live TV browsing", () => {
       createdAtProvider: "2026-08-19T10:00:00.000Z",
       modifiedAtProvider: "2026-08-21T10:00:00.000Z",
       thumbnailRevision: "thumb-7",
+      contentRevision: "provider-revision-7",
       hasPreview: true
     });
     const childClaims = harness.codec.openItem(page.children[0]!.handle);
@@ -314,6 +316,8 @@ describe("live TV browsing", () => {
       providerNodeId: "folder-a",
       parentProviderNodeId: "provider-trips",
       credentialVersion: 1,
+      size: null,
+      contentRevision: null,
       expiresAt: TEST_NOW.getTime() + 30 * 60_000,
       preview: {
         url: "https://lh3.googleusercontent.com/folder-a=s720",
@@ -369,6 +373,7 @@ describe("live TV browsing", () => {
       createdAtProvider: null,
       modifiedAtProvider: null,
       thumbnailRevision: null,
+      contentRevision: null,
       hasPreview: false
     });
     expect(harness.codec.openItem(page.parent.handle)).toEqual(
@@ -866,6 +871,8 @@ describe("live browse authorization", () => {
       kind: "folder",
       name: "albums",
       mimeType: null,
+      size: null,
+      contentRevision: null,
       credentialVersion: 1,
       ...times
     } as never);

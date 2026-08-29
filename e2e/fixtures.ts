@@ -37,7 +37,7 @@ export async function installTvFixture(
       id: "item_folder", handle: "sealed-folder",
       name: "Family Trips", normalizedName: "family trips", kind: "folder", mimeType: null,
       size: null, width: null, height: null, capturedAt: null, createdAtProvider: now,
-      modifiedAtProvider: now, thumbnailRevision: null, hasPreview: false
+      modifiedAtProvider: now, thumbnailRevision: null, contentRevision: null, hasPreview: false
     };
     const childFolder = {
       ...folder,

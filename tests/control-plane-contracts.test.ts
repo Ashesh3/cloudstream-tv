@@ -52,6 +52,7 @@ describe("v2 control-plane contracts", () => {
       createdAtProvider: null,
       modifiedAtProvider: null,
       thumbnailRevision: "7",
+      contentRevision: "7",
       hasPreview: true
     };
     expect(JSON.stringify(item)).not.toMatch(/providerNodeId|accessToken|refreshToken/);

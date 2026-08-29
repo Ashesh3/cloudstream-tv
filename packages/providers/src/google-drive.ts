@@ -287,10 +287,17 @@ function normalizeGoogleFile(
     capturedAt: date(file.imageMediaMetadata?.time),
     createdAt: date(file.createdTime),
     modifiedAt: date(file.modifiedTime),
-    thumbnailRevision: file.version ?? null,
+    thumbnailRevision: providerRevision(file.version),
+    contentRevision: providerRevision(file.version),
     hasPreview: preview !== null,
     preview,
   };
+}
+
+function providerRevision(value: unknown): string | null {
+  return typeof value === "string" && value.length >= 1 && value.length <= 256
+    ? value
+    : null;
 }
 
 function listedGooglePreview(

@@ -277,10 +277,17 @@ function normalizeOneDriveItem(item: OneDriveItem, previewNow: Date): ProviderNo
     capturedAt: date(item.photo?.takenDateTime),
     createdAt: date(item.createdDateTime),
     modifiedAt: date(item.lastModifiedDateTime),
-    thumbnailRevision: item.eTag ?? null,
+    thumbnailRevision: providerRevision(item.eTag),
+    contentRevision: providerRevision(item.eTag),
     hasPreview: preview !== null,
     preview,
   };
+}
+
+function providerRevision(value: unknown): string | null {
+  return typeof value === "string" && value.length >= 1 && value.length <= 256
+    ? value
+    : null;
 }
 
 function listedOneDrivePreview(

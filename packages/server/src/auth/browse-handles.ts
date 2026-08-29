@@ -23,6 +23,8 @@ export interface BrowseItemClaims {
   kind: "folder" | "image" | "video";
   name: string;
   mimeType: string | null;
+  size: number | null;
+  contentRevision: string | null;
   preview?: BrowsePreviewClaims | null;
   credentialVersion: number;
   issuedAt: number;
@@ -78,6 +80,20 @@ function string(value: unknown): string {
 
 function nullableString(value: unknown): string | null {
   return value === null ? null : string(value);
+}
+
+function nullableNonNegativeInteger(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  const parsed = integer(value);
+  if (parsed < 0) fail();
+  return parsed;
+}
+
+function nullableBoundedString(value: unknown, maximum: number): string | null {
+  if (value === undefined || value === null) return null;
+  const parsed = string(value);
+  if (parsed.length > maximum) fail();
+  return parsed;
 }
 
 function integer(value: unknown): number {
@@ -153,6 +169,8 @@ function parseItem(value: unknown, now: Date): BrowseItemClaims {
     kind,
     name: string(input.name),
     mimeType: nullableString(input.mimeType),
+    size: nullableNonNegativeInteger(input.size),
+    contentRevision: nullableBoundedString(input.contentRevision, 256),
     preview: preview(input.preview)
   };
 }

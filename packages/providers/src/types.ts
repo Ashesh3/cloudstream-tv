@@ -51,6 +51,7 @@ export interface ProviderNode {
   createdAt: Date | null;
   modifiedAt: Date | null;
   thumbnailRevision: string | null;
+  contentRevision: string | null;
   hasPreview: boolean;
   preview?: TemporaryUrl | null;
 }

@@ -185,7 +185,7 @@ function decodeRoot(value: unknown): TvRootDto | null {
 function decodeBrowseItem(value: unknown): TvBrowseItemDto | null {
   if (!exactRecord(value, [
     "id", "handle", "name", "normalizedName", "kind", "mimeType", "size", "width", "height",
-    "capturedAt", "createdAtProvider", "modifiedAtProvider", "thumbnailRevision", "hasPreview"
+    "capturedAt", "createdAtProvider", "modifiedAtProvider", "thumbnailRevision", "contentRevision", "hasPreview"
   ])) return null;
   const id = validItemId(value.id);
   const handle = validOpaque(value.handle, 8192);
@@ -200,13 +200,14 @@ function decodeBrowseItem(value: unknown): TvBrowseItemDto | null {
   const createdAtProvider = nullableTimestamp(value.createdAtProvider);
   const modifiedAtProvider = nullableTimestamp(value.modifiedAtProvider);
   const thumbnailRevision = nullableRevision(value.thumbnailRevision);
-  if (!id || !handle || !name || normalizedName === null || !kind || !mimeType.valid || !size.valid || !width.valid || !height.valid || !capturedAt.valid || !createdAtProvider.valid || !modifiedAtProvider.valid || !thumbnailRevision.valid || typeof value.hasPreview !== "boolean") return null;
+  const contentRevision = nullableRevision(value.contentRevision);
+  if (!id || !handle || !name || normalizedName === null || !kind || !mimeType.valid || !size.valid || !width.valid || !height.valid || !capturedAt.valid || !createdAtProvider.valid || !modifiedAtProvider.valid || !thumbnailRevision.valid || !contentRevision.valid || typeof value.hasPreview !== "boolean") return null;
   if (kind === "folder" && mimeType.value !== null) return null;
   if (kind !== "folder" && (mimeType.value === null || mimeType.value.indexOf(`${kind}/`) !== 0)) return null;
   return {
     id, handle, name, normalizedName, kind, mimeType: mimeType.value, size: size.value, width: width.value,
     height: height.value, capturedAt: capturedAt.value, createdAtProvider: createdAtProvider.value,
-    modifiedAtProvider: modifiedAtProvider.value, thumbnailRevision: thumbnailRevision.value, hasPreview: value.hasPreview
+    modifiedAtProvider: modifiedAtProvider.value, thumbnailRevision: thumbnailRevision.value, contentRevision: contentRevision.value, hasPreview: value.hasPreview
   };
 }
 

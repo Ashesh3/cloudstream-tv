@@ -558,7 +558,7 @@ function ViewerError({ title, item, body, onRetry }: { title: string; item: View
 
 function toViewerItem(item: TvBrowseItemDto): ViewerMediaItem {
   if (item.kind === "folder") throw new Error("Folders cannot enter the viewer sequence.");
-  return { id: item.id, name: item.name, kind: item.kind, mimeType: item.mimeType, revision: item.thumbnailRevision };
+  return { id: item.id, name: item.name, kind: item.kind, mimeType: item.mimeType, revision: item.contentRevision };
 }
 
 function isAuthorizationEvidence(error: unknown): boolean {

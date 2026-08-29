@@ -20,6 +20,8 @@ describe("opaque browse handles", () => {
       kind: "video",
       name: "Lake.mp4",
       mimeType: "video/mp4",
+      size: 12_345,
+      contentRevision: "provider-revision-7",
       preview: {
         url: "https://public.dm.files.1drv.com/y4m/lake?authkey=preview-secret",
         expiresAt: TEST_NOW.getTime() + 20 * 60_000
@@ -39,7 +41,9 @@ describe("opaque browse handles", () => {
       preview: {
         url: "https://public.dm.files.1drv.com/y4m/lake?authkey=preview-secret",
         expiresAt: TEST_NOW.getTime() + 20 * 60_000
-      }
+      },
+      size: 12_345,
+      contentRevision: "provider-revision-7"
     });
     expect(codec.stableItemId("h1", "s1", "provider-secret")).toMatch(/^item_/);
   });
@@ -68,7 +72,11 @@ describe("opaque browse handles", () => {
       keyring
     );
 
-    expect(codec.openItem(oldHandle)).toMatchObject({ preview: null });
+    expect(codec.openItem(oldHandle)).toMatchObject({
+      preview: null,
+      size: null,
+      contentRevision: null
+    });
   });
 
   it("seals provider cursors separately and expires items and cursors after 30 minutes", () => {
@@ -86,6 +94,8 @@ describe("opaque browse handles", () => {
       kind: "folder",
       name: "Trips",
       mimeType: null,
+      size: null,
+      contentRevision: null,
       credentialVersion: 4,
       issuedAt: now.getTime(),
       expiresAt: now.getTime() + 30 * 60_000
@@ -170,6 +180,8 @@ describe("opaque browse handles", () => {
       kind: "video" as const,
       name: "Lake.mp4",
       mimeType: "video/mp4",
+      size: 12_345,
+      contentRevision: "provider-revision-7",
       credentialVersion: 4,
       issuedAt: TEST_NOW.getTime(),
       expiresAt: TEST_NOW.getTime() + 30 * 60_000
@@ -213,7 +225,9 @@ describe("opaque browse handles", () => {
           parentProviderNodeId: "parent-secret",
           kind: "folder",
           name: "Child",
-          mimeType: null
+          mimeType: null,
+          size: null,
+          contentRevision: null
         } as never)
       )
     ).toMatchObject({ rootProviderNodeId: "root-secret" });

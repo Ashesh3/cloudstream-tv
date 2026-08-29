@@ -247,6 +247,8 @@ function rootClaims(
     kind: "folder",
     name: root.displayName,
     mimeType: null,
+    size: null,
+    contentRevision: null,
     preview: null,
     credentialVersion: source.credentialVersion,
     ...issueTimes(now)
@@ -279,6 +281,7 @@ interface SafeProviderNode {
   createdAtProvider: string | null;
   modifiedAtProvider: string | null;
   thumbnailRevision: string | null;
+  contentRevision: string | null;
   hasPreview: boolean;
   preview: { url: string; expiresAt: number } | null;
 }
@@ -366,8 +369,15 @@ function safeProviderNode(
     modifiedAtProvider: nullableIso(modifiedAt),
     thumbnailRevision:
       typeof value.thumbnailRevision === "string" &&
-      value.thumbnailRevision.length > 0
+      value.thumbnailRevision.length > 0 &&
+      value.thumbnailRevision.length <= 256
         ? value.thumbnailRevision
+        : null,
+    contentRevision:
+      typeof value.contentRevision === "string" &&
+      value.contentRevision.length > 0 &&
+      value.contentRevision.length <= 256
+        ? value.contentRevision
         : null,
     hasPreview: value.hasPreview === true,
     preview: safePreview(value.preview)
@@ -392,6 +402,8 @@ function itemClaims(
     kind: node.kind,
     name: node.name,
     mimeType: node.mimeType,
+    size: node.size,
+    contentRevision: node.contentRevision,
     preview: node.preview,
     credentialVersion,
     ...issueTimes(now)
@@ -432,6 +444,7 @@ function itemDto(
     createdAtProvider: metadata?.createdAtProvider ?? null,
     modifiedAtProvider: metadata?.modifiedAtProvider ?? null,
     thumbnailRevision: metadata?.thumbnailRevision ?? null,
+    contentRevision: claims.contentRevision,
     hasPreview: sealedClaims.preview !== null && (metadata?.hasPreview ?? false)
   };
 }

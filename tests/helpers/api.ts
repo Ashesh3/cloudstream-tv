@@ -348,6 +348,8 @@ export async function createControlApiHarness(
     kind: "folder",
     name: "Trips",
     mimeType: null,
+    size: null,
+    contentRevision: null,
     credentialVersion: 1,
     issuedAt: now.getTime(),
     expiresAt: now.getTime() + 30 * 60_000
@@ -364,6 +366,8 @@ export async function createControlApiHarness(
     kind: "video",
     name: "Video.mp4",
     mimeType: "video/mp4",
+    size: 1_024,
+    contentRevision: "content-1",
     credentialVersion: 1,
     issuedAt: now.getTime(),
     expiresAt: now.getTime() + 30 * 60_000
@@ -664,6 +668,7 @@ function providerNode(
     createdAt: new Date(TEST_NOW),
     modifiedAt: new Date(TEST_NOW),
     thumbnailRevision: kind === "folder" ? null : "thumb-1",
+    contentRevision: kind === "folder" ? null : "content-1",
     hasPreview: kind !== "folder"
   };
 }

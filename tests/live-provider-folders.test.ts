@@ -43,6 +43,7 @@ function node(
     createdAt: null,
     modifiedAt: null,
     thumbnailRevision: null,
+    contentRevision: null,
     hasPreview: false,
   };
 }

@@ -242,6 +242,8 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     expect(page.items[2]).toMatchObject({
       name: "Clip.mp4",
       mimeType: "video/mp4",
+      thumbnailRevision: provider === "google" ? "13" : "video-etag",
+      contentRevision: provider === "google" ? "13" : "video-etag",
       width: 1280,
       height: 720,
       createdAt: null,
@@ -258,6 +260,51 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     });
     expect(page.nextCursor).toBeTruthy();
     expect(JSON.stringify(page)).not.toContain(credentials.accessToken);
+  });
+
+  it("normalizes empty and overlong provider content revisions to null", async () => {
+    const harness = createHarness(provider);
+    const originalFetch = harness.adapter.getNode;
+    void originalFetch;
+    const page = await harness.adapter.listFolder({
+      credentials,
+      folderId: provider === "google" ? "g-root" : "o-root",
+      cursor: null,
+      pageSize: 50
+    });
+    const video = page.items.find((item) => item.kind === "video")!;
+    expect(video.contentRevision).toBeTruthy();
+
+    const malformed = provider === "google"
+      ? createGoogleDriveAdapter({
+          clientId: "id",
+          clientSecret: "secret",
+          now: () => now,
+          fetch: async () => jsonResponse({
+            id: "g-video-a",
+            name: "Clip.mp4",
+            mimeType: "video/mp4",
+            parents: ["g-root"],
+            version: "x".repeat(257)
+          })
+        })
+      : createOneDriveAdapter({
+          clientId: "id",
+          clientSecret: "secret",
+          tenant: "common",
+          now: () => now,
+          fetch: async () => jsonResponse({
+            id: "o-video-a",
+            name: "Clip.mp4",
+            parentReference: { id: "o-root" },
+            file: { mimeType: "video/mp4" },
+            eTag: ""
+          })
+        });
+    await expect(malformed.getNode({
+      credentials,
+      providerNodeId: "video-a"
+    })).resolves.toMatchObject({ contentRevision: null });
   });
 
   it("resolves the provider's actual root folder identity", async () => {

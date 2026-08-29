@@ -97,6 +97,7 @@ export interface TvBrowseItemDto {
   createdAtProvider: string | null;
   modifiedAtProvider: string | null;
   thumbnailRevision: string | null;
+  contentRevision: string | null;
   hasPreview: boolean;
 }
 

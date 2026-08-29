@@ -629,7 +629,7 @@ export function createDirectMediaService(
         url: safe.url,
         authorization: { scheme: "Bearer", token: credentials!.accessToken },
         expiresAt: safe.expiresAt.toISOString(),
-        revision: null,
+        revision: item.claims.contentRevision,
         responseHeaders: RESPONSE_HEADERS,
       };
     }
@@ -639,7 +639,7 @@ export function createDirectMediaService(
       transport: "direct",
       url: safe.url,
       expiresAt: safe.expiresAt.toISOString(),
-      revision: null,
+      revision: item.claims.contentRevision,
       responseHeaders: RESPONSE_HEADERS,
     };
   }

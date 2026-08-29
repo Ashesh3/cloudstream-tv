@@ -39,7 +39,7 @@ describe("direct provider URL vending", () => {
       url: "https://www.googleapis.com/drive/v3/files/google-video?alt=media&supportsAllDrives=true",
       authorization: { scheme: "Bearer", token: "access-token" },
       expiresAt: harness.expiry.toISOString(),
-      revision: null,
+      revision: "provider-revision-7",
     });
     expect(result.url).not.toContain("access_token");
   });
@@ -1317,6 +1317,8 @@ function createHarness(currentNow: () => Date = () => new Date(TEST_NOW)) {
       name: providerNodeId,
       mimeType:
         kind === "folder" ? null : kind === "video" ? "video/mp4" : "image/jpeg",
+      size: kind === "folder" ? null : 1_024,
+      contentRevision: kind === "folder" ? null : "provider-revision-7",
       preview,
       credentialVersion: 1,
       issuedAt: TEST_NOW.getTime(),
