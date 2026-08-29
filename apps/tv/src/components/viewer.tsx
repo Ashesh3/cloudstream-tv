@@ -412,6 +412,7 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
       const latestUrl = urlsRef.current[itemId];
       if (unauthorized.current || navigationExpired.current || closed.current || !mounted.current ||
         activeRef.current.id !== itemId || preparedSessions.current[itemId] !== sessionId ||
+        (element && videoElementFor(itemId) !== element) ||
         !latestUrl || latestUrl.status !== "ready" || latestUrl.sourceKind !== currentUrl.sourceKind || latestUrl.url !== currentUrl.url) return;
       const evidence = googleMedia.evidence(sessionId);
       if (evidence.attempt !== latestUrl.sourceKind) {

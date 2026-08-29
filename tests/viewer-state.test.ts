@@ -203,7 +203,7 @@ describe("viewer reducer", () => {
     expect(state.controlsVisible).toBe(true);
   });
 
-  it("ignores stale URL completions and permits one refresh for each issued URL", () => {
+  it("ignores stale URL completions and keeps authorization renewal consumed after reissue", () => {
     let state = createViewerState(media, "image-1");
     const first = state.urls["image-1"]!;
     state = viewerReducer(state, {
@@ -226,8 +226,13 @@ describe("viewer reducer", () => {
       type: "url-ready", nodeId: "image-1", requestId: retry.requestId,
       url: "https://provider.example/fresh", sourceKind: "direct", expiresAtEpoch: 20_000, revision: "r1"
     });
+    expect(state.urls["image-1"]).toMatchObject({ status: "ready", refreshUsed: true });
+    expect(state.retryLedger["image-1"]).toMatchObject({ revision: "r1", used: true });
+    const nextRequestId = state.nextRequestId;
     state = viewerReducer(state, { type: "authorization-expired", nodeId: "image-1", resumeSeconds: 41 });
-    expect(state.urls["image-1"]).toMatchObject({ status: "loading", refreshUsed: true, resumeSeconds: 41 });
+    expect(state.urls["image-1"]).toMatchObject({ status: "error", refreshUsed: true, errorKind: "authorization" });
+    expect(state.mediaError).toEqual({ nodeId: "image-1", kind: "authorization" });
+    expect(state.nextRequestId).toBe(nextRequestId);
   });
 
   it("gives each successfully issued URL its own one-error retry allowance", () => {

@@ -305,6 +305,51 @@ describe("Google media page bridge", () => {
     expect(bridge.filenameSource(prepared.sessionId)).toBeNull();
   });
 
+  it("resets raw evidence and waits only for exact filename evidence after selecting the alias", async () => {
+    const { bridge, fake, prepared } = await prepareAndAck();
+    fake.emitMessage({
+      type: "cloudframe-media-result",
+      sessionId: prepared.sessionId,
+      attempt: "google-raw",
+      outcome: "response",
+      status: 206,
+    } satisfies GoogleMediaWorkerMessage);
+    expect(bridge.evidence(prepared.sessionId)).toEqual({
+      attempt: "google-raw", outcome: "response", status: 206,
+    });
+
+    expect(bridge.filenameSource(prepared.sessionId)?.sourceKind).toBe("google-filename");
+    expect(bridge.evidence(prepared.sessionId)).toEqual({
+      attempt: "google-filename", outcome: "none",
+    });
+    const pending = bridge.waitForEvidence(prepared.sessionId, 300);
+    let settled = false;
+    void pending.then(() => { settled = true; });
+
+    fake.emitMessage({
+      type: "cloudframe-media-result",
+      sessionId: prepared.sessionId,
+      attempt: "google-raw",
+      outcome: "response",
+      status: 206,
+    } satisfies GoogleMediaWorkerMessage);
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(bridge.evidence(prepared.sessionId)).toEqual({
+      attempt: "google-filename", outcome: "none",
+    });
+
+    fake.emitMessage({
+      type: "cloudframe-media-result",
+      sessionId: prepared.sessionId,
+      attempt: "google-filename",
+      outcome: "network-error",
+    } satisfies GoogleMediaWorkerMessage);
+    await expect(pending).resolves.toEqual({
+      attempt: "google-filename", outcome: "network-error",
+    });
+  });
+
   it("revokes both the original and regranted workers after a controller change", async () => {
     const { bridge, fake, prepared } = await prepareAndAck();
     fake.emitControllerChange(fake.restartedWorker);
@@ -446,6 +491,7 @@ describe("Google media page bridge", () => {
 
   it("resolves a pending evidence wait when a matching result arrives", async () => {
     const { bridge, fake, prepared } = await prepareAndAck();
+    expect(bridge.filenameSource(prepared.sessionId)?.sourceKind).toBe("google-filename");
     const pending = bridge.waitForEvidence(prepared.sessionId, 300);
     fake.emitMessage({
       type: "cloudframe-media-result",

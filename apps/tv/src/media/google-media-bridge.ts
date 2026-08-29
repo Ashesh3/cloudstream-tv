@@ -178,6 +178,7 @@ export function createGoogleMediaBridge(
       expireGrants();
       const live = grants.get(sessionId);
       if (!live) return null;
+      evidenceBySession.set(sessionId, noneEvidence("google-filename"));
       return {
         sourceUrl: googleMediaAlias(sessionId, live.grant.filename),
         sourceKind: "google-filename",
@@ -270,6 +271,8 @@ export function createGoogleMediaBridge(
       if (typeof sessionId !== "string") return;
       const live = grants.get(sessionId);
       if (!evidence || !live || !source || !live.workers.has(source)) return;
+      const expected = evidenceBySession.get(sessionId) ?? noneEvidence("google-raw");
+      if (evidence.attempt !== expected.attempt) return;
       evidenceBySession.set(sessionId, evidence);
       resolveEvidenceWaiters(sessionId, evidence);
     }

@@ -30,6 +30,7 @@ export interface ViewerUrlRequest {
 interface ViewerRetryState {
   revision: string | null;
   used: boolean;
+  preserveAfterReady?: true;
 }
 
 export interface ViewerState {
@@ -156,7 +157,10 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
     case "url-ready": {
       const current = state.urls[action.nodeId];
       if (!current || current.requestId !== action.requestId || current.status !== "loading") return state;
-      const retry = { revision: action.revision, used: false };
+      const previousRetry = state.retryLedger[action.nodeId];
+      const retry: ViewerRetryState = previousRetry?.used && previousRetry.preserveAfterReady
+        ? { revision: action.revision, used: true }
+        : { revision: action.revision, used: false };
       return {
         ...state,
         urls: {
@@ -213,8 +217,9 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
       };
     }
     case "authorization-expired":
+      return refreshUrlOnce(state, action.nodeId, action.resumeSeconds, true);
     case "manual-retry":
-      return refreshUrlOnce(state, action.nodeId, action.resumeSeconds);
+      return refreshUrlOnce(state, action.nodeId, action.resumeSeconds, false);
     case "compatibility-source": {
       const current = state.urls[action.nodeId];
       if (activeViewerItem(state).id !== action.nodeId || current?.status !== "ready" || current.sourceKind !== "google-raw") return state;
@@ -286,7 +291,7 @@ function withUrlWindow(state: ViewerState): ViewerState {
   return { ...state, urls: nextUrls, nextRequestId };
 }
 
-function refreshUrlOnce(state: ViewerState, nodeId: string, resumeSeconds: number): ViewerState {
+function refreshUrlOnce(state: ViewerState, nodeId: string, resumeSeconds: number, preserveAfterReady: boolean): ViewerState {
   const current = state.urls[nodeId];
   if (!current) return state;
   const retry = state.retryLedger[nodeId] ?? { revision: current.revision, used: current.refreshUsed };
@@ -305,7 +310,9 @@ function refreshUrlOnce(state: ViewerState, nodeId: string, resumeSeconds: numbe
       controlsVisible: active ? true : state.controlsVisible
     };
   }
-  const nextRetry = { ...retry, used: true };
+  const nextRetry: ViewerRetryState = preserveAfterReady
+    ? { revision: retry.revision, used: true, preserveAfterReady: true }
+    : { revision: retry.revision, used: true };
   return {
     ...state,
     urls: {

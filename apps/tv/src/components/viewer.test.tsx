@@ -6,12 +6,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DirectMediaUrlResponse, GoogleBearerMediaUrlResponse, TvBrowseItemDto } from "@cloudframe/shared";
 import type { TvApi } from "../api/client";
 import {
+  createGoogleMediaBridge,
   GoogleMediaBridgeError,
   unavailableGoogleMediaBridge,
   type GoogleMediaBridge,
   type GoogleMediaDeliveryEvidence,
   type PreparedGoogleMediaSource
 } from "../media/google-media-bridge";
+import type { GoogleMediaPageMessage, GoogleMediaWorkerMessage } from "../media/google-media-protocol";
 import { createLocalWatchHistory, type LocalWatchHistory } from "../state/local-watch-history";
 import { Viewer } from "./viewer";
 
@@ -366,6 +368,33 @@ describe("unified TV viewer", () => {
     expect(screen.queryByRole("button", { name: "Try fresh URL" })).not.toBeInTheDocument();
   });
 
+  it.each([
+    [{ attempt: "google-filename", outcome: "response", status: 206 }, "This file reached the TV, but could not be decoded"],
+    [{ attempt: "google-filename", outcome: "network-error" }, "The Google media link could not be opened"],
+  ] as const)("waits for delayed exact filename evidence after cached raw delivery", async (aliasEvidence, heading) => {
+    const { bridge, emitEvidence } = liveGoogleMediaBridgeHarness();
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockResolvedValue(googleDescriptor(mpegItem.id, "video"));
+    render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={[mpegItem]} selectedItemId={mpegItem.id} slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+    const raw = await screen.findByLabelText("Playing MOV00516.MPG") as HTMLVideoElement;
+    emitEvidence({ attempt: "google-raw", outcome: "response", status: 206 });
+    Object.defineProperty(raw, "error", { configurable: true, value: { code: 4 } });
+    fireEvent.error(raw);
+    await waitFor(() => expect(screen.getByLabelText("Playing MOV00516.MPG").getAttribute("src"))
+      .toMatch(/^\/__cloudframe_media__\/session_[A-Za-z0-9_-]+\/MOV00516\.MPG$/u));
+    const alias = screen.getByLabelText("Playing MOV00516.MPG") as HTMLVideoElement;
+    Object.defineProperty(alias, "error", { configurable: true, value: { code: 4 } });
+
+    fireEvent.error(alias);
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByRole("heading", { name: "This media could not be opened" })).not.toBeInTheDocument();
+    emitEvidence(aliasEvidence);
+
+    expect(await screen.findByRole("heading", { name: heading })).toBeVisible();
+  });
+
   it("coalesces duplicate native failures into one filename alias substitution", async () => {
     const evidence = deferred<GoogleMediaDeliveryEvidence>();
     const { bridge, api } = deliveredMpegHarness();
@@ -441,6 +470,40 @@ describe("unified TV viewer", () => {
     expect(screen.getByLabelText("Playing MOV00516.MPG")).toHaveAttribute("src", "/__cloudframe_media__/session_mpeg/MOV00516.MPG");
   });
 
+  it("ignores pending evidence from a video replaced by away-and-back navigation", async () => {
+    const pending = deferred<GoogleMediaDeliveryEvidence>();
+    const bridge = fakeGoogleMediaBridge();
+    bridge.waitForEvidence.mockImplementation(sessionId => sessionId === "session_mpeg"
+      ? pending.promise
+      : Promise.resolve({ attempt: "google-raw", outcome: "none" }));
+    bridge.evidence.mockReturnValue({ attempt: "google-raw", outcome: "response", status: 206 });
+    bridge.filenameSource.mockReturnValue({
+      sourceUrl: "/__cloudframe_media__/session_mpeg/MOV00516.MPG",
+      sourceKind: "google-filename",
+      sessionId: "session_mpeg",
+      fingerprint: "A".repeat(43),
+    });
+    const api = googleViewerApi();
+    const sequence = [mpegItem, media("item_after_mpeg", "image", "After.jpg", "image/jpeg")];
+    render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={sequence} selectedItemId={mpegItem.id} slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+    const oldVideo = await screen.findByLabelText("Playing MOV00516.MPG") as HTMLVideoElement;
+    Object.defineProperty(oldVideo, "error", { configurable: true, value: { code: 4 } });
+    fireEvent.error(oldVideo);
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(await screen.findByRole("img", { name: "After.jpg" })).toBeVisible();
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    const replacement = await screen.findByLabelText("Playing MOV00516.MPG") as HTMLVideoElement;
+    expect(replacement).not.toBe(oldVideo);
+    await act(async () => { pending.resolve({ attempt: "google-raw", outcome: "response", status: 206 }); });
+
+    expect(bridge.filenameSource).not.toHaveBeenCalled();
+    expect(replacement).toHaveAttribute("src", googleDescriptor(mpegItem.id, "video").url);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("classifies a filename alias network failure as transport", async () => {
     const { bridge, api } = deliveredMpegHarness();
     render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
@@ -480,7 +543,7 @@ describe("unified TV viewer", () => {
     expect(screen.queryByRole("button", { name: "Try fresh URL" })).not.toBeInTheDocument();
   });
 
-  it.each([401, 403])("renews once when worker evidence reports %s", async status => {
+  it.each([401, 403])("renews only once when worker evidence repeatedly reports %s", async status => {
     const { bridge, api } = deliveredMpegHarness();
     bridge.evidence.mockReturnValue({ attempt: "google-raw", outcome: "response", status });
     render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
@@ -494,6 +557,16 @@ describe("unified TV viewer", () => {
     await waitFor(() => expect(api.mediaUrl).toHaveBeenCalledTimes(2));
     expect(screen.getByText("Resuming at 0:37")).toBeVisible();
     expect(bridge.filenameSource).not.toHaveBeenCalled();
+    const reissued = await waitFor(() => {
+      const current = screen.getByLabelText("Playing MOV00516.MPG") as HTMLVideoElement;
+      expect(current).not.toBe(video);
+      return current;
+    });
+    fireEvent.error(reissued);
+
+    expect(await screen.findByText("A fresh link did not solve this media error.")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Try fresh URL" })).not.toBeInTheDocument();
+    expect(api.mediaUrl).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -1310,6 +1383,63 @@ function deliveredGoogleHarness(
   });
   bridge.evidence.mockReturnValue({ attempt: "google-raw", outcome: "response", status: 206 });
   return { bridge, api };
+}
+
+function liveGoogleMediaBridgeHarness(): {
+  bridge: GoogleMediaBridge;
+  emitEvidence(evidence: Exclude<GoogleMediaDeliveryEvidence, { outcome: "none" }>): void;
+} {
+  const listeners = new Set<(event: MessageEvent<unknown>) => void>();
+  let sessionId: string | null = null;
+  const worker = {
+    postMessage: vi.fn<(message: GoogleMediaPageMessage) => void>(message => {
+      if (message.type !== "cloudframe-media-grant") return;
+      sessionId = message.grant.sessionId;
+      const ack = {
+        type: "cloudframe-media-grant-ack",
+        requestId: message.requestId,
+        sessionId,
+      } satisfies GoogleMediaWorkerMessage;
+      for (const listener of listeners) {
+        listener({ data: ack, source: worker } as unknown as MessageEvent<unknown>);
+      }
+    }),
+  };
+  const serviceWorker = {
+    controller: worker,
+    ready: Promise.resolve({} as ServiceWorkerRegistration),
+    register: vi.fn().mockResolvedValue({} as ServiceWorkerRegistration),
+    addEventListener(type: string, listener: EventListener) {
+      if (type === "message") listeners.add(listener as (event: MessageEvent<unknown>) => void);
+    },
+    removeEventListener(type: string, listener: EventListener) {
+      if (type === "message") listeners.delete(listener as (event: MessageEvent<unknown>) => void);
+    },
+  };
+  let random = 0;
+  const bridge = createGoogleMediaBridge({
+    serviceWorker: serviceWorker as unknown as ServiceWorkerContainer,
+    crypto: {
+      getRandomValues<T extends ArrayBufferView | null>(array: T): T {
+        random += 1;
+        if (array instanceof Uint8Array) array.fill(random);
+        return array;
+      },
+    },
+    now: () => Date.now(),
+  });
+  return {
+    bridge,
+    emitEvidence(evidence) {
+      if (!sessionId) throw new Error("Google media session has not been prepared");
+      const message: GoogleMediaWorkerMessage = evidence.outcome === "response"
+        ? { type: "cloudframe-media-result", sessionId, attempt: evidence.attempt, outcome: evidence.outcome, status: evidence.status }
+        : { type: "cloudframe-media-result", sessionId, attempt: evidence.attempt, outcome: evidence.outcome };
+      for (const listener of listeners) {
+        listener({ data: message, source: worker } as unknown as MessageEvent<unknown>);
+      }
+    },
+  };
 }
 
 function googleDescriptor(itemId: string, kind: "image" | "video"): GoogleBearerMediaUrlResponse {
