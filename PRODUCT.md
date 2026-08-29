@@ -4,72 +4,55 @@
 
 ## Platform
 
-web
+Self-hosted web application delivered as a portable Docker image.
 
 ## Users
 
-- One household administrator who connects cloud accounts, approves televisions, assigns folder roots, and maintains household settings.
+- One household administrator who claims the installation, connects sources, approves televisions, assigns roots, and reviews transcoder/storage truth.
 - Family members who browse approved photos and videos from a directional remote, primarily on LG webOS televisions.
 
-## Product Purpose
+## Product purpose
 
-Cloudframe is a private, single-household cloud-media browser. The administrator connects Google Drive and OneDrive and grants each approved television read-only access to selected folder roots. Family members can browse and view permitted media without seeing provider credentials, administration controls, or unapproved content.
+Cloudframe is a private, single-household cloud-media browser. It provides read-only Google Drive and OneDrive access to selected roots without exposing provider credentials or unapproved content to a television.
 
-## Current Product Model
+## Current product model
 
-- Google Drive and OneDrive folders and media metadata are listed live through Vercel; Cloudframe does not build or maintain a provider-file catalog.
-- The encrypted private Vercel Blob snapshot is authoritative active control state. Vercel Runtime Cache is a five-minute hot copy and every protected request conditionally revalidates its Blob ETag.
-- Firestore contains one compact write-only recovery mirror. Ordinary TV, admin, and provider traffic performs zero steady-state Firestore reads.
-- Approved TVs receive signed, sealed sessions and opaque browse handles. Current device, root, and source authorization is revalidated before live provider operations.
-- Browser-side authenticated direct delivery means media bytes go directly from Google and Microsoft; Cloudframe/Vercel never proxies, caches, stores, remuxes, or transcodes provider bodies.
-- Vercel authorizes the approved TV and vends bounded media metadata. OneDrive returns its provider-signed direct URL. Google returns the raw Drive URL plus a short-lived Google access token to the approved TV, where the root-scoped service worker keeps it in memory, attaches it to exact registered requests, and forwards Range requests directly to Google.
-- The accepted trust trade-off is explicit: revocation and root removal stop new descriptors but cannot revoke an already-vended Google token before expiry. URLs containing an `access_token` query parameter are rejected and must not be reintroduced.
-- Local TV watch history is stored in browser `localStorage`, capped at 500 entries, and removed when browser data is cleared. Playback continues without resume history when storage is unavailable.
+- Encrypted local SQLite under `/data` is the authoritative control state.
+- The generated master key, database, automatic schema backups, and reusable transcode cache all live in `/data`; operators protect them with an explicit backup.
+- Provider folders are browsed live. There is no crawl, indexing workflow, refresh schedule, or provider-file catalog.
+- Compatible media uses browser-side authenticated direct delivery from Google or Microsoft.
+- Incompatible video uses FFmpeg demand-paged HLS with browser-safe H.264/AAC output.
+- One active TV transcode is permitted. A second television receives an explicit busy response without blocking compatible direct media.
+- Cached compatible HLS segments may remain under `/data/transcodes` until cache eviction.
+- Local TV watch history is browser-only and continues to be optional.
 
-## Operating Context
+## Privacy and trust
 
-- The administrator signs in on a phone or general browser, connects providers, reviews enrollment requests, browses provider folders live, selects approved roots, and manages devices and defaults.
-- A television requests access by name, waits for approval, and then presents only its currently assigned roots.
-- Folder contents reflect the provider's current metadata when the TV or administrator opens them; there is no crawl, schedule, or manual refresh job.
-- Control mutations commit to private Blob first, refresh Runtime Cache, and queue one full-document Firestore recovery write. A delayed mirror is visible as **Recovery copy delayed** without rolling back the committed change.
-- If the active Blob is unavailable or corrupt, public requests fail closed until an operator performs explicit recovery from the one Firestore document.
+- Provider refresh tokens are server-only and encrypted at rest.
+- The approved TV may hold a short-lived Google access token in memory for exact direct requests. It is never persisted in URLs, cookies, browser storage, logs, diagnostics, or error copy.
+- Transcoding moves provider media through the self-hosted server and stores generated segments locally. Cloudframe therefore does not claim that all media bytes always bypass the server.
+- Root removal, device revocation, credential rotation, and source removal stop subsequent protected requests; already-vended provider capabilities retain their provider-defined lifetime.
 
-## Capabilities and Constraints
+## Capabilities and constraints
 
-- One household with multiple Google Drive and OneDrive accounts and multiple assignable roots.
-- The TV app targets LG webOS 5+ and remains compatible with Chromium 68.
-- The admin app is mobile-first and keyboard/screen-reader operable.
-- Firestore browser rules deny direct access. The permanent runtime identity has exact write-only recovery permission and no read/list permission.
-- Provider refresh tokens stay server-side and are encrypted at rest. Routine access-token refresh uses Runtime Cache and does not touch Firestore unless the provider rotates the refresh token.
-- Legacy MPEG gets one native filename-preserving retry with identical bytes. Exact codec, container, and profile support remains a real-TV result; Cloudframe does not claim transport can manufacture decoder support.
-- The active product has no provider-file catalog, workflow runtime, refresh schedule or button, server watch history, or Firestore request counters.
-- Migration and restore are dry-run-first operator actions. Existing legacy documents and Google Cloud/Firebase projects remain untouched until a separately approved cleanup.
+- One household; multiple approved devices, sources, and roots.
+- LG webOS 5+ / Chromium 68 compatibility with native controls when the packaged Video.js skin cannot initialize.
+- Real Video.js 10 skin on supported browsers, native HLS where available, and hls.js otherwise.
+- Mobile-first, keyboard/screen-reader-operable administration.
+- Graceful container shutdown, transactional SQLite upgrades, bounded transcode jobs, and cache free-space protection.
+- No multi-tenant scheduler, multiple simultaneous encoders, client-side FFmpeg, or server-synchronized watch history.
 
-## Brand Commitments
-
-- Product name: Cloudframe.
-- Cloudframe is a private household library, not a public media service or enterprise content-management system.
-- Privacy claims must remain factual: Cloudframe stores encrypted control data and local resume history, not household media files.
-
-## Evidence on Hand
-
-- Runtime and security behavior: `README.md` and `packages/server/`.
-- Firebase, Vercel, migration, recovery, and observability: `docs/operations/firebase-vercel-setup.md`.
-- LG webOS acceptance: `docs/operations/webos-acceptance.md`.
-- Current admin and TV implementations: `apps/admin/` and `apps/tv/`.
-- Synthetic end-to-end journeys and visual baselines: `e2e/`.
-
-## Product Principles
+## Product principles
 
 1. Household privacy and least-privilege access are non-negotiable.
-2. TV interactions must be obvious, remote-operable, and readable at a distance.
-3. Administration must show device, source, root-access, and recovery-copy truth without invented operational states.
-4. Provider-empty, provider-failed, storage-disabled, revoked, and recovery-delayed states must remain distinct.
-5. Provider compatibility and reliable access take priority over decorative complexity.
+2. TV interactions remain obvious, remote-operable, and readable at a distance.
+3. Admin shows current source, access, local-storage, and transcoder truth without invented states.
+4. Provider-empty, provider-failed, storage-disabled, revoked, transcoder-busy, and unsupported playback remain distinct.
+5. Compatibility and state integrity take priority over decorative complexity.
 
-## Accessibility & Inclusion
+## Evidence
 
-- Preserve keyboard and screen-reader operation throughout administration.
-- Maintain visible focus, explicit labels, accessible status/error announcements, and touch-friendly controls.
-- Keep TV focus order predictable; manual-only controls must not take initial or automatic remote focus.
-- Respect reduced-motion preferences and maintain readable contrast and text sizing.
+- Runtime and security: `packages/server/`, `Dockerfile`, and `README.md`.
+- Operations: `docs/operations/self-hosting.md`.
+- Real television acceptance: `docs/operations/webos-acceptance.md`.
+- Synthetic acceptance: `e2e/`.

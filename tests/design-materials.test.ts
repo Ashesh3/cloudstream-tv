@@ -10,7 +10,7 @@ const activeDocumentationPaths = [
   `${root}PRODUCT.md`,
   `${root}README.md`,
   `${root}DESIGN.md`,
-  `${root}docs/operations/firebase-vercel-setup.md`,
+  `${root}docs/operations/self-hosting.md`,
   `${root}docs/operations/webos-acceptance.md`,
   `${root}.env.example`
 ];
@@ -38,29 +38,34 @@ describe("screening room material contract", () => {
     expect(dimensions.height).toBeGreaterThanOrEqual(1000);
   });
 
-  it("documents the active Vercel control plane without retired runtime claims", () => {
+  it("documents the active self-hosted runtime without retired platform claims", () => {
     const documentation = activeDocumentationPaths
       .map(path => readFileSync(path, "utf8"))
       .join("\n");
 
     for (const required of [
-      "private Vercel Blob",
-      "zero steady-state Firestore reads",
-      "live Google Drive and OneDrive metadata",
+      "portable Docker image",
+      "encrypted local SQLite",
+      "/data",
+      "one active TV transcode",
+      "FFmpeg",
+      "demand-paged HLS",
       "local TV watch history",
       "browser-side authenticated direct delivery",
-      "explicit recovery"
+      "read-only Google Drive and OneDrive",
+      "explicit backup"
     ]) {
       expect(documentation).toContain(required);
     }
     for (const retired of [
-      "Firestore-backed metadata index",
-      "Sync now",
-      "reconciliation schedule",
-      "indexed nodes",
-      "Firestore quota recovery",
-      "15-minute sync",
-      "authenticated streaming through Vercel"
+      "private Vercel Blob",
+      "Vercel Runtime Cache",
+      "Firestore recovery mirror",
+      "zero steady-state Firestore reads",
+      "Mumbai API function",
+      "build:vercel",
+      "Vercel streams",
+      "Cloudframe does not transcode"
     ]) {
       expect(documentation).not.toContain(retired);
     }

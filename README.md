@@ -1,107 +1,66 @@
 # Cloudframe
 
-Cloudframe is a private household cloud-media browser for televisions. The TV app is read-only and optimized for LG webOS 5+ (Chromium 68); a separate mobile-first admin app controls enrollment, provider sources, approved roots, devices, and household settings.
+Cloudframe is a private, single-household media browser for televisions. It ships as a portable Docker image that serves the TV app, admin app, API, and demand-paged HLS from one origin. Control state is stored in encrypted local SQLite under `/data`.
 
-## What it does
+## Runtime model
 
-- Lists live Google Drive and OneDrive metadata through authenticated, no-store Vercel API responses.
-- Lets the administrator select folder roots and assign them to named, approved TVs.
-- Revalidates current device, root, source, and browse-handle authorization on every protected request.
-- Uses browser-side authenticated direct delivery so media bytes go directly from Google and Microsoft.
-- Stores authoritative active control state as an encrypted private Vercel Blob snapshot.
-- Uses Vercel Runtime Cache as a five-minute hot copy with Blob ETag revalidation on every protected request.
-- Writes one compact Firestore recovery mirror after control mutations, while ordinary TV, admin, and provider traffic causes zero steady-state Firestore reads.
-- Keeps local TV watch history in browser `localStorage`, capped at 500 entries. It clears with browser data and is disabled for the session if storage is unavailable.
+- Read-only Google Drive and OneDrive metadata is listed live; Cloudframe does not maintain a provider-file catalog.
+- Compatible photos and videos use browser-side authenticated direct delivery. OneDrive uses its validated signed URL; Google uses an exact Drive URL plus an in-memory bearer grant in the TV service worker.
+- Incompatible video such as legacy MPEG is read server-side through a loopback capability and converted by FFmpeg to H.264/AAC demand-paged HLS.
+- Exactly one active TV transcode owns the encoder lease. Other HLS requests receive a bounded busy response; direct media remains available.
+- Reusable transcoded segments may be cached under `/data/transcodes` within the configured size and free-space floors.
+- Local TV watch history stays in browser `localStorage`, capped at 500 entries. It is not synchronized to the server or shown in Admin.
 
-This is live Google Drive and OneDrive metadata. Cloudframe stores no provider media catalog or media bodies, and Vercel never proxies, caches, stores, remuxes, or transcodes provider media. There is no workflow runtime, refresh schedule/button, server watch history, or Firestore-backed rate counter in the active application.
+## Quick start
+
+Requirements: Docker with Compose, an HTTPS reverse proxy, and OAuth applications for the providers you enable.
+
+```powershell
+docker build --platform linux/amd64 -t cloudframe:local .
+Copy-Item .env.example .env
+docker compose -f compose.example.yaml up -d
+docker compose -f compose.example.yaml logs cloudframe
+```
+
+Set `APP_ORIGIN` to the exact public HTTPS origin. On first boot, copy the one-time `CLOUDFRAME_SETUP_CODE` from the container logs, open `/admin/`, claim the installation, and choose the administrator passphrase. The passphrase and generated master key are never environment variables.
+
+The example Compose file binds only `127.0.0.1:8080`; publish it through an HTTPS reverse proxy. Persist the complete `/data` mount and give the container user UID/GID `10001` read/write access.
+
+See [self-hosting operations](docs/operations/self-hosting.md) for provider callback URLs, reverse-proxy requirements, explicit backup/restore, upgrades, cache policy, diagnostics, and uninstall behavior.
+
+## Build and verify
+
+```powershell
+npm install
+npm test
+npm run typecheck
+npm run lint
+npm run build:server
+node scripts/check-tv-bundle.mjs
+npm run check:chromium68
+npx playwright test
+npm run docker:build
+npm run test:container
+```
+
+`build/self-hosted` contains one bundled server entry and the production public tree. Synthetic browser APIs and source maps exist only in `npm run build:e2e` output and must not be deployed.
+
+The real container smoke build is compile-time gated. Ordinary production builds contain no fixture route, fixture adapter, test marker, or media fixture.
 
 ## Repository
 
 ```text
 apps/tv/        Preact TV app and Chromium 68 legacy build
 apps/admin/     React household admin app
-packages/       Shared contracts, server control plane, providers, and TV core
-api/            Same-origin Vercel Web API function
-scripts/        Build, seed, migration, recovery, and compatibility tools
+packages/       Shared contracts, server runtime, providers, and TV core
+deploy/         Self-hosted Node server entry
+scripts/        Build, container-smoke, and compatibility tools
 e2e/            Synthetic Playwright acceptance journeys and screenshots
-docs/operations Operations and real-TV acceptance runbooks
+docs/operations Self-hosting and real-TV runbooks
 ```
 
-## Local setup
+## Security boundary
 
-Requirements: Node.js 22+ (the Vercel build targets Node 24), npm, Java 21+ for the Firestore emulator, and Firebase CLI.
+Provider refresh tokens and the control document are encrypted at rest with keys derived from the generated `/data/secrets/master.key`. Approved devices use sealed cookies and opaque browse handles. Every protected request revalidates the current device, source, root, revision, and credential version.
 
-```powershell
-npm install
-Copy-Item .env.example .env.local
-firebase emulators:start --only firestore
-npm run dev:tv
-npm run dev:admin
-```
-
-Populate `.env.local` with development-only values. Never commit secrets or use a user-managed service-account key for the Vercel runtime. For emulator work set `FIRESTORE_EMULATOR_HOST=127.0.0.1:8080`; deployed Vercel functions use OIDC Workload Identity Federation.
-
-## Build and test
-
-```powershell
-npm test
-npm run typecheck
-npm run lint
-npm run build
-node scripts/check-tv-bundle.mjs
-npm run check:chromium68
-npm run build:vercel
-npx playwright test
-```
-
-`build:vercel` assembles Build Output API v3 with both static SPAs and exactly one API Web function in `bom1`. It performs a clean production rebuild before packaging, so stale E2E hooks or source maps cannot be reused. `check:chromium68` uses pinned Chromium snapshot revision `555668`, verifies browser major 68, runs the actual legacy TV entry through CDP, and checks required platform APIs.
-
-Synthetic APIs and source maps are enabled only by `npm run build:e2e`. Do not use that build output as a deployment artifact.
-
-## Development seed
-
-`ADMIN_INITIAL_PASSPHRASE` must be a non-default value of at least 16 characters.
-
-```powershell
-node scripts/seed-dev.mjs --dry-run
-node scripts/seed-dev.mjs
-```
-
-The seed creates the household only when absent and verifies the supplied passphrase for an existing household. Keep any bootstrap-passphrase handoff outside git, sign in once, rotate it in **Settings**, and remove the handoff file.
-
-## Active control and recovery
-
-The private Vercel Blob at `cloudframe/control-plane/{environment}/{householdId}.json.enc` is authoritative. It is encrypted with AES-256-GCM. Runtime Cache is transient and is never trusted without conditional Blob revalidation.
-
-Firestore stores only `controlPlaneBackups/{householdId}` as a compact recovery copy. Normal requests never fall back to Firestore. A control mutation commits to Blob, refreshes cache, and queues a full-document write through `waitUntil()`. If that write is delayed, the active mutation remains committed and the admin reports **Recovery copy delayed**.
-
-Migration and explicit recovery are dry-run-first:
-
-```powershell
-node --experimental-strip-types scripts/migrate-vercel-control-plane.ts
-node --experimental-strip-types scripts/migrate-vercel-control-plane.ts --apply
-node --experimental-strip-types scripts/restore-vercel-control-plane.ts
-node --experimental-strip-types scripts/restore-vercel-control-plane.ts --apply
-```
-
-The migration reads only legacy household, request, device, source, and root records needed for the compact snapshot. Restore reads exactly one recovery document. Both commands emit only redacted counts, revision, and checksum. They require a separate operator credential file and must not use either runtime service account.
-
-## Direct media security boundary
-
-Provider refresh tokens remain encrypted and server-only. Vercel obtains or refreshes access tokens to list metadata and authorize media descriptors.
-
-Vercel revalidates the approved TV, assigned root, source, and browse handle before vending bounded media metadata. OneDrive returns its provider-signed direct URL. Google returns the validated raw Drive URL plus a short-lived Google access token to the approved TV. The root-scoped classic service worker keeps that bearer token in memory, attaches it to an exact registered Google URL, forwards a valid single `Range` request directly to Google, and reconstructs the streaming response for the native image or video element. URLs containing an `access_token` query parameter are rejected and must not be reintroduced.
-
-Media bytes go directly from Google and Microsoft. Cloudframe/Vercel does not proxy, cache, persist, remux, or transcode provider bodies. The approved TV deliberately receives the short-lived Google access token in memory; after vending, device revocation or root removal blocks new descriptors but cannot revoke that token before its provider expiry. The token is never written to browser storage, cookies, URLs, logs, telemetry, or error text.
-
-Legacy MPEG candidates get one native retry through a worker-only alias ending in the sanitized original filename. The retry uses identical bytes and MIME type; it does not change the container or codec. Whether an exact file such as `MOV00516.MPG` decodes remains a real-LG result, and confirmed successful delivery followed by both native failures is an honest decoder limitation rather than a transport failure.
-
-## Firestore identities after cutover
-
-- The permanent runtime writer has only `datastore.entities.create` and `datastore.entities.update`, scoped to the exact recovery document where supported. It has no get/list permission.
-- Migration and restore use a separate operator identity with temporary read/write access.
-- The temporary legacy-cookie reader and compatibility exchange have been removed. Existing sealed version-2 sessions continue normally; an old legacy cookie is rejected and cleared by the final authentication path.
-
-No migration, deployment, rollback, or recovery command deletes legacy Firestore documents or a Google Cloud/Firebase project. Any cleanup requires separate approval, an exact inventory, and a dry run.
-
-Detailed setup, permissions, key rotation, deployment, migration, recovery, rollback, and observability procedures are in [docs/operations/firebase-vercel-setup.md](docs/operations/firebase-vercel-setup.md). Real LG webOS acceptance is in [docs/operations/webos-acceptance.md](docs/operations/webos-acceptance.md).
+Bearer tokens, provider download capabilities, internal source-gateway capabilities, session IDs, and FFmpeg stderr are not exposed by Admin diagnostics or normal logs. Back up `/data` explicitly while the container is stopped; a container or image is replaceable, but `/data` is the durable household state.

@@ -74,9 +74,9 @@ components:
 
 ## Overview
 
-**Creative North Star: "Screening Room Ledger."** Cloudframe programs household media like a private screening, not a generic SaaS dashboard. Projection black carries the room; warm program stock carries the household's approved selection; a single cue orange marks action, motion, and attention. The result should feel like a precise projection-booth cue sheet that still makes live-source, access, and recovery truth easy to read.
+**Creative North Star: "Screening Room Ledger."** Cloudframe programs household media like a private screening, not a generic SaaS dashboard. Projection black carries the room; warm program stock carries the household's approved selection; a single cue orange marks action, motion, and attention. The result should feel like a precise projection-booth cue sheet that still makes live-source, access, local-storage, and transcoder truth easy to read.
 
-The visual story follows the runtime truth: private Vercel Blob is the active control ledger, Firestore is an explicit recovery copy only, live Google Drive and OneDrive metadata supplies the program, browser-side authenticated direct delivery sends media bytes directly from both providers, and local TV watch history never appears as a server-side admin fact. The approved TV holds a short-lived Google bearer token only in memory while its root-scoped service worker forwards exact raw or filename-alias requests; the interface must never imply that Vercel streams, caches, remuxes, or transcodes provider media.
+The visual story follows the runtime truth: encrypted local SQLite under `/data` is the household control ledger, live read-only Google Drive and OneDrive metadata supplies the program, browser-side authenticated direct delivery handles compatible media, and FFmpeg demand-paged HLS handles incompatible video for one active TV transcode. Local TV watch history never appears as a server-side admin fact. The interface must distinguish direct delivery, local transcode cache use, busy state, and explicit backup truth without exposing provider credentials or internal capabilities.
 
 The admin surface keeps the visible source truth above quiet navigation, then places the live provider stage beside the household program so a folder's move into the program remains legible. The TV surface enlarges the same hierarchy for a remote and viewing distance: collection first, program status attached, chrome only when it serves the moment. The locally generated program-stock raster supplies paper fiber, registration marks, perforation dots, and sparse cue geometry without becoming a decorative background.
 
@@ -85,7 +85,7 @@ The admin surface keeps the visible source truth above quiet navigation, then pl
 - Projection black and warm stock create the two dominant planes.
 - Cue orange is reserved for a decision, active state, progress, or focus.
 - Hairline seams and ledger type describe state before another container does.
-- Truth stays attached to its source, program entry, collection, or recovery path.
+- Truth stays attached to its source, program entry, collection, local-storage record, or transcoder path.
 - Admin and television use one world at their own scale rather than mimicking each other.
 
 ## Colors
@@ -116,7 +116,7 @@ The palette is a restrained projection booth: almost-black room, tactile stock, 
 
 **The Single Cue Rule.** Cue orange carries a reason to act or orient; it is not a general decoration or a competing surface color.
 
-**The Stock Means Selected Rule.** Warm stock signals the household program, a recovery panel, or a deliberate reading surface—not an arbitrary card fill.
+**The Stock Means Selected Rule.** Warm stock signals the household program, a local-storage or backup panel, or a deliberate reading surface—not an arbitrary card fill.
 
 ## Typography
 
@@ -124,14 +124,14 @@ The palette is a restrained projection booth: almost-black room, tactile stock, 
 
 **Body Font:** Cloudframe Sans / Instrument Sans Variable (with Segoe UI fallback)
 
-**Character:** Condensed all-caps headings give the program its printed, cinematic authority; the sans remains calm and direct for source names, recovery language, and long-running household administration. Counts, timestamps, and status measures use tabular figures.
+**Character:** Condensed all-caps headings give the program its printed, cinematic authority; the sans remains calm and direct for source names, backup and transcoder language, and long-running household administration. Counts, timestamps, and status measures use tabular figures.
 
 ### Hierarchy
 
 - **Display:** Uppercase, tightly led ledger titles, projection titles, state panels, and collection names.
 - **Headline:** Large condensed program language that can hold the screen without adding visual noise.
 - **Title:** Condensed section labels for rows, drawers, and cards where the item name is the primary read.
-- **Body:** Plain sans explanation for provider state, root access, recovery direction, and form help.
+- **Body:** Plain sans explanation for provider state, root access, backup direction, transcoder state, and form help.
 - **Label:** Compact uppercase sans with tracking for rails, counts, and structural annotations.
 
 ### Named Rules
@@ -140,7 +140,7 @@ The palette is a restrained projection booth: almost-black room, tactile stock, 
 
 ## Layout
 
-Admin is a two-plane operating composition. Source connection and recovery-copy truth stay visible at the top; the source workbench then gives roughly two-thirds of its stage to live provider folders and one-third to the household program. The program is the consequence of browsing, not a disconnected settings list. Hairline seams, shared edges, and a short taskbar create the ledger without a stack of floating cards.
+Admin is a two-plane operating composition. Source connection, encrypted local-storage, and transcoder truth stay visible at the top; the source workbench then gives roughly two-thirds of its stage to live provider folders and one-third to the household program. The program is the consequence of browsing, not a disconnected settings list. Hairline seams, shared edges, and a short taskbar create the ledger without a stack of floating cards.
 
 At narrower admin widths, the truth strip, figures, source planes, device ledger, and settings grid collapse to one readable sequence. The active source-health strip remains near the work without obscuring its contents. Standard admin controls maintain the touch-ready control height.
 
@@ -154,7 +154,7 @@ Depth comes primarily from tonal planes, stock-versus-projection contrast, image
 
 - **Cue action lift:** A restrained warm shadow under the primary admin action.
 - **Focused TV card:** A deep black lift plus cue-colored focus halo makes the remote target unmistakable.
-- **Drawer and modal lift:** Dense projection shadow separates temporary access and recovery surfaces from the current program.
+- **Drawer and modal lift:** Dense projection shadow separates temporary access, backup, and diagnostic surfaces from the current program.
 
 ### Named Rules
 
@@ -169,7 +169,7 @@ The system is square by default: ledger entries, inputs, controls, badges where 
 ### Buttons
 
 - **Character:** Direct cue marks for committed actions; quiet outlined controls for navigation and secondary tasks.
-- **Primary:** Cue orange fills the action while deep projection text keeps it crisp. TV enrollment and recovery actions use the taller remote-scale version; admin controls retain the compact touch-ready version.
+- **Primary:** Cue orange fills the action while deep projection text keeps it crisp. TV enrollment and recovery-from-error actions use the taller remote-scale version; admin controls retain the compact touch-ready version.
 - **Secondary / Ghost:** Projection or transparent backgrounds, stock text, and hairline borders let the primary cue remain rare.
 - **Hover / Focus:** Keep the silhouette stable; visible focus uses the bright cue ring and a clear offset. Disabled actions dim without hiding their label.
 
@@ -196,13 +196,13 @@ The system is square by default: ledger entries, inputs, controls, badges where 
 
 ### Program Projection
 
-**Character:** The TV's oversized first read. Collection imagery or stock art fills the projection field while the adjacent program ledger names availability, count, and recovery. Ready, loading, provider-failed, storage-disabled, and revoked states remain visibly distinct; loading uses a pulsing cue, while blocked uses danger rather than a falsely empty collection.
+**Character:** The TV's oversized first read. Collection imagery or stock art fills the projection field while the adjacent program ledger names availability, count, and playback status. Ready, loading, provider-failed, storage-disabled, and revoked states remain visibly distinct; loading uses a pulsing cue, while blocked uses danger rather than a falsely empty collection.
 
 ## Do's and Don'ts
 
 ### Do:
 
-- **Do** keep provider, root-access, and recovery-copy truth adjacent to the source or household program entry it describes.
+- **Do** keep provider, root-access, local-storage, and transcoder truth adjacent to the source or household program entry it describes.
 - **Do** use the real program-stock material only as a purposeful selected or reading plane, with its cue geometry quiet enough for the information to lead.
 - **Do** preserve the admin relationship of visible source truth, live provider stage, and household program.
 - **Do** preserve television-scale type, safe insets, and an unmistakable focused card for remote operation.
