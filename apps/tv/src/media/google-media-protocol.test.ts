@@ -3,6 +3,7 @@ import {
   googleMediaAlias,
   googleMediaFingerprint,
   isExactGoogleMediaUrl,
+  isLegacyMpeg,
   sanitizeMediaFilename,
   validSingleRange,
 } from "./google-media-protocol";
@@ -11,6 +12,13 @@ const RAW_URL =
   "https://www.googleapis.com/drive/v3/files/file_123?alt=media&supportsAllDrives=true";
 
 describe("Google media protocol helpers", () => {
+  it("recognizes only legacy MPEG MIME or filename candidates", () => {
+    expect(isLegacyMpeg({ name: "MOV00516.MPG", mimeType: "video/mpeg" })).toBe(true);
+    expect(isLegacyMpeg({ name: "archive.MPEG", mimeType: "application/octet-stream" })).toBe(true);
+    expect(isLegacyMpeg({ name: "disc.DAT", mimeType: null })).toBe(true);
+    expect(isLegacyMpeg({ name: "movie.mp4", mimeType: "video/mp4" })).toBe(false);
+  });
+
   it("accepts only the exact Google Drive media boundary", () => {
     expect(isExactGoogleMediaUrl(RAW_URL)).toBe(true);
     expect(isExactGoogleMediaUrl(

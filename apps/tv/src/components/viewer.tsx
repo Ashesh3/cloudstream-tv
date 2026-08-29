@@ -15,6 +15,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "p
 
 import type { TvApi } from "../api/client";
 import { GoogleMediaBridgeError, type GoogleMediaBridge, type PreparedGoogleMediaSource } from "../media/google-media-bridge";
+import { isLegacyMpeg } from "../media/google-media-protocol";
 import type { LocalWatchHistory } from "../state/local-watch-history";
 import { ImageViewer } from "./image-viewer";
 import { VideoPlayer } from "./video-player";
@@ -58,6 +59,7 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
   const urlsRef = useRef(state.urls);
   const latestResumeOverrides = useRef<Record<string, number>>({});
   const latestVideoPositions = useRef<Record<string, number>>({});
+  const pendingMediaEvidence = useRef<Record<string, string>>({});
   const lastSavedSnapshots = useRef<Record<string, string>>({});
   const [resumeOverrides, setResumeOverrides] = useState<Record<string, number>>({});
   const closed = useRef(false);
@@ -389,9 +391,85 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
 
   const onMediaError = (itemId: string, element: HTMLVideoElement | null) => {
     if (unauthorized.current || !mounted.current) return;
+    if (element && videoElementFor(itemId) !== element) return;
     saveElementHistory(itemId, element);
-    if (element && Number.isFinite(element.currentTime) && element.currentTime >= 0) latestVideoPositions.current[itemId] = element.currentTime;
-    dispatch({ type: "media-error", nodeId: itemId, kind: element?.error?.code === 4 ? "codec" : "generic" });
+    const resumeSeconds = element && Number.isFinite(element.currentTime) && element.currentTime >= 0 ? element.currentTime : 0;
+    if (element) latestVideoPositions.current[itemId] = resumeSeconds;
+    const currentUrl = urlsRef.current[itemId];
+    const sessionId = preparedSessions.current[itemId];
+    const failedItem = state.items.find(item => item.id === itemId);
+    if (!currentUrl || currentUrl.status !== "ready" ||
+      (currentUrl.sourceKind !== "google-raw" && currentUrl.sourceKind !== "google-filename") ||
+      !sessionId || !failedItem) {
+      dispatch({ type: "media-error", nodeId: itemId, kind: "generic" });
+      return;
+    }
+    const evidenceKey = `${sessionId}:${currentUrl.sourceKind}:${currentUrl.url}`;
+    if (pendingMediaEvidence.current[itemId] === evidenceKey) return;
+    pendingMediaEvidence.current[itemId] = evidenceKey;
+    const nativeErrorCode = element?.error?.code;
+    void googleMedia.waitForEvidence(sessionId, 300).then(() => {
+      const latestUrl = urlsRef.current[itemId];
+      if (unauthorized.current || navigationExpired.current || closed.current || !mounted.current ||
+        activeRef.current.id !== itemId || preparedSessions.current[itemId] !== sessionId ||
+        !latestUrl || latestUrl.status !== "ready" || latestUrl.sourceKind !== currentUrl.sourceKind || latestUrl.url !== currentUrl.url) return;
+      const evidence = googleMedia.evidence(sessionId);
+      if (evidence.attempt !== latestUrl.sourceKind) {
+        dispatch({ type: "media-error", nodeId: itemId, kind: "generic" });
+        return;
+      }
+
+      if (evidence.outcome === "response" && (evidence.status === 401 || evidence.status === 403)) {
+        latestResumeOverrides.current[itemId] = resumeSeconds;
+        setResumeOverrides(current => ({ ...current, [itemId]: resumeSeconds }));
+        dispatch({ type: "authorization-expired", nodeId: itemId, resumeSeconds });
+        return;
+      }
+      if (evidence.outcome === "bridge-error") {
+        dispatch({ type: "media-error", nodeId: itemId, kind: "bridge" });
+        return;
+      }
+      if (evidence.outcome === "network-error" || (evidence.outcome === "response" && evidence.status !== 200 && evidence.status !== 206)) {
+        dispatch({ type: "media-error", nodeId: itemId, kind: "transport" });
+        return;
+      }
+      if (evidence.outcome !== "response" || (evidence.status !== 200 && evidence.status !== 206)) {
+        dispatch({ type: "media-error", nodeId: itemId, kind: "generic" });
+        return;
+      }
+      if (latestUrl.sourceKind === "google-filename") {
+        dispatch({ type: "media-error", nodeId: itemId, kind: "decoder" });
+        return;
+      }
+      if (failedItem.kind === "image") {
+        dispatch({ type: "media-error", nodeId: itemId, kind: "decoder" });
+        return;
+      }
+      if (nativeErrorCode !== 4) {
+        dispatch({ type: "media-error", nodeId: itemId, kind: "generic" });
+        return;
+      }
+      if (latestUrl.sourceKind === "google-raw" && isLegacyMpeg(failedItem)) {
+        const filenameSource = googleMedia.filenameSource(sessionId);
+        if (filenameSource?.sessionId === sessionId && filenameSource.sourceKind === "google-filename") {
+          latestResumeOverrides.current[itemId] = resumeSeconds;
+          setResumeOverrides(current => ({ ...current, [itemId]: resumeSeconds }));
+          dispatch({
+            type: "compatibility-source",
+            nodeId: itemId,
+            url: filenameSource.sourceUrl,
+            sourceKind: filenameSource.sourceKind,
+            resumeSeconds
+          });
+          return;
+        }
+        dispatch({ type: "media-error", nodeId: itemId, kind: "bridge" });
+        return;
+      }
+      dispatch({ type: "media-error", nodeId: itemId, kind: "decoder" });
+    }).then(() => {
+      if (pendingMediaEvidence.current[itemId] === evidenceKey) delete pendingMediaEvidence.current[itemId];
+    });
   };
 
   const historyEntry = history.get(active.id);
@@ -407,12 +485,17 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
       {!historyAvailable ? <p className="viewer-history-status" role="status">Watch progress is unavailable on this TV, but playback will continue.</p> : null}
       {resumeOverrides[active.id] ? <span className="viewer-resume-note">Resuming at {formatResume(resumeOverrides[active.id]!)}</span> : null}
       <div className="viewer-stage">
-        {state.mediaError?.kind === "codec" ? (
-          <ViewerError title="This video format cannot play on this TV" item={active} body="Cloudframe streams the original file directly and does not transcode it. Try a browser-compatible H.264/AAC MP4." onRetry={retry} />
-        ) : state.mediaError?.kind === "bridge" ? (
-          <ViewerError title="This media could not be prepared" item={active} body="This TV could not prepare the Google media link. You can request one fresh link safely." onRetry={retry} />
+        {state.mediaError?.kind === "bridge" ? (
+          <ViewerError title="Direct Google playback is unavailable on this browser" item={active} body="This TV could not start the direct Google media bridge." />
+        ) : state.mediaError?.kind === "transport" ? (
+          <ViewerError title="The Google media link could not be opened" item={active} body="The TV could not read this file directly from Google." />
+        ) : state.mediaError?.kind === "decoder" ? (
+          <ViewerError title="This file reached the TV, but could not be decoded" item={active} body={active.kind === "video"
+            ? "The TV browser could not decode this file's video or audio format."
+            : "The TV browser could not decode this image format."} />
         ) : state.mediaError ? (
-          <ViewerError title="This media could not be opened" item={active} body={activeUrl?.refreshUsed ? "A fresh link did not solve this media error." : "The provider link failed. You can request one fresh link safely."} onRetry={retry} />
+          <ViewerError title="This media could not be opened" item={active} body={activeUrl?.refreshUsed ? "A fresh link did not solve this media error." : "The provider link failed. You can request one fresh link safely."}
+            onRetry={state.mediaError.kind === "generic" && !activeUrl?.refreshUsed ? retry : undefined} />
         ) : active.kind === "image" ? (
           <ImageViewer item={active} url={activeUrl} previewUrl={previews[active.id]?.url} onError={() => onMediaError(active.id, null)} />
         ) : (
@@ -468,8 +551,8 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
   );
 }
 
-function ViewerError({ title, item, body, onRetry }: { title: string; item: ViewerMediaItem; body: string; onRetry: () => void }) {
-  return <div className="viewer-error" role="alert"><h2>{title}</h2><strong>{item.name}</strong><span>{item.mimeType ?? "Unknown format"}</span><p>{body}</p><button type="button" onClick={onRetry}>Try fresh URL</button></div>;
+function ViewerError({ title, item, body, onRetry }: { title: string; item: ViewerMediaItem; body: string; onRetry?: () => void }) {
+  return <div className="viewer-error" role="alert"><h2>{title}</h2><strong>{item.name}</strong><span>{item.mimeType ?? "Unknown format"}</span><p>{body}</p>{onRetry ? <button type="button" onClick={onRetry}>Try fresh URL</button> : null}</div>;
 }
 
 function toViewerItem(item: TvBrowseItemDto): ViewerMediaItem {

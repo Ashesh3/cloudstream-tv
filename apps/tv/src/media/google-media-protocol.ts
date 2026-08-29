@@ -60,6 +60,10 @@ export function isExactGoogleMediaUrl(value: string): boolean {
   }
 }
 
+export function isLegacyMpeg(item: { name: string; mimeType: string | null }): boolean {
+  return item.mimeType?.toLowerCase() === "video/mpeg" || /\.(?:mpg|mpeg|dat)$/iu.test(item.name);
+}
+
 export function validSingleRange(value: string | null): ParsedSingleRange | null {
   if (value === null || value.length < 8 || value.length > 128 || value.indexOf(",") >= 0) return null;
   const match = /^bytes=(?:(\d+)-(\d*)|-(\d+))$/u.exec(value);

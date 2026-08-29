@@ -7,7 +7,7 @@ export interface ViewerMediaItem {
 }
 
 export type ViewerUrlStatus = "loading" | "ready" | "error";
-export type ViewerMediaErrorKind = "authorization" | "bridge" | "codec" | "generic";
+export type ViewerMediaErrorKind = "authorization" | "bridge" | "transport" | "decoder" | "generic";
 export type ViewerMediaSourceKind = "direct" | "google-raw" | "google-filename";
 
 export interface ViewerUrlState {
@@ -64,6 +64,7 @@ export type ViewerAction =
   | { type: "url-expired"; nodeId: string; requestId: number; resumeSeconds: number }
   | { type: "authorization-expired"; nodeId: string; resumeSeconds: number }
   | { type: "manual-retry"; nodeId: string; resumeSeconds: number }
+  | { type: "compatibility-source"; nodeId: string; url: string; sourceKind: "google-filename"; resumeSeconds: number }
   | { type: "controls-timeout" }
   | { type: "activity" };
 
@@ -183,7 +184,9 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
         ...state,
         urls: { ...state.urls, [action.nodeId]: { ...current, status: "error", errorKind: action.kind } },
         mediaError: active ? { nodeId: action.nodeId, kind: action.kind } : state.mediaError,
-        slideshowActive: active ? false : state.slideshowActive
+        slideshowActive: active ? false : state.slideshowActive,
+        playbackIntent: active ? "pause" : state.playbackIntent,
+        videoPlaying: active ? false : state.videoPlaying
       };
     }
     case "url-expired": {
@@ -212,6 +215,24 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
     case "authorization-expired":
     case "manual-retry":
       return refreshUrlOnce(state, action.nodeId, action.resumeSeconds);
+    case "compatibility-source": {
+      const current = state.urls[action.nodeId];
+      if (activeViewerItem(state).id !== action.nodeId || current?.status !== "ready" || current.sourceKind !== "google-raw") return state;
+      return {
+        ...state,
+        urls: {
+          ...state.urls,
+          [action.nodeId]: {
+            ...current,
+            url: action.url,
+            sourceKind: action.sourceKind,
+            resumeSeconds: finiteNonNegative(action.resumeSeconds),
+            errorKind: undefined
+          }
+        },
+        mediaError: state.mediaError?.nodeId === action.nodeId ? null : state.mediaError
+      };
+    }
     case "controls-timeout":
       return state.videoPlaying && activeViewerItem(state).kind === "video" && !state.overlayOpen
         ? { ...state, controlsVisible: false }
@@ -270,14 +291,18 @@ function refreshUrlOnce(state: ViewerState, nodeId: string, resumeSeconds: numbe
   if (!current) return state;
   const retry = state.retryLedger[nodeId] ?? { revision: current.revision, used: current.refreshUsed };
   if (retry.used) {
+    const active = activeViewerItem(state).id === nodeId;
     return {
       ...state,
       urls: {
         ...state.urls,
         [nodeId]: { ...current, status: "error", refreshUsed: true, errorKind: "authorization" }
       },
-      mediaError: activeViewerItem(state).id === nodeId ? { nodeId, kind: "authorization" } : state.mediaError,
-      slideshowActive: activeViewerItem(state).id === nodeId ? false : state.slideshowActive
+      mediaError: active ? { nodeId, kind: "authorization" } : state.mediaError,
+      slideshowActive: active ? false : state.slideshowActive,
+      playbackIntent: active ? "pause" : state.playbackIntent,
+      videoPlaying: active ? false : state.videoPlaying,
+      controlsVisible: active ? true : state.controlsVisible
     };
   }
   const nextRetry = { ...retry, used: true };
