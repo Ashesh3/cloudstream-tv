@@ -24,11 +24,6 @@ import {
   testControlDocument,
 } from "./helpers/control-plane";
 
-const RESPONSE_HEADERS = {
-  "cache-control": "private, no-store",
-  "referrer-policy": "no-referrer",
-};
-
 describe("direct provider URL vending", () => {
   it("returns the validated raw Google URL and short-lived bearer credential", async () => {
     const harness = createHarness();
