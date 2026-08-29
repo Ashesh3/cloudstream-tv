@@ -53,6 +53,6 @@
     "@node-rs/argon2-linux-x64-gnu": "2.1.0"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24.5.0"
   }
 }
