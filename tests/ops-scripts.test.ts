@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFile } from "node:child_process";
@@ -217,6 +217,47 @@ describe("operations scripts", () => {
     expect(source).toContain("remote-debugging-port");
     expect(source).toContain('toLocaleLowerCase().includes("cloudframe")');
     expect(source).not.toContain("latest");
+  });
+
+  it("keeps the Chromium probe profile in its temporary root and rejects every production probe marker", async () => {
+    const harnessUrl = new URL("../scripts/chromium68-harness.mjs", import.meta.url);
+    const { assertProductionWorker, createProbePaths, removeProbeRoot } = await import(harnessUrl.href);
+    const root = await createProbePaths();
+
+    expect(root.profile.startsWith(root.root)).toBe(true);
+    expect(root.worker.startsWith(root.root)).toBe(true);
+    expect(root.profile).not.toContain(join(".cache", "chromium-68"));
+    await mkdir(root.profile, { recursive: true });
+    await writeFile(join(root.profile, "worker-origin.txt"), "http://127.0.0.1:4173/sample.wav");
+    await removeProbeRoot(root.root);
+    await expect(access(root.root)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const failed = await createProbePaths();
+    let failure: Error | null = null;
+    try {
+      await mkdir(failed.profile, { recursive: true });
+      throw new Error("simulated Chromium failure");
+    } catch (error) {
+      failure = error as Error;
+    } finally {
+      await removeProbeRoot(failed.root);
+    }
+    expect(failure?.message).toBe("simulated Chromium failure");
+    await expect(access(failed.root)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(removeProbeRoot(tmpdir()))
+      .rejects.toThrow("Refusing to remove an invalid Chromium 68 temporary root");
+
+    expect(() => assertProductionWorker("self.addEventListener('fetch',()=>{});"))
+      .not.toThrow();
+    for (const marker of [
+      "http://127.0.0.1:4173",
+      "http://localhost:4173",
+      "/sample.wav",
+      "__CLOUDFRAME_MEDIA_PROBE_ORIGIN__",
+    ]) {
+      expect(() => assertProductionWorker(marker), marker)
+        .toThrow("Production media worker contains probe configuration");
+    }
   });
 });
 

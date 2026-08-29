@@ -1,13 +1,17 @@
 import { createWriteStream } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { access, mkdir, readFile, readdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
-import { tmpdir } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
 import { WebSocket } from "ws";
+import {
+  assertProductionWorker,
+  createProbePaths,
+  removeProbeRoot,
+} from "./chromium68-harness.mjs";
 
 const revision = "555668";
 const cache = resolve(".cache", "chromium-68", revision);
@@ -23,14 +27,14 @@ const probeToken = randomBytes(24).toString("base64url");
 const mediaBody = pcmWav(10);
 const upstreamRequests = [];
 let aliasApplicationRequests = 0;
-const temporaryDirectory = await mkdtemp(join(tmpdir(), "cloudframe-chromium68-"));
-const probeWorkerPath = join(temporaryDirectory, "cloudframe-media-sw.js");
 const productionWorkerPath = resolve("apps", "tv", "dist", "cloudframe-media-sw.js");
-const profile = join(cache, "profile");
+let temporaryDirectory = null;
+let probeWorkerPath = null;
+let profile = null;
 let chrome = null;
 let ws = null;
-
-await mkdir(cache, { recursive: true });
+let requestBrowserClose = null;
+let completed = false;
 
 const mediaServer = createServer((request, response) => {
   const pathname = new URL(request.url ?? "/", mediaOrigin).pathname;
@@ -143,6 +147,11 @@ const staticServer = createServer(async (request, response) => {
 });
 
 try {
+  const probePaths = await createProbePaths();
+  temporaryDirectory = probePaths.root;
+  probeWorkerPath = probePaths.worker;
+  profile = probePaths.profile;
+  await mkdir(cache, { recursive: true });
   try {
     await access(executable);
   } catch {
@@ -157,12 +166,7 @@ try {
   }
 
   const productionWorker = await readFile(productionWorkerPath, "utf8");
-  if (
-    /https?:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?/iu.test(productionWorker) ||
-    productionWorker.includes("/sample.wav")
-  ) {
-    throw new Error("Production media worker contains probe configuration");
-  }
+  assertProductionWorker(productionWorker);
   await runNode([
     "scripts/build-tv-media-worker.mjs",
     "--outfile",
@@ -175,7 +179,6 @@ try {
     throw new Error("Temporary media worker does not contain the exact probe origin");
   }
 
-  await rm(profile, { recursive: true, force: true });
   await Promise.all([
     listen(mediaServer, mediaPort),
     listen(staticServer, sitePort),
@@ -206,6 +209,7 @@ try {
     pending.set(commandId, { resolve: resolvePromise, reject });
     ws.send(JSON.stringify({ id: commandId, method, params }));
   });
+  requestBrowserClose = () => command("Browser.close");
   await command("Runtime.enable");
   const product = await command("Browser.getVersion");
   if (!String(product.product).includes("Chrome/68.")) {
@@ -411,15 +415,20 @@ try {
 
   const unexpectedErrors = runtimeErrors.filter(error => !isExpectedLegacyProbeError(error));
   if (unexpectedErrors.length) throw new Error(`Chromium 68 runtime errors: ${JSON.stringify(unexpectedErrors)}`);
-  process.stdout.write(`Pinned Chromium 68 revision ${revision} loaded authenticated Range media and filename alias successfully.\n`);
+  completed = true;
 } finally {
-  if (ws) ws.close();
-  if (chrome) chrome.kill();
-  await Promise.all([
-    closeServer(staticServer),
-    closeServer(mediaServer),
-  ]);
-  await rm(temporaryDirectory, { recursive: true, force: true });
+  await cleanupProbeResources({
+    chrome,
+    requestBrowserClose,
+    ws,
+    staticServer,
+    mediaServer,
+    temporaryDirectory,
+  });
+}
+
+if (completed) {
+  process.stdout.write(`Pinned Chromium 68 revision ${revision} loaded authenticated Range media and filename alias successfully.\n`);
 }
 
 async function waitForDebugger(debugPort) {
@@ -462,6 +471,88 @@ function closeServer(server) {
   return server.listening
     ? new Promise(resolvePromise => server.close(resolvePromise))
     : Promise.resolve();
+}
+
+async function cleanupProbeResources(resources) {
+  const failures = [];
+  const steps = [
+    () => closeChromium(resources.chrome, resources.requestBrowserClose),
+    () => closeWebSocket(resources.ws),
+    () => closeServer(resources.staticServer),
+    () => closeServer(resources.mediaServer),
+    () => resources.temporaryDirectory
+      ? removeProbeRoot(resources.temporaryDirectory)
+      : Promise.resolve(),
+  ];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Chromium 68 cleanup failed");
+  }
+}
+
+async function closeChromium(child, requestClose) {
+  if (!child || processExited(child)) return;
+  if (requestClose) {
+    try {
+      await Promise.race([
+        requestClose().catch(() => undefined),
+        delay(2_000),
+      ]);
+    } catch {
+      // A browser that is already exiting may reject its final command.
+    }
+  }
+  if (await waitForProcessExit(child, 3_000)) return;
+  child.kill();
+  if (!await waitForProcessExit(child, 5_000)) {
+    throw new Error("Pinned Chromium did not exit before profile cleanup");
+  }
+}
+
+function waitForProcessExit(child, timeoutMs) {
+  if (processExited(child)) return Promise.resolve(true);
+  return new Promise(resolvePromise => {
+    const exited = () => {
+      globalThis.clearTimeout(timer);
+      resolvePromise(true);
+    };
+    const timer = globalThis.setTimeout(() => {
+      child.removeListener("exit", exited);
+      resolvePromise(false);
+    }, timeoutMs);
+    child.once("exit", exited);
+  });
+}
+
+function processExited(child) {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+function closeWebSocket(socket) {
+  if (!socket || socket.readyState === WebSocket.CLOSED) return Promise.resolve();
+  return new Promise(resolvePromise => {
+    const closed = () => {
+      globalThis.clearTimeout(timer);
+      resolvePromise();
+    };
+    const timer = globalThis.setTimeout(() => {
+      socket.removeListener("close", closed);
+      resolvePromise();
+    }, 1_000);
+    socket.once("close", closed);
+    try {
+      socket.close();
+    } catch {
+      closed();
+    }
+  });
 }
 
 function runNode(args) {
