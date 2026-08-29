@@ -46,7 +46,11 @@ function node(
     createdAt: new Date("2026-08-19T10:00:00.000Z"),
     modifiedAt: new Date("2026-08-21T10:00:00.000Z"),
     thumbnailRevision: kind === "folder" ? null : "thumb-7",
-    hasPreview: kind !== "folder"
+    hasPreview: kind !== "folder",
+    preview: kind === "folder" ? null : {
+      url: `https://lh3.googleusercontent.com/${providerNodeId}=s720`,
+      expiresAt: new Date(TEST_NOW.getTime() + 20 * 60_000)
+    }
   };
 }
 
@@ -58,7 +62,14 @@ class ProviderHarness {
   folderItems: ProviderNode[] = [
     node("folder-z", "Zoo", "provider-trips"),
     node("image-new", "New.jpg", "provider-trips", "image"),
-    node("folder-a", "albums", "provider-trips"),
+    {
+      ...node("folder-a", "albums", "provider-trips"),
+      hasPreview: true,
+      preview: {
+        url: "https://lh3.googleusercontent.com/folder-a=s720",
+        expiresAt: new Date(TEST_NOW.getTime() + 20 * 60_000)
+      }
+    },
     {
       ...node("video-old", "Old.mp4", "provider-trips", "video"),
       capturedAt: new Date("2025-01-01T00:00:00.000Z")
@@ -303,10 +314,15 @@ describe("live TV browsing", () => {
       providerNodeId: "folder-a",
       parentProviderNodeId: "provider-trips",
       credentialVersion: 1,
-      expiresAt: TEST_NOW.getTime() + 30 * 60_000
+      expiresAt: TEST_NOW.getTime() + 30 * 60_000,
+      preview: {
+        url: "https://lh3.googleusercontent.com/folder-a=s720",
+        expiresAt: TEST_NOW.getTime() + 20 * 60_000
+      }
     });
+    expect(page.children[0]).toMatchObject({ kind: "folder", hasPreview: true });
     expect(JSON.stringify(page)).not.toMatch(
-      /providerNodeId|accessToken|raw-provider-cursor|sourceId|rootId/
+      /providerNodeId|accessToken|raw-provider-cursor|sourceId|rootId|folder-a=s720/
     );
   });
 

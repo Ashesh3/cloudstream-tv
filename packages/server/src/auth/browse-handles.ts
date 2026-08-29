@@ -23,8 +23,14 @@ export interface BrowseItemClaims {
   kind: "folder" | "image" | "video";
   name: string;
   mimeType: string | null;
+  preview?: BrowsePreviewClaims | null;
   credentialVersion: number;
   issuedAt: number;
+  expiresAt: number;
+}
+
+export interface BrowsePreviewClaims {
+  url: string;
   expiresAt: number;
 }
 
@@ -89,6 +95,29 @@ function positiveInteger(value: unknown): number {
   return parsed;
 }
 
+function preview(value: unknown): BrowsePreviewClaims | null {
+  if (value === undefined || value === null) return null;
+  const input = record(value);
+  const url = string(input.url);
+  const expiresAt = positiveInteger(input.expiresAt);
+  if (url.length > 4_096) fail();
+  try {
+    const parsed = new URL(url);
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.hash !== ""
+    ) {
+      fail();
+    }
+  } catch (error) {
+    if (error instanceof SealedValueError) throw error;
+    fail();
+  }
+  return { url, expiresAt };
+}
+
 function common(value: UnknownRecord, now: Date) {
   if (value.version !== 2) {
     fail();
@@ -123,7 +152,8 @@ function parseItem(value: unknown, now: Date): BrowseItemClaims {
     parentProviderNodeId: nullableString(input.parentProviderNodeId),
     kind,
     name: string(input.name),
-    mimeType: nullableString(input.mimeType)
+    mimeType: nullableString(input.mimeType),
+    preview: preview(input.preview)
   };
 }
 

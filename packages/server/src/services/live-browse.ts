@@ -251,6 +251,7 @@ function rootClaims(
     kind: "folder",
     name: root.displayName,
     mimeType: null,
+    preview: null,
     credentialVersion: source.credentialVersion,
     ...issueTimes(now)
   };
@@ -283,6 +284,37 @@ interface SafeProviderNode {
   modifiedAtProvider: string | null;
   thumbnailRevision: string | null;
   hasPreview: boolean;
+  preview: { url: string; expiresAt: number } | null;
+}
+
+function safePreview(value: ProviderNode["preview"]): { url: string; expiresAt: number } | null {
+  if (!value || typeof value !== "object") return null;
+  const url = value.url;
+  const expiresAt = value.expiresAt;
+  if (
+    typeof url !== "string" ||
+    url.length < 1 ||
+    url.length > 4_096 ||
+    !(expiresAt instanceof Date)
+  ) {
+    return null;
+  }
+  const expiryEpoch = Date.prototype.getTime.call(expiresAt);
+  if (!Number.isSafeInteger(expiryEpoch) || expiryEpoch < 1) return null;
+  try {
+    const parsed = new URL(url);
+    if (
+      parsed.protocol !== "https:" ||
+      parsed.username !== "" ||
+      parsed.password !== "" ||
+      parsed.hash !== ""
+    ) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  return { url, expiresAt: expiryEpoch };
 }
 
 function safeProviderNode(
@@ -336,7 +368,8 @@ function safeProviderNode(
       value.thumbnailRevision.length > 0
         ? value.thumbnailRevision
         : null,
-    hasPreview: value.hasPreview === true
+    hasPreview: value.hasPreview === true,
+    preview: safePreview(value.preview)
   };
 }
 
@@ -358,6 +391,7 @@ function itemClaims(
     kind: node.kind,
     name: node.name,
     mimeType: node.mimeType,
+    preview: node.preview,
     credentialVersion,
     ...issueTimes(now)
   };

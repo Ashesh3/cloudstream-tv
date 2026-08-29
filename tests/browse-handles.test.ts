@@ -20,20 +20,55 @@ describe("opaque browse handles", () => {
       kind: "video",
       name: "Lake.mp4",
       mimeType: "video/mp4",
+      preview: {
+        url: "https://public.dm.files.1drv.com/y4m/lake?authkey=preview-secret",
+        expiresAt: TEST_NOW.getTime() + 20 * 60_000
+      },
       credentialVersion: 4,
       issuedAt: TEST_NOW.getTime(),
       expiresAt: TEST_NOW.getTime() + 30 * 60_000
     });
 
-    expect(handle).not.toMatch(/root-secret|provider-secret|parent-secret|Lake/);
+    expect(handle).not.toMatch(/root-secret|provider-secret|parent-secret|Lake|preview-secret/);
     expect(codec.openItem(handle)).toMatchObject({
       householdId: "h1",
       deviceId: "d1",
       sourceId: "s1",
       rootId: "r1",
-      credentialVersion: 4
+      credentialVersion: 4,
+      preview: {
+        url: "https://public.dm.files.1drv.com/y4m/lake?authkey=preview-secret",
+        expiresAt: TEST_NOW.getTime() + 20 * 60_000
+      }
     });
     expect(codec.stableItemId("h1", "s1", "provider-secret")).toMatch(/^item_/);
+  });
+
+  it("opens old item handles without a preview as preview null", () => {
+    const keyring = testAeadKeyring();
+    const codec = createBrowseHandleCodec(keyring, "id-secret", () => TEST_NOW);
+    const oldHandle = sealJson(
+      "cloudframe/browse-item/v2",
+      {
+        version: 2,
+        householdId: "h1",
+        deviceId: "d1",
+        sourceId: "s1",
+        rootId: "r1",
+        rootProviderNodeId: "root-secret",
+        providerNodeId: "provider-secret",
+        parentProviderNodeId: "parent-secret",
+        kind: "image",
+        name: "Old.jpg",
+        mimeType: "image/jpeg",
+        credentialVersion: 4,
+        issuedAt: TEST_NOW.getTime(),
+        expiresAt: TEST_NOW.getTime() + 30 * 60_000
+      },
+      keyring
+    );
+
+    expect(codec.openItem(oldHandle)).toMatchObject({ preview: null });
   });
 
   it("seals provider cursors separately and expires items and cursors after 30 minutes", () => {
@@ -144,7 +179,10 @@ describe("opaque browse handles", () => {
       { ...base, rootId: "" },
       { ...base, kind: "document" },
       { ...base, credentialVersion: 1.5 },
-      { ...base, expiresAt: TEST_NOW.getTime() }
+      { ...base, expiresAt: TEST_NOW.getTime() },
+      { ...base, preview: { url: "http://provider.example/preview", expiresAt: TEST_NOW.getTime() + 1 } },
+      { ...base, preview: { url: `https://provider.example/${"x".repeat(4097)}`, expiresAt: TEST_NOW.getTime() + 1 } },
+      { ...base, preview: { url: "https://provider.example/preview", expiresAt: 1.5 } }
     ]) {
       expect(() => codec.sealItem(claims as typeof base)).toThrowError(
         expect.objectContaining({ code: "SEALED_VALUE_INVALID", message: "SEALED_VALUE_INVALID" })

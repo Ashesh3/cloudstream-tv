@@ -200,7 +200,14 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     expect(page.items[0]).toMatchObject({
       name: "Albums",
       parentProviderId: provider === "google" ? "g-root" : "o-root",
-      kind: "folder"
+      kind: "folder",
+      hasPreview: provider === "onedrive",
+      preview: provider === "onedrive"
+        ? {
+            url: "https://public.dm.files.1drv.com/y4m/folder?authkey=folder-capability",
+            expiresAt: new Date("2026-08-26T00:50:00.000Z")
+          }
+        : null
     });
     expect(page.items[1]).toMatchObject({
       name: "Beach.jpg",
@@ -209,7 +216,16 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       width: 1920,
       height: 1080,
       capturedAt: new Date("2024-03-01T02:03:04.000Z"),
-      hasPreview: true
+      hasPreview: true,
+      preview: provider === "google"
+        ? {
+            url: "https://lh3.googleusercontent.com/google-thumb=s720",
+            expiresAt: accessExpiresAt
+          }
+        : {
+            url: "https://public.dm.files.1drv.com/y4m/image?authkey=image-capability",
+            expiresAt: new Date("2026-08-26T00:50:00.000Z")
+          }
     });
     expect(page.items[2]).toMatchObject({
       name: "Clip.mp4",
@@ -217,10 +233,19 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       width: 1280,
       height: 720,
       createdAt: null,
-      hasPreview: true
+      hasPreview: true,
+      preview: provider === "google"
+        ? {
+            url: "https://lh4.googleusercontent.com/google-video-thumb=s720",
+            expiresAt: accessExpiresAt
+          }
+        : {
+            url: "https://public.storage.live.com/items/video?authkey=video-capability",
+            expiresAt: new Date("2026-08-26T00:50:00.000Z")
+          }
     });
     expect(page.nextCursor).toBeTruthy();
-    expect(JSON.stringify(page)).not.toContain("synthetic.invalid");
+    expect(JSON.stringify(page)).not.toContain(credentials.accessToken);
   });
 
   it("resolves the provider's actual root folder identity", async () => {

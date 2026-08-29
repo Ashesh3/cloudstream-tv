@@ -52,6 +52,7 @@ export interface ProviderNode {
   modifiedAt: Date | null;
   thumbnailRevision: string | null;
   hasPreview: boolean;
+  preview?: TemporaryUrl | null;
 }
 
 export interface Page<T> {

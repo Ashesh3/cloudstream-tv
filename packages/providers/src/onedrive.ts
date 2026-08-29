@@ -101,7 +101,7 @@ export function createOneDriveAdapter(
         credentials.accessToken,
         now
       );
-      const node = normalizeOneDriveItem(item);
+      const node = normalizeOneDriveItem(item, now());
       if (!node || node.kind !== "folder") {
         throw new ProviderError(
           "PROVIDER_BAD_RESPONSE",
@@ -119,7 +119,7 @@ export function createOneDriveAdapter(
         input.credentials.accessToken,
         now
       );
-      const node = normalizeOneDriveItem(item);
+      const node = normalizeOneDriveItem(item, now());
       if (!node) {
         throw new ProviderError(
           "PROVIDER_NOT_FOUND",
@@ -141,7 +141,9 @@ export function createOneDriveAdapter(
       }
       const page = await graphJson<OneDrivePage>(fetch, url, input.credentials.accessToken, now);
       return {
-        items: page.value.map(normalizeOneDriveItem).filter(isDefined),
+        items: page.value
+          .map((item) => normalizeOneDriveItem(item, now()))
+          .filter(isDefined),
         nextCursor: page["@odata.nextLink"] ?? null
       };
     },
@@ -250,7 +252,7 @@ function tokenCredentials(
   };
 }
 
-function normalizeOneDriveItem(item: OneDriveItem): ProviderNode | null {
+function normalizeOneDriveItem(item: OneDriveItem, previewNow: Date): ProviderNode | null {
   const mimeType = item.file?.mimeType ?? "";
   const kind = item.folder
     ? "folder"
@@ -261,6 +263,10 @@ function normalizeOneDriveItem(item: OneDriveItem): ProviderNode | null {
         : null;
   if (!kind || !item.id || !item.name) return null;
   const dimensions = kind === "image" ? item.image : item.video;
+  const previewUrl = item.thumbnails?.[0]?.large?.url;
+  const preview = previewUrl
+    ? { url: previewUrl, expiresAt: temporaryExpiry(previewNow) }
+    : null;
   return {
     providerNodeId: item.id,
     parentProviderId: item.parentReference?.id ?? null,
@@ -274,7 +280,8 @@ function normalizeOneDriveItem(item: OneDriveItem): ProviderNode | null {
     createdAt: date(item.createdDateTime),
     modifiedAt: date(item.lastModifiedDateTime),
     thumbnailRevision: item.eTag ?? null,
-    hasPreview: Boolean(item.thumbnails?.[0]?.large?.url)
+    hasPreview: preview !== null,
+    preview,
   };
 }
 

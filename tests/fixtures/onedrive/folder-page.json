@@ -8,6 +8,7 @@
       "folder": { "childCount": 3 },
       "createdDateTime": "2024-01-02T03:04:05.000Z",
       "lastModifiedDateTime": "2024-02-03T04:05:06.000Z",
+      "thumbnails": [{ "large": { "url": "https://public.dm.files.1drv.com/y4m/folder?authkey=folder-capability" } }],
       "eTag": "folder-etag"
     },
     {
@@ -20,7 +21,7 @@
       "createdDateTime": "2024-03-04T05:06:07.000Z",
       "lastModifiedDateTime": "2024-04-05T06:07:08.000Z",
       "photo": { "takenDateTime": "2024-03-01T02:03:04.000Z" },
-      "thumbnails": [{ "large": { "url": "https://synthetic.invalid/onedrive-thumb" } }],
+      "thumbnails": [{ "large": { "url": "https://public.dm.files.1drv.com/y4m/image?authkey=image-capability" } }],
       "eTag": "image-etag"
     },
     {
@@ -31,7 +32,7 @@
       "video": { "width": 1280, "height": 720 },
       "size": 5678,
       "lastModifiedDateTime": "2024-05-06T07:08:09.000Z",
-      "thumbnails": [{ "large": { "url": "https://synthetic.invalid/onedrive-video-thumb" } }],
+      "thumbnails": [{ "large": { "url": "https://public.storage.live.com/items/video?authkey=video-capability" } }],
       "eTag": "video-etag"
     },
     {

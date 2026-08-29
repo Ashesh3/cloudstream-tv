@@ -95,7 +95,7 @@ export function createGoogleDriveAdapter(
         credentials.accessToken,
         now
       );
-      const node = normalizeGoogleFile(file);
+      const node = normalizeGoogleFile(file, credentials.accessTokenExpiresAt);
       if (!node || node.kind !== "folder") {
         throw new ProviderError(
           "PROVIDER_BAD_RESPONSE",
@@ -113,7 +113,7 @@ export function createGoogleDriveAdapter(
         input.credentials.accessToken,
         now
       );
-      const node = normalizeGoogleFile(file);
+      const node = normalizeGoogleFile(file, input.credentials.accessTokenExpiresAt);
       if (!node) {
         throw new ProviderError(
           "PROVIDER_NOT_FOUND",
@@ -135,7 +135,9 @@ export function createGoogleDriveAdapter(
       if (input.cursor) url.searchParams.set("pageToken", input.cursor);
       const page = await googleJson<GoogleFilePage>(fetch, url, input.credentials.accessToken, now);
       return {
-        items: page.files.map(normalizeGoogleFile).filter(isDefined),
+        items: page.files
+          .map((file) => normalizeGoogleFile(file, input.credentials.accessTokenExpiresAt))
+          .filter(isDefined),
         nextCursor: page.nextPageToken ?? null
       };
     },
@@ -232,7 +234,10 @@ function tokenCredentials(
   };
 }
 
-function normalizeGoogleFile(file: GoogleFile): ProviderNode | null {
+function normalizeGoogleFile(
+  file: GoogleFile,
+  previewExpiresAt: Date,
+): ProviderNode | null {
   const mimeType = file.mimeType ?? "";
   const kind = mimeType === "application/vnd.google-apps.folder"
     ? "folder"
@@ -243,6 +248,12 @@ function normalizeGoogleFile(file: GoogleFile): ProviderNode | null {
         : null;
   if (!kind || !file.id || !file.name) return null;
   const mediaMetadata = kind === "image" ? file.imageMediaMetadata : file.videoMediaMetadata;
+  const preview = file.thumbnailLink
+    ? {
+        url: googleThumbnailUrl(file.thumbnailLink, 720),
+        expiresAt: new Date(previewExpiresAt.getTime()),
+      }
+    : null;
   return {
     providerNodeId: file.id,
     parentProviderId: file.parents?.[0] ?? null,
@@ -256,7 +267,8 @@ function normalizeGoogleFile(file: GoogleFile): ProviderNode | null {
     createdAt: date(file.createdTime),
     modifiedAt: date(file.modifiedTime),
     thumbnailRevision: file.version ?? null,
-    hasPreview: Boolean(file.thumbnailLink)
+    hasPreview: preview !== null,
+    preview,
   };
 }
 
