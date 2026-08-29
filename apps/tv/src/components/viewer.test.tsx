@@ -3,10 +3,15 @@ import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DirectMediaUrlResponse, TvBrowseItemDto } from "@cloudframe/shared";
+import type { DirectMediaUrlResponse, GoogleBearerMediaUrlResponse, TvBrowseItemDto } from "@cloudframe/shared";
 import type { TvApi } from "../api/client";
+import { GoogleMediaBridgeError, unavailableGoogleMediaBridge, type GoogleMediaBridge, type PreparedGoogleMediaSource } from "../media/google-media-bridge";
 import { createLocalWatchHistory, type LocalWatchHistory } from "../state/local-watch-history";
 import { Viewer } from "./viewer";
+
+const TestViewer = (props: Omit<Parameters<typeof Viewer>[0], "googleMedia">) => (
+  <Viewer googleMedia={unavailableGoogleMediaBridge} {...props} />
+);
 
 describe("unified TV viewer", () => {
   beforeEach(() => {
@@ -20,10 +25,214 @@ describe("unified TV viewer", () => {
     vi.restoreAllMocks();
   });
 
+  it("prepares Google video before assigning the raw Drive URL", async () => {
+    const bridge = fakeGoogleMediaBridge();
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockResolvedValue(googleDescriptor("item_video_1", "video"));
+
+    render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={items} selectedItemId="item_video_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+
+    expect(await screen.findByLabelText("Playing Clip.mp4"))
+      .toHaveAttribute("src", googleDescriptor("item_video_1", "video").url);
+    const videoPreparation = bridge.prepare.mock.calls.find(call => call[1].kind === "video");
+    expect(videoPreparation?.[0]).toMatchObject({
+      itemId: "item_video_1",
+      kind: "video",
+      transport: "google-bearer",
+      url: googleDescriptor("item_video_1", "video").url,
+      authorization: { scheme: "Bearer", token: "ya29.test-token" },
+    });
+    expect(videoPreparation?.[1]).toEqual({ name: "Clip.mp4", kind: "video", mimeType: "video/mp4", size: 1_000 });
+    expect(videoPreparation?.[2]).toBeInstanceOf(AbortSignal);
+    expect(document.body.innerHTML).not.toContain("ya29.test-token");
+  });
+
+  it("prepares a full-size Google image through the same bridge", async () => {
+    const bridge = fakeGoogleMediaBridge();
+    const api = viewerApi();
+    const preparation = deferred<PreparedGoogleMediaSource>();
+    bridge.prepare.mockReturnValue(preparation.promise);
+    vi.mocked(api.mediaUrl).mockResolvedValue(googleDescriptor("item_image_1", "image"));
+    render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={items} selectedItemId="item_image_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+    expect(screen.queryByRole("img", { name: "First.jpg" })).not.toBeInTheDocument();
+    preparation.resolve(preparedGoogle("item_image_1", "google-raw"));
+    expect(await screen.findByRole("img", { name: "First.jpg" }))
+      .toHaveAttribute("src", googleDescriptor("item_image_1", "image").url);
+  });
+
+  it("maps Google bridge preparation failures without exposing credentials", async () => {
+    const bridge = fakeGoogleMediaBridge();
+    bridge.prepare.mockRejectedValue(new GoogleMediaBridgeError("GOOGLE_MEDIA_BRIDGE_UNAVAILABLE"));
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockResolvedValue(googleDescriptor("item_image_1", "image"));
+
+    render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={[items[0]!]} selectedItemId="item_image_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+
+    expect(await screen.findByRole("heading", { name: "This media could not be prepared" })).toBeVisible();
+    expect(document.body.innerHTML).not.toContain("ya29.test-token");
+  });
+
+  it("keeps OneDrive direct and never calls the Google bridge", async () => {
+    const bridge = fakeGoogleMediaBridge();
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockResolvedValue(directDescriptor("item_video_1", "video"));
+    render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={items} selectedItemId="item_video_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+    expect(await screen.findByLabelText("Playing Clip.mp4"))
+      .toHaveAttribute("src", directDescriptor("item_video_1", "video").url);
+    expect(bridge.prepare).not.toHaveBeenCalled();
+  });
+
+  it("releases grants on renewal and unmount without duplicate release", async () => {
+    const bridge = fakeGoogleMediaBridge();
+    bridge.prepare
+      .mockResolvedValueOnce(preparedGoogle("item_video_1-first", "google-raw"))
+      .mockResolvedValueOnce(preparedGoogle("item_video_1-second", "google-raw"));
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockResolvedValue(googleDescriptor("item_video_1", "video"));
+    const rendered = render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={[items[1]!]} selectedItemId="item_video_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+    const first = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    Object.defineProperty(first, "currentTime", { configurable: true, value: 12 });
+    fireEvent.error(first);
+    fireEvent.click(screen.getByRole("button", { name: "Try fresh URL" }));
+    await waitFor(() => expect(bridge.release).toHaveBeenCalledWith("session_item_video_1-first"));
+    rendered.unmount();
+    expect(bridge.release).toHaveBeenCalledWith("session_item_video_1-second");
+    expect(new Set(bridge.release.mock.calls.map(call => call[0])).size)
+      .toBe(bridge.release.mock.calls.length);
+  });
+
+  it("replaces the native video element when a prepared source renews", async () => {
+    const bridge = fakeGoogleMediaBridge();
+    bridge.prepare
+      .mockResolvedValueOnce(preparedGoogle("item_video_1-first", "google-raw"))
+      .mockResolvedValueOnce(preparedGoogle("item_video_1-second", "google-raw"));
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockResolvedValue(googleDescriptor("item_video_1", "video"));
+    render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={[items[1]!]} selectedItemId="item_video_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+    const first = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    fireEvent.error(first);
+    fireEvent.click(screen.getByRole("button", { name: "Try fresh URL" }));
+    await waitFor(() => expect(bridge.prepare).toHaveBeenCalledTimes(2));
+    expect(screen.getByLabelText("Playing Clip.mp4")).not.toBe(first);
+  });
+
+  it("releases every prepared grant even if a bridge reuses a session ID", async () => {
+    const bridge = fakeGoogleMediaBridge();
+    const shared = {
+      sourceUrl: googleDescriptor("item_video_1", "video").url,
+      sourceKind: "google-raw" as const,
+      sessionId: "session_shared",
+      fingerprint: "A".repeat(43),
+    };
+    bridge.prepare.mockResolvedValue(shared);
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockResolvedValue(googleDescriptor("item_video_1", "video"));
+    const rendered = render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={[items[1]!]} selectedItemId="item_video_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+    const first = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    fireEvent.error(first);
+    fireEvent.click(screen.getByRole("button", { name: "Try fresh URL" }));
+    await waitFor(() => expect(bridge.prepare).toHaveBeenCalledTimes(2));
+    rendered.unmount();
+
+    expect(bridge.release).toHaveBeenCalledTimes(2);
+    expect(bridge.release).toHaveBeenNthCalledWith(1, "session_shared");
+    expect(bridge.release).toHaveBeenNthCalledWith(2, "session_shared");
+  });
+
+  it("owns a reused prepared session through only the latest URL-window node", async () => {
+    const bridge = fakeGoogleMediaBridge();
+    bridge.prepare.mockResolvedValue({
+      sourceUrl: googleDescriptor("item_image_1", "image").url,
+      sourceKind: "google-raw",
+      sessionId: "session_shared_window",
+      fingerprint: "A".repeat(43),
+    });
+    const api = viewerApi();
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => {
+      const id = handle.replace(/^sealed-/, "");
+      return googleDescriptor(id, "image");
+    });
+    const sequence = [
+      media("item_image_0", "image", "Before.jpg", "image/jpeg"),
+      media("item_image_1", "image", "First.jpg", "image/jpeg"),
+      media("item_image_2", "image", "After.jpg", "image/jpeg"),
+      media("item_image_3", "image", "Last.jpg", "image/jpeg"),
+    ];
+    const rendered = render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={sequence} selectedItemId="item_image_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+    await screen.findByRole("img", { name: "First.jpg" });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    rendered.unmount();
+
+    expect(bridge.release).toHaveBeenCalledTimes(1);
+    expect(bridge.release).toHaveBeenCalledWith("session_shared_window");
+  });
+
+  it("releases prepared grants on close and device revocation", async () => {
+    const closeBridge = fakeGoogleMediaBridge();
+    const closeView = render(<Viewer googleMedia={closeBridge} history={viewerHistory()} api={googleViewerApi()}
+      items={[items[0]!]} selectedItemId="item_image_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+    await screen.findByRole("img", { name: "First.jpg" });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(closeBridge.release).toHaveBeenCalledWith("session_item_image_1");
+    closeView.unmount();
+
+    const unauthorizedBridge = fakeGoogleMediaBridge();
+    const unauthorizedApi = googleViewerApi();
+    vi.mocked(unauthorizedApi.mediaUrl).mockImplementation(async handle => {
+      if (handle === "sealed-item_image_2") throw Object.assign(new Error("revoked"), { code: "DEVICE_UNAUTHORIZED" });
+      return googleDescriptor(handle.replace(/^sealed-/, ""), handle.indexOf("video") >= 0 ? "video" : "image");
+    });
+    const unauthorized = vi.fn();
+    render(<Viewer googleMedia={unauthorizedBridge} history={viewerHistory()} api={unauthorizedApi}
+      items={items} selectedItemId="item_video_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} onUnauthorized={unauthorized} />);
+    await waitFor(() => expect(unauthorized).toHaveBeenCalledTimes(1));
+    expect(unauthorizedBridge.release).toHaveBeenCalledWith("session_item_video_1");
+    expect(new Set(unauthorizedBridge.release.mock.calls.map(call => call[0])).size)
+      .toBe(unauthorizedBridge.release.mock.calls.length);
+  });
+
+  it("releases prepared grants when navigation is invalidated", async () => {
+    const bridge = fakeGoogleMediaBridge();
+    const api = googleViewerApi();
+    vi.mocked(api.mediaUrl).mockImplementation(async handle => {
+      if (handle === "sealed-item_image_2") throw Object.assign(new Error("expired"), { code: "NAVIGATION_EXPIRED" });
+      const id = handle.replace(/^sealed-/, "");
+      return googleDescriptor(id, id.indexOf("video") >= 0 ? "video" : "image");
+    });
+    const expired = vi.fn();
+    render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api}
+      items={items} selectedItemId="item_video_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} onNavigationExpired={expired} />);
+
+    await waitFor(() => expect(expired).toHaveBeenCalledTimes(1));
+    expect(bridge.release).toHaveBeenCalledWith("session_item_video_1");
+    expect(new Set(bridge.release.mock.calls.map(call => call[0])).size)
+      .toBe(bridge.release.mock.calls.length);
+  });
+
   it("traverses only the loaded media sequence, owns one active video, and restores the exact opening item", async () => {
     const api = viewerApi();
     const closed = vi.fn();
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
 
     expect(await screen.findByRole("img", { name: "First.jpg" })).toBeVisible();
     await waitFor(() => expect(api.mediaUrl).toHaveBeenCalledTimes(2));
@@ -39,7 +248,7 @@ describe("unified TV viewer", () => {
 
   it("opens details with Up, closes them with Down, and Back closes the overlay before the viewer", async () => {
     const closed = vi.fn();
-    render(<Viewer history={viewerHistory()} api={viewerApi()} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
+    render(<TestViewer history={viewerHistory()} api={viewerApi()} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
     await screen.findByRole("img", { name: "First.jpg" });
     fireEvent.keyDown(window, { key: "ArrowUp" });
     const details = screen.getByRole("dialog", { name: "Media details" });
@@ -59,7 +268,7 @@ describe("unified TV viewer", () => {
     vi.useFakeTimers();
     const api = viewerApi();
     const history = viewerHistory();
-    render(<Viewer history={history} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={2} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={history} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={2} previews={{}} onClose={() => undefined} />);
     await act(async () => { await Promise.resolve(); });
     fireEvent.keyDown(window, { key: "Enter" });
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
@@ -76,7 +285,7 @@ describe("unified TV viewer", () => {
 
   it("does not infer authorization from generic media errors and gives each reissued URL one retry", async () => {
     const api = viewerApi();
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const image = await screen.findByRole("img", { name: "First.jpg" });
     await waitFor(() => expect(api.mediaUrl).toHaveBeenCalledTimes(2));
     fireEvent.error(image);
@@ -99,7 +308,7 @@ describe("unified TV viewer", () => {
       }
       return mediaResponse(handle);
     });
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     expect(await screen.findByRole("img", { name: "First.jpg" })).toHaveAttribute("src", "https://provider.example/item_image_1");
     expect(selectedAttempts).toBe(2);
 
@@ -112,7 +321,7 @@ describe("unified TV viewer", () => {
       }
       return mediaResponse(handle);
     });
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     expect(await screen.findByText("A fresh link did not solve this media error.")).toBeVisible();
     expect(selectedAttempts).toBe(2);
   });
@@ -123,7 +332,7 @@ describe("unified TV viewer", () => {
     const history = viewerHistory();
     history.save("item_video_1", { positionSeconds: 42, durationSeconds: 100, completed: false });
     const save = vi.spyOn(history, "save");
-    const view = render(<Viewer history={history} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    const view = render(<TestViewer history={history} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     let video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { configurable: true, value: 100 });
@@ -166,7 +375,7 @@ describe("unified TV viewer", () => {
   it("saves the active video on unmount without a duplicate final snapshot", async () => {
     const history = viewerHistory();
     const save = vi.spyOn(history, "save");
-    const view = render(<Viewer history={history} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    const view = render(<TestViewer history={history} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { configurable: true, value: 100 });
     Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 33 });
@@ -182,7 +391,7 @@ describe("unified TV viewer", () => {
     ];
     const history = viewerHistory();
     const save = vi.spyOn(history, "save");
-    render(<Viewer history={history} api={viewerApi()} items={sequence} selectedItemId="item_video_a" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={history} api={viewerApi()} items={sequence} selectedItemId="item_video_a" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const videoA = await screen.findByLabelText("Playing A.mp4") as HTMLVideoElement;
     Object.defineProperty(videoA, "duration", {
       configurable: true,
@@ -209,7 +418,7 @@ describe("unified TV viewer", () => {
     ];
     const history = viewerHistory();
     const save = vi.spyOn(history, "save");
-    render(<Viewer history={history} api={viewerApi()} items={sequence} selectedItemId="item_video_a" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={history} api={viewerApi()} items={sequence} selectedItemId="item_video_a" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const videoA = await screen.findByLabelText("Playing A.mp4") as HTMLVideoElement;
     Object.defineProperty(videoA, "duration", { configurable: true, value: 100 });
     Object.defineProperty(videoA, "currentTime", { configurable: true, value: 35 });
@@ -229,7 +438,7 @@ describe("unified TV viewer", () => {
     const history = viewerHistory();
     history.save("item_video_1", { positionSeconds: 42, durationSeconds: 100, completed: false });
     const save = vi.spyOn(history, "save");
-    render(<Viewer history={history} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={history} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { configurable: true, value: Number.NaN });
     Object.defineProperty(video, "currentTime", { configurable: true, value: 0 });
@@ -243,7 +452,7 @@ describe("unified TV viewer", () => {
   it("saves valid progress on media error and keeps that item association through close and unmount", async () => {
     const history = viewerHistory();
     const save = vi.spyOn(history, "save");
-    const view = render(<Viewer history={history} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    const view = render(<TestViewer history={history} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { configurable: true, value: 100 });
     Object.defineProperty(video, "currentTime", { configurable: true, value: 37 });
@@ -264,7 +473,7 @@ describe("unified TV viewer", () => {
       removeItem() { throw Object.assign(new Error("denied"), { name: "SecurityError" }); }
     }, "device-1");
 
-    render(<Viewer history={history} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={history} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("Watch progress is unavailable on this TV, but playback will continue.");
@@ -276,7 +485,7 @@ describe("unified TV viewer", () => {
   });
 
   it("offers ten-second video seeking and shows a safe unsupported-codec explanation", async () => {
-    render(<Viewer history={viewerHistory()} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { configurable: true, value: 100 });
     Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 30 });
@@ -293,18 +502,19 @@ describe("unified TV viewer", () => {
 
   it("uses provider URLs directly and never fetches media bytes through the app", async () => {
     const api = viewerApi();
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     expect(video.src).toBe("https://provider.example/item_video_1");
     expect(api.mediaUrl).toHaveBeenCalledWith("sealed-item_video_1", expect.any(AbortSignal), { itemId: "item_video_1", kind: "video" });
   });
 
   it("keeps one native video inside the Video.js 10 state and container boundary", async () => {
-    render(<Viewer history={viewerHistory()} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
 
     const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     expect(video.tagName).toBe("VIDEO");
     expect(video.getAttribute("src")).toBe("https://provider.example/item_video_1");
+    expect(video).toHaveAttribute("referrerpolicy", "no-referrer");
     expect(video.closest("media-container")?.parentElement?.tagName.toLowerCase()).toBe("video-player");
 
     Object.defineProperty(video, "duration", { configurable: true, value: 100 });
@@ -321,7 +531,7 @@ describe("unified TV viewer", () => {
       media("item_image_2", "image", "After.jpg", "image/jpeg"),
       media("item_image_3", "image", "Too-far.jpg", "image/jpeg")
     ];
-    const { container } = render(<Viewer history={viewerHistory()} api={viewerApi()} items={sequence} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    const { container } = render(<TestViewer history={viewerHistory()} api={viewerApi()} items={sequence} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await screen.findByRole("img", { name: "First.jpg" });
     const prefetched = Array.from(container.querySelectorAll<HTMLImageElement>(".viewer-prefetch"));
     expect(prefetched.map(image => image.src).sort()).toEqual([
@@ -332,7 +542,7 @@ describe("unified TV viewer", () => {
 
   it("auto-hides controls only after playback starts and exposes buffered progress", async () => {
     vi.useFakeTimers();
-    const { container } = render(<Viewer history={viewerHistory()} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    const { container } = render(<TestViewer history={viewerHistory()} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     let video = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { configurable: true, value: 100 });
@@ -360,27 +570,30 @@ describe("unified TV viewer", () => {
 
   it("ignores stale URL completions after navigation cancels an obsolete request", async () => {
     const api = viewerApi();
-    let resolveFirst: ((value: DirectMediaUrlResponse) => void) | null = null;
-    vi.mocked(api.mediaUrl).mockImplementation((handle, signal) => {
-      if (handle === "sealed-item_image_1") return new Promise(resolve => {
-        resolveFirst = resolve;
-        signal?.addEventListener("abort", () => undefined);
-      });
-      return Promise.resolve(mediaResponse(handle));
+    const bridge = fakeGoogleMediaBridge();
+    const preparation = deferred<PreparedGoogleMediaSource>();
+    bridge.prepare.mockImplementation(async descriptor => {
+      if (descriptor.itemId === "item_image_1") return preparation.promise;
+      return preparedGoogle(descriptor.itemId, "google-raw");
     });
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    vi.mocked(api.mediaUrl).mockImplementation((handle, signal) => {
+      signal?.addEventListener("abort", () => undefined);
+      const id = handle.replace(/^sealed-/, "");
+      return Promise.resolve(googleDescriptor(id, id.indexOf("video") >= 0 ? "video" : "image"));
+    });
+    render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await act(async () => { await Promise.resolve(); });
     fireEvent.keyDown(window, { key: "ArrowRight" });
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(await screen.findByRole("img", { name: "Last.jpg" })).toBeVisible();
-    await act(async () => { resolveFirst?.({ itemId: "item_image_1", kind: "image", transport: "direct", url: "https://provider.example/stale", expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: "revision-1" }); });
-    expect(screen.getByRole("img", { name: "Last.jpg" })).toHaveAttribute("src", "https://provider.example/item_image_2");
-    expect(screen.queryByDisplayValue("https://provider.example/stale")).not.toBeInTheDocument();
+    await act(async () => { preparation.resolve(preparedGoogle("item_image_1-stale", "google-raw")); });
+    expect(screen.getByRole("img", { name: "Last.jpg" })).toHaveAttribute("src", googleDescriptor("item_image_2", "image").url);
+    expect(bridge.release).toHaveBeenCalledWith("session_item_image_1-stale");
   });
 
   it("resumes at the same timestamp after the single fresh-link retry", async () => {
     const api = viewerApi();
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(video, "duration", { configurable: true, value: 100 });
     let currentTime = 37;
@@ -402,7 +615,7 @@ describe("unified TV viewer", () => {
     const closed = vi.fn();
     const history = viewerHistory();
     const save = vi.spyOn(history, "save");
-    render(<Viewer history={history} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={1} previews={{}} onClose={closed} onUnauthorized={unauthorized} />);
+    render(<TestViewer history={history} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={1} previews={{}} onClose={closed} onUnauthorized={unauthorized} />);
     await act(async () => { await Promise.resolve(); });
     expect(unauthorized).toHaveBeenCalledTimes(1);
     const callsAtRevocation = vi.mocked(api.mediaUrl).mock.calls.length;
@@ -419,7 +632,7 @@ describe("unified TV viewer", () => {
     vi.mocked(api.mediaUrl).mockRejectedValue(Object.assign(new Error("Navigation has expired."), { code: "NAVIGATION_EXPIRED" }));
     const expired = vi.fn();
     const closed = vi.fn();
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} onNavigationExpired={expired} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} onNavigationExpired={expired} />);
     await waitFor(() => expect(expired).toHaveBeenCalledTimes(1));
     expect(closed).not.toHaveBeenCalled();
     expect(screen.queryByText("NAVIGATION_EXPIRED")).not.toBeInTheDocument();
@@ -435,7 +648,7 @@ describe("unified TV viewer", () => {
       url: `https://provider.example/image-${++calls}`,
       expiresAt: new Date(Date.now() + (handle === "sealed-item_image_1" ? 1_000 : 60_000)).toISOString()
     }));
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     expect(screen.getByRole("img", { name: "First.jpg" })).toHaveAttribute("src", "https://provider.example/image-1");
 
@@ -458,7 +671,7 @@ describe("unified TV viewer", () => {
         expiresAt: new Date(Date.now() + (result.kind === "video" ? 1_000 : 60_000)).toISOString()
       };
     });
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     const first = screen.getByLabelText("Playing Clip.mp4") as HTMLVideoElement;
     Object.defineProperty(first, "duration", { configurable: true, value: 100 });
@@ -493,7 +706,7 @@ describe("unified TV viewer", () => {
         expiresAt: new Date(acceptedAt + 60_000).toISOString()
       });
     });
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     const crossedNow = vi.spyOn(Date, "now").mockReturnValue(acceptedAt + 2);
     await act(async () => {
@@ -525,7 +738,7 @@ describe("unified TV viewer", () => {
       expiresAt: new Date(Date.now() + (handle === "sealed-item_image_1" ? -1 : 60_000)).toISOString()
     }));
     const closed = vi.fn();
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     const callsBeforeClose = vi.mocked(api.mediaUrl).mock.calls.length;
 
@@ -550,7 +763,7 @@ describe("unified TV viewer", () => {
         expiresAt: new Date(Date.now() + (result.kind === "video" && videoCalls === 1 ? 1_000 : 60_000)).toISOString()
       };
     });
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     for (let attempt = 0; attempt < 10 && vi.getTimerCount() < 2; attempt += 1) {
       await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     }
@@ -587,7 +800,7 @@ describe("unified TV viewer", () => {
         expiresAt: new Date(Date.now() + (activeCalls === 1 ? 60_000 : 1_000)).toISOString()
       };
     });
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     const firstEntry = vi.mocked(api.mediaUrl).mock.calls.find(call => call[0] === "sealed-item_image_1")!;
     fireEvent.error(screen.getByRole("img", { name: "First.jpg" }));
@@ -613,7 +826,7 @@ describe("unified TV viewer", () => {
       return { ...result, expiresAt: new Date(Date.now() + (result.kind === "video" && videoCalls === 1 ? 1_000 : 60_000)).toISOString() };
     });
     const closed = vi.fn();
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     const callsBefore = vi.mocked(api.mediaUrl).mock.calls.length;
     await act(async () => { await vi.advanceTimersByTimeAsync(1_001); await Promise.resolve(); });
@@ -636,15 +849,17 @@ describe("unified TV viewer", () => {
       media("item_image_3", "image", "Last.jpg", "image/jpeg")
     ];
     const api = viewerApi();
+    const bridge = fakeGoogleMediaBridge();
     vi.mocked(api.mediaUrl).mockImplementation(async handle => ({
-      ...mediaResponseFor(sequence, handle),
+      ...googleDescriptor(handle.replace(/^sealed-/, ""), "image"),
       expiresAt: new Date(Date.now() + (handle === "sealed-item_image_0" ? 1_000 : 60_000)).toISOString()
     }));
-    render(<Viewer history={viewerHistory()} api={api} items={sequence} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+    render(<Viewer googleMedia={bridge} history={viewerHistory()} api={api} items={sequence} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     fireEvent.keyDown(window, { key: "ArrowRight" });
     fireEvent.keyDown(window, { key: "ArrowRight" });
     const before = vi.mocked(api.mediaUrl).mock.calls.filter(call => call[0] === "sealed-item_image_0").length;
+    expect(bridge.release).toHaveBeenCalledWith("session_item_image_0");
 
     await act(async () => { await vi.advanceTimersByTimeAsync(1_001); });
 
@@ -660,7 +875,7 @@ describe("unified TV viewer", () => {
       expiresAt: new Date(Date.now() + 2_147_001_000).toISOString()
     }));
     const closed = vi.fn();
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={closed} />);
     await act(async () => { await Promise.resolve(); await Promise.resolve(); });
     const before = vi.mocked(api.mediaUrl).mock.calls.length;
 
@@ -686,7 +901,7 @@ describe("unified TV viewer", () => {
       return mediaResponse(handle);
     });
     const expired = vi.fn();
-    render(<Viewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} onNavigationExpired={expired} />);
+    render(<TestViewer history={viewerHistory()} api={api} items={items} selectedItemId="item_image_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} onNavigationExpired={expired} />);
 
     await waitFor(() => expect(expired).toHaveBeenCalledTimes(1));
     expect(document.body.innerHTML).not.toContain(result.url);
@@ -731,10 +946,73 @@ function mediaResponse(handle: string): DirectMediaUrlResponse {
   };
 }
 
-function mediaResponseFor(sequence: TvBrowseItemDto[], handle: string): DirectMediaUrlResponse {
-  const id = handle.replace(/^sealed-/, "");
-  const item = sequence.find(candidate => candidate.id === id)!;
-  return { itemId: id, kind: item.kind as "image" | "video", transport: "direct", url: `https://provider.example/${id}`, expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: "revision-1" };
+function googleViewerApi(): TvApi {
+  const api = viewerApi();
+  vi.mocked(api.mediaUrl).mockImplementation(async handle => {
+    const id = handle.replace(/^sealed-/, "");
+    return googleDescriptor(id, id.indexOf("video") >= 0 ? "video" : "image");
+  });
+  return api;
+}
+
+interface FakeGoogleMediaBridge extends GoogleMediaBridge {
+  prepare: ReturnType<typeof vi.fn<GoogleMediaBridge["prepare"]>>;
+  filenameSource: ReturnType<typeof vi.fn<GoogleMediaBridge["filenameSource"]>>;
+  evidence: ReturnType<typeof vi.fn<GoogleMediaBridge["evidence"]>>;
+  waitForEvidence: ReturnType<typeof vi.fn<GoogleMediaBridge["waitForEvidence"]>>;
+  release: ReturnType<typeof vi.fn<GoogleMediaBridge["release"]>>;
+}
+
+function fakeGoogleMediaBridge(): FakeGoogleMediaBridge {
+  return {
+    prepare: vi.fn<GoogleMediaBridge["prepare"]>(async descriptor => preparedGoogle(descriptor.itemId, "google-raw")),
+    filenameSource: vi.fn<GoogleMediaBridge["filenameSource"]>(() => null),
+    evidence: vi.fn<GoogleMediaBridge["evidence"]>(() => ({ outcome: "none", attempt: "google-raw" })),
+    waitForEvidence: vi.fn<GoogleMediaBridge["waitForEvidence"]>(async () => ({ outcome: "none", attempt: "google-raw" })),
+    release: vi.fn<GoogleMediaBridge["release"]>(),
+  };
+}
+
+function googleDescriptor(itemId: string, kind: "image" | "video"): GoogleBearerMediaUrlResponse {
+  return {
+    itemId,
+    kind,
+    transport: "google-bearer",
+    url: `https://www.googleapis.com/drive/v3/files/${itemId}?alt=media&supportsAllDrives=true`,
+    authorization: { scheme: "Bearer", token: "ya29.test-token" },
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    revision: "revision-1",
+  };
+}
+
+function directDescriptor(itemId: string, kind: "image" | "video"): DirectMediaUrlResponse {
+  return {
+    itemId,
+    kind,
+    transport: "direct",
+    url: `https://provider.example/${itemId}`,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    revision: "revision-1",
+  };
+}
+
+function preparedGoogle(itemId: string, sourceKind: PreparedGoogleMediaSource["sourceKind"]): PreparedGoogleMediaSource {
+  return {
+    sourceUrl: googleDescriptor(itemId.replace(/-(?:first|second|stale)$/u, ""), itemId.indexOf("video") >= 0 ? "video" : "image").url,
+    sourceKind,
+    sessionId: `session_${itemId}`,
+    fingerprint: "A".repeat(43),
+  };
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve(value: T): void; reject(error: unknown): void } {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function viewerHistory(): LocalWatchHistory {

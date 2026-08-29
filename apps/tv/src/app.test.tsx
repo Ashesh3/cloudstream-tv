@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TvApp } from "./app";
 import { tvApi, type TvApi } from "./api/client";
+import type { GoogleMediaBridge, PreparedGoogleMediaSource } from "./media/google-media-bridge";
 
 const api = (): TvApi => ({
   bootstrap: vi.fn(),
@@ -778,6 +779,36 @@ describe("TV enrollment and browse states", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Second/ })).toHaveFocus());
   });
 
+  it("passes the injected Google media bridge into the ready viewer", async () => {
+    const client = api();
+    const googleMedia = fakeGoogleMediaBridge();
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [{ ...rootCards[0]!, handle: "sealed-folder-parent" }] });
+    vi.mocked(client.folder).mockResolvedValue({
+      parent: node("root-1", "folder", "Parent"),
+      children: [videoNode("item_video_1", "Lake")], nextCursor: null
+    });
+    vi.mocked(client.mediaUrl).mockResolvedValue({
+      itemId: "item_video_1",
+      kind: "video",
+      transport: "google-bearer",
+      url: "https://www.googleapis.com/drive/v3/files/item_video_1?alt=media&supportsAllDrives=true",
+      authorization: { scheme: "Bearer", token: "ya29.test-token" },
+      expiresAt: futureIso(),
+      revision: "r1"
+    });
+
+    render(<TvApp api={client} browserSupported googleMedia={googleMedia} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Lake/ }));
+    expect(await screen.findByLabelText("Playing Lake")).toHaveAttribute(
+      "src",
+      "https://www.googleapis.com/drive/v3/files/item_video_1?alt=media&supportsAllDrives=true"
+    );
+    expect(googleMedia.prepare).toHaveBeenCalledTimes(1);
+    expect(document.body.innerHTML).not.toContain("ya29.test-token");
+  });
+
   it("uses the ready device's local history and refreshes progress synchronously after viewer close", async () => {
     window.localStorage.setItem("cloudframe.tv.watch-history.v1:device-1", JSON.stringify({
       version: 1,
@@ -1147,5 +1178,29 @@ function mediaResponse(handle: string) {
     url: `https://provider.example/${itemId}`,
     expiresAt: futureIso(),
     revision: "r1"
+  };
+}
+
+interface FakeGoogleMediaBridge extends GoogleMediaBridge {
+  prepare: ReturnType<typeof vi.fn<GoogleMediaBridge["prepare"]>>;
+  filenameSource: ReturnType<typeof vi.fn<GoogleMediaBridge["filenameSource"]>>;
+  evidence: ReturnType<typeof vi.fn<GoogleMediaBridge["evidence"]>>;
+  waitForEvidence: ReturnType<typeof vi.fn<GoogleMediaBridge["waitForEvidence"]>>;
+  release: ReturnType<typeof vi.fn<GoogleMediaBridge["release"]>>;
+}
+
+function fakeGoogleMediaBridge(): FakeGoogleMediaBridge {
+  const prepared: PreparedGoogleMediaSource = {
+    sourceUrl: "https://www.googleapis.com/drive/v3/files/item_video_1?alt=media&supportsAllDrives=true",
+    sourceKind: "google-raw",
+    sessionId: "session_item_video_1",
+    fingerprint: "A".repeat(43),
+  };
+  return {
+    prepare: vi.fn<GoogleMediaBridge["prepare"]>(async () => prepared),
+    filenameSource: vi.fn<GoogleMediaBridge["filenameSource"]>(() => null),
+    evidence: vi.fn<GoogleMediaBridge["evidence"]>(() => ({ outcome: "none", attempt: "google-raw" })),
+    waitForEvidence: vi.fn<GoogleMediaBridge["waitForEvidence"]>(async () => ({ outcome: "none", attempt: "google-raw" })),
+    release: vi.fn<GoogleMediaBridge["release"]>(),
   };
 }

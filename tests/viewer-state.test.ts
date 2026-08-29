@@ -100,13 +100,13 @@ describe("viewer reducer", () => {
     const first = state.urls["image-1"]!;
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "image-1", requestId: first.requestId + 100,
-      url: "https://stale.example/media", expiresAtEpoch: 10_000, revision: "r1"
+      url: "https://stale.example/media", sourceKind: "direct", expiresAtEpoch: 10_000, revision: "r1"
     });
     expect(state.urls["image-1"]!.status).toBe("loading");
 
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "image-1", requestId: first.requestId,
-      url: "https://provider.example/media", expiresAtEpoch: 10_000, revision: "r1"
+      url: "https://provider.example/media", sourceKind: "direct", expiresAtEpoch: 10_000, revision: "r1"
     });
     state = viewerReducer(state, { type: "authorization-expired", nodeId: "image-1", resumeSeconds: 37 });
     const retry = state.urls["image-1"]!;
@@ -116,7 +116,7 @@ describe("viewer reducer", () => {
 
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "image-1", requestId: retry.requestId,
-      url: "https://provider.example/fresh", expiresAtEpoch: 20_000, revision: "r1"
+      url: "https://provider.example/fresh", sourceKind: "direct", expiresAtEpoch: 20_000, revision: "r1"
     });
     state = viewerReducer(state, { type: "authorization-expired", nodeId: "image-1", resumeSeconds: 41 });
     expect(state.urls["image-1"]).toMatchObject({ status: "loading", refreshUsed: true, resumeSeconds: 41 });
@@ -127,13 +127,13 @@ describe("viewer reducer", () => {
     const initial = state.urls["image-1"]!;
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "image-1", requestId: initial.requestId,
-      url: "https://provider.example/media", expiresAtEpoch: 10_000, revision: "r1"
+      url: "https://provider.example/media", sourceKind: "direct", expiresAtEpoch: 10_000, revision: "r1"
     });
     state = viewerReducer(state, { type: "manual-retry", nodeId: "image-1", resumeSeconds: 12 });
     const retry = state.urls["image-1"]!;
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "image-1", requestId: retry.requestId,
-      url: "https://provider.example/reissued", expiresAtEpoch: 20_000, revision: "r1"
+      url: "https://provider.example/reissued", sourceKind: "direct", expiresAtEpoch: 20_000, revision: "r1"
     });
     expect(state.urls["image-1"]!.refreshUsed).toBe(false);
     state = viewerReducer(state, { type: "manual-retry", nodeId: "image-1", resumeSeconds: 14 });
@@ -146,14 +146,14 @@ describe("viewer reducer", () => {
     const initial = state.urls["video-1"]!;
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "video-1", requestId: initial.requestId,
-      url: "https://provider.example/video", expiresAtEpoch: 10_000, revision: "r1"
+      url: "https://provider.example/video", sourceKind: "direct", expiresAtEpoch: 10_000, revision: "r1"
     });
     state = viewerReducer(state, { type: "url-expired", nodeId: "video-1", requestId: initial.requestId, resumeSeconds: 37 });
     const renewal = state.urls["video-1"]!;
     expect(renewal).toMatchObject({ status: "loading", refreshUsed: false, resumeSeconds: 37 });
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "video-1", requestId: renewal.requestId,
-      url: "https://provider.example/video-fresh", expiresAtEpoch: 20_000, revision: "r1"
+      url: "https://provider.example/video-fresh", sourceKind: "direct", expiresAtEpoch: 20_000, revision: "r1"
     });
     expect(state.urls["video-1"]).toMatchObject({ status: "ready", expiresAtEpoch: 20_000, refreshUsed: false });
     state = viewerReducer(state, { type: "authorization-expired", nodeId: "video-1", resumeSeconds: 39 });
@@ -165,13 +165,32 @@ describe("viewer reducer", () => {
     const initial = state.urls["image-1"]!;
     state = viewerReducer(state, {
       type: "url-ready", nodeId: "image-1", requestId: initial.requestId,
-      url: "https://provider.example/image", expiresAtEpoch: 10_000, revision: "r1"
+      url: "https://provider.example/image", sourceKind: "direct", expiresAtEpoch: 10_000, revision: "r1"
     });
     const unchanged = viewerReducer(state, { type: "url-expired", nodeId: "image-1", requestId: initial.requestId + 1, resumeSeconds: 0 });
     expect(unchanged.urls["image-1"]).toMatchObject({ status: "ready", expiresAtEpoch: 10_000 });
     state = viewerReducer(state, { type: "navigate", direction: 1 });
     state = viewerReducer(state, { type: "navigate", direction: 1 });
     expect(state.urls["image-1"]).toBeUndefined();
+  });
+
+  it("stores Google source metadata without credentials", () => {
+    let state = createViewerState(media, "image-1");
+    const initial = state.urls["image-1"]!;
+    state = viewerReducer(state, {
+      type: "url-ready",
+      nodeId: "image-1",
+      requestId: initial.requestId,
+      url: "https://www.googleapis.com/drive/v3/files/file_1?alt=media&supportsAllDrives=true",
+      sourceKind: "google-raw",
+      expiresAtEpoch: 10_000,
+      revision: "r1"
+    });
+
+    expect(state.urls["image-1"]?.sourceKind).toBe("google-raw");
+    const serialized = JSON.stringify(state);
+    expect(serialized).not.toContain("authorization");
+    expect(serialized).not.toContain("ya29.test-token");
   });
 
   it("hides controls only while the active video is playing with no overlay", () => {

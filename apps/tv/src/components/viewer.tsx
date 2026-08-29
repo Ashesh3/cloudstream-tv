@@ -14,13 +14,15 @@ import {
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "preact/hooks";
 
 import type { TvApi } from "../api/client";
+import { GoogleMediaBridgeError, type GoogleMediaBridge, type PreparedGoogleMediaSource } from "../media/google-media-bridge";
 import type { LocalWatchHistory } from "../state/local-watch-history";
 import { ImageViewer } from "./image-viewer";
 import { VideoPlayer } from "./video-player";
 import { ViewerOverlay } from "./viewer-overlay";
 
-export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, previews, onClose, onUnauthorized = () => undefined, onNavigationExpired = () => undefined }: {
+export function Viewer({ api, googleMedia, history, items, selectedItemId, slideshowSeconds, previews, onClose, onUnauthorized = () => undefined, onNavigationExpired = () => undefined }: {
   api: TvApi;
+  googleMedia: GoogleMediaBridge;
   history: LocalWatchHistory;
   items: TvBrowseItemDto[];
   selectedItemId: string;
@@ -50,6 +52,7 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
   const lastVideoElements = useRef<Record<string, HTMLVideoElement>>({});
   const inflightUrls = useRef<Record<string, { requestId: number; controller: AbortController }>>({});
   const startedUrlRequests = useRef<Record<string, boolean>>({});
+  const preparedSessions = useRef<Record<string, string>>({});
   const urlExpiryTimers = useRef<Record<string, { identity: string; cancel: () => void }>>({});
   const activeRef = useRef({ id: active.id, kind: active.kind });
   const urlsRef = useRef(state.urls);
@@ -75,17 +78,29 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
     urlExpiryTimers.current = {};
   }, []);
 
+  const releasePreparedSession = useCallback((nodeId: string) => {
+    const sessionId = preparedSessions.current[nodeId];
+    if (!sessionId) return;
+    delete preparedSessions.current[nodeId];
+    googleMedia.release(sessionId);
+  }, [googleMedia]);
+
+  const releasePreparedSessions = useCallback(() => {
+    Object.keys(preparedSessions.current).forEach(releasePreparedSession);
+  }, [releasePreparedSession]);
+
   const invalidateNavigation = useCallback((): boolean => {
     if (navigationExpired.current) return true;
     navigationExpired.current = true;
     closed.current = true;
     abortUrlRequests();
     clearUrlExpiryTimers();
+    releasePreparedSessions();
     const element = videoElementFor(active.id);
     if (element) element.pause();
     onNavigationExpired();
     return true;
-  }, [abortUrlRequests, active.id, clearUrlExpiryTimers, onNavigationExpired]);
+  }, [abortUrlRequests, active.id, clearUrlExpiryTimers, onNavigationExpired, releasePreparedSessions]);
 
   const propagateUnauthorized = useCallback((error: unknown): boolean => {
     if (!isDeviceUnauthorized(error)) return false;
@@ -94,11 +109,12 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
     closed.current = true;
     abortUrlRequests();
     clearUrlExpiryTimers();
+    releasePreparedSessions();
     const element = videoElementFor(active.id);
     if (element) element.pause();
     onUnauthorized();
     return true;
-  }, [abortUrlRequests, active.id, clearUrlExpiryTimers, onUnauthorized]);
+  }, [abortUrlRequests, active.id, clearUrlExpiryTimers, onUnauthorized, releasePreparedSessions]);
 
   const propagateNavigationExpired = useCallback((error: unknown): boolean => {
     if (!isNavigationExpired(error)) return false;
@@ -163,32 +179,74 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
       inflightUrls.current[nodeId] = { requestId, controller };
       const handle = itemHandles[nodeId];
       if (!handle) {
+        delete inflightUrls.current[nodeId];
         dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: "authorization" });
         return;
       }
       const expected = items.find(item => item.id === nodeId);
       if (!expected || expected.kind === "folder") {
+        delete inflightUrls.current[nodeId];
         invalidateNavigation();
         return;
       }
-      void api.mediaUrl(handle, controller.signal, { itemId: expected.id, kind: expected.kind }).then(result => {
-        if (!controller.signal.aborted && !unauthorized.current && mounted.current) {
-          delete inflightUrls.current[nodeId];
-          dispatch({ type: "url-ready", nodeId, requestId: entry.requestId, url: result.url, expiresAtEpoch: Date.parse(result.expiresAt), revision: result.revision });
+      const mediaKind: "image" | "video" = expected.kind;
+      void api.mediaUrl(handle, controller.signal, { itemId: expected.id, kind: expected.kind }).then(async result => {
+        let prepared: PreparedGoogleMediaSource | { sourceUrl: string; sourceKind: "direct"; sessionId: null };
+        if (result.transport === "google-bearer") {
+          if (!expected.mimeType) throw new GoogleMediaBridgeError("GOOGLE_MEDIA_BRIDGE_INVALID");
+          prepared = await googleMedia.prepare(result, {
+            name: expected.name,
+            kind: mediaKind,
+            mimeType: expected.mimeType,
+            size: expected.size,
+          }, controller.signal);
+        } else {
+          prepared = { sourceUrl: result.url, sourceKind: "direct" as const, sessionId: null };
         }
-      }).catch(error => {
-        if (controller.signal.aborted || unauthorized.current || !mounted.current) return;
+        const current = urlsRef.current[nodeId];
+        if (controller.signal.aborted || unauthorized.current || navigationExpired.current || closed.current || !mounted.current ||
+          !current || current.status !== "loading" || current.requestId !== entry.requestId) {
+          if (prepared.sessionId) googleMedia.release(prepared.sessionId);
+          return;
+        }
         delete inflightUrls.current[nodeId];
+        releasePreparedSession(nodeId);
+        if (prepared.sessionId) {
+          const displacedNodeId = Object.keys(preparedSessions.current)
+            .find(candidate => candidate !== nodeId && preparedSessions.current[candidate] === prepared.sessionId);
+          if (displacedNodeId) delete preparedSessions.current[displacedNodeId];
+          preparedSessions.current[nodeId] = prepared.sessionId;
+        }
+        dispatch({
+          type: "url-ready",
+          nodeId,
+          requestId: entry.requestId,
+          url: prepared.sourceUrl,
+          sourceKind: prepared.sourceKind,
+          expiresAtEpoch: Date.parse(result.expiresAt),
+          revision: result.revision,
+        });
+      }).catch(error => {
+        if (inflightUrls.current[nodeId]?.requestId === entry.requestId) delete inflightUrls.current[nodeId];
+        if (controller.signal.aborted || unauthorized.current || !mounted.current) return;
         if (propagateUnauthorized(error) || propagateNavigationExpired(error)) return;
         if (isInvalidResponse(error)) {
           invalidateNavigation();
           return;
         }
         if (isAuthorizationEvidence(error)) dispatch({ type: "authorization-expired", nodeId, resumeSeconds: entry.resumeSeconds });
+        else if (error instanceof GoogleMediaBridgeError) dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: "bridge" });
         else dispatch({ type: "url-failed", nodeId, requestId: entry.requestId, kind: "generic" });
       });
     });
-  }, [api, invalidateNavigation, itemHandles, items, propagateNavigationExpired, propagateUnauthorized, urlRequestKey]);
+  }, [api, googleMedia, invalidateNavigation, itemHandles, items, propagateNavigationExpired, propagateUnauthorized, releasePreparedSession, urlRequestKey]);
+
+  useEffect(() => {
+    Object.keys(preparedSessions.current).forEach(nodeId => {
+      const entry = state.urls[nodeId];
+      if (!entry || entry.status !== "ready") releasePreparedSession(nodeId);
+    });
+  }, [releasePreparedSession, state.urls]);
 
   useEffect(() => {
     const wanted: Record<string, string> = {};
@@ -227,7 +285,8 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
     mounted.current = false;
     abortUrlRequests();
     clearUrlExpiryTimers();
-  }, [abortUrlRequests, clearUrlExpiryTimers]);
+    releasePreparedSessions();
+  }, [abortUrlRequests, clearUrlExpiryTimers, releasePreparedSessions]);
 
   useEffect(() => {
     setCurrentSeconds(0);
@@ -267,9 +326,10 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
     closed.current = true;
     abortUrlRequests();
     clearUrlExpiryTimers();
+    releasePreparedSessions();
     dispatch({ type: "back" });
     onClose(state.restorationItemId);
-  }, [abortUrlRequests, active.id, active.kind, clearUrlExpiryTimers, onClose, saveElementHistory, state.restorationItemId]);
+  }, [abortUrlRequests, active.id, active.kind, clearUrlExpiryTimers, onClose, releasePreparedSessions, saveElementHistory, state.restorationItemId]);
 
   useEffect(() => {
     const onVisibility = () => {
@@ -349,6 +409,8 @@ export function Viewer({ api, history, items, selectedItemId, slideshowSeconds, 
       <div className="viewer-stage">
         {state.mediaError?.kind === "codec" ? (
           <ViewerError title="This video format cannot play on this TV" item={active} body="Cloudframe streams the original file directly and does not transcode it. Try a browser-compatible H.264/AAC MP4." onRetry={retry} />
+        ) : state.mediaError?.kind === "bridge" ? (
+          <ViewerError title="This media could not be prepared" item={active} body="This TV could not prepare the Google media link. You can request one fresh link safely." onRetry={retry} />
         ) : state.mediaError ? (
           <ViewerError title="This media could not be opened" item={active} body={activeUrl?.refreshUsed ? "A fresh link did not solve this media error." : "The provider link failed. You can request one fresh link safely."} onRetry={retry} />
         ) : active.kind === "image" ? (

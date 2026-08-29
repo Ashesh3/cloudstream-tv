@@ -7,7 +7,8 @@ export interface ViewerMediaItem {
 }
 
 export type ViewerUrlStatus = "loading" | "ready" | "error";
-export type ViewerMediaErrorKind = "authorization" | "codec" | "generic";
+export type ViewerMediaErrorKind = "authorization" | "bridge" | "codec" | "generic";
+export type ViewerMediaSourceKind = "direct" | "google-raw" | "google-filename";
 
 export interface ViewerUrlState {
   status: ViewerUrlStatus;
@@ -18,6 +19,7 @@ export interface ViewerUrlState {
   refreshUsed: boolean;
   resumeSeconds: number;
   errorKind?: ViewerMediaErrorKind;
+  sourceKind?: ViewerMediaSourceKind;
 }
 
 export interface ViewerUrlRequest {
@@ -57,7 +59,7 @@ export type ViewerAction =
   | { type: "video-playing"; nodeId: string }
   | { type: "video-paused"; nodeId: string }
   | { type: "media-error"; nodeId: string; kind: ViewerMediaErrorKind }
-  | { type: "url-ready"; nodeId: string; requestId: number; url: string; expiresAtEpoch: number; revision: string | null }
+  | { type: "url-ready"; nodeId: string; requestId: number; url: string; sourceKind: ViewerMediaSourceKind; expiresAtEpoch: number; revision: string | null }
   | { type: "url-failed"; nodeId: string; requestId: number; kind: ViewerMediaErrorKind }
   | { type: "url-expired"; nodeId: string; requestId: number; resumeSeconds: number }
   | { type: "authorization-expired"; nodeId: string; resumeSeconds: number }
@@ -162,6 +164,7 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
             ...current,
             status: "ready",
             url: action.url,
+            sourceKind: action.sourceKind,
             expiresAtEpoch: finiteNonNegative(action.expiresAtEpoch),
             revision: action.revision,
             refreshUsed: retry.used,
@@ -175,10 +178,12 @@ export function viewerReducer(state: ViewerState, action: ViewerAction): ViewerS
     case "url-failed": {
       const current = state.urls[action.nodeId];
       if (!current || current.requestId !== action.requestId || current.status !== "loading") return state;
+      const active = activeViewerItem(state).id === action.nodeId;
       return {
         ...state,
         urls: { ...state.urls, [action.nodeId]: { ...current, status: "error", errorKind: action.kind } },
-        slideshowActive: activeViewerItem(state).id === action.nodeId ? false : state.slideshowActive
+        mediaError: active ? { nodeId: action.nodeId, kind: action.kind } : state.mediaError,
+        slideshowActive: active ? false : state.slideshowActive
       };
     }
     case "url-expired": {

@@ -12,6 +12,7 @@ import { TvHeader, type TvBreadcrumb } from "./components/tv-header";
 import { VirtualGrid } from "./components/virtual-grid";
 import { Viewer } from "./components/viewer";
 import { WaitingScreen } from "./components/waiting-screen";
+import { unavailableGoogleMediaBridge, type GoogleMediaBridge } from "./media/google-media-bridge";
 import { createLocalWatchHistory, type LocalWatchHistory, type LocalWatchHistoryEntry } from "./state/local-watch-history";
 import { useTvSession } from "./state/use-tv-session";
 import { createThumbnailWarmer, thumbnailRequestBatches } from "./thumbnails";
@@ -45,9 +46,10 @@ type ThumbnailState = DirectThumbnailItem & {
   expiresAtEpoch?: number;
 };
 
-export function TvApp({ api = tvApi, browserSupported = detectBrowserSupport() }: {
+export function TvApp({ api = tvApi, browserSupported = detectBrowserSupport(), googleMedia = unavailableGoogleMediaBridge }: {
   api?: TvApi;
   browserSupported?: boolean;
+  googleMedia?: GoogleMediaBridge;
 }) {
   const session = useTvSession(api, browserSupported);
   if (session.state.status === "unsupported") return <Unsupported />;
@@ -62,22 +64,24 @@ export function TvApp({ api = tvApi, browserSupported = detectBrowserSupport() }
   if (session.state.status !== "ready") return null;
   const mediaOrder = session.state.device.mediaOrder ?? session.state.household.defaultMediaOrder;
   const slideshowSeconds = session.state.device.slideshowSeconds ?? session.state.household.defaultSlideshowSeconds;
-  return <ReadyBrowserShell api={api} deviceId={session.state.device.id} mediaOrder={mediaOrder} onUnauthorized={session.refresh} slideshowSeconds={slideshowSeconds} />;
+  return <ReadyBrowserShell api={api} deviceId={session.state.device.id} googleMedia={googleMedia} mediaOrder={mediaOrder} onUnauthorized={session.refresh} slideshowSeconds={slideshowSeconds} />;
 }
 
-function ReadyBrowserShell({ api, deviceId, mediaOrder, onUnauthorized, slideshowSeconds }: {
+function ReadyBrowserShell({ api, deviceId, googleMedia, mediaOrder, onUnauthorized, slideshowSeconds }: {
   api: TvApi;
   deviceId: string;
+  googleMedia: GoogleMediaBridge;
   mediaOrder: MediaOrder;
   onUnauthorized: () => void;
   slideshowSeconds: number;
 }) {
   const history = useMemo(() => createLocalWatchHistory(localWatchHistoryStorage(), deviceId), [deviceId]);
-  return <BrowserShell key={deviceId} api={api} history={history} mediaOrder={mediaOrder} onUnauthorized={onUnauthorized} slideshowSeconds={slideshowSeconds} />;
+  return <BrowserShell key={deviceId} api={api} googleMedia={googleMedia} history={history} mediaOrder={mediaOrder} onUnauthorized={onUnauthorized} slideshowSeconds={slideshowSeconds} />;
 }
 
-function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSeconds }: {
+function BrowserShell({ api, googleMedia, history, mediaOrder, onUnauthorized, slideshowSeconds }: {
   api: TvApi;
+  googleMedia: GoogleMediaBridge;
   history: LocalWatchHistory;
   mediaOrder: MediaOrder;
   onUnauthorized: () => void;
@@ -553,7 +557,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   if (browse.loading && browse.items.length === 0) return <BrowseSkeleton />;
   if (browse.error && browse.items.length === 0) return <StatePanel title="Source temporarily unavailable" body={browse.error}><button className="primary-action" onClick={() => browse.parent ? loadFolder(browse.parent.handle, { expectedParentId: browse.parent.id, breadcrumbs: browse.breadcrumbs }) : loadHome()}>Retry</button></StatePanel>;
   if (!browse.parent && browse.items.length === 0) return <StatePanel title="No folders assigned" body="Ask the household administrator to assign at least one folder to this TV."><button className="primary-action" onClick={loadHome}>Refresh</button></StatePanel>;
-  if (viewer) return <Viewer api={api} history={history} items={viewer.items} selectedItemId={viewer.selectedItemId} slideshowSeconds={slideshowSeconds} previews={thumbnails} onClose={closeViewer} onUnauthorized={onUnauthorized} onNavigationExpired={refreshExpiredNavigation} />;
+  if (viewer) return <Viewer api={api} googleMedia={googleMedia} history={history} items={viewer.items} selectedItemId={viewer.selectedItemId} slideshowSeconds={slideshowSeconds} previews={thumbnails} onClose={closeViewer} onUnauthorized={onUnauthorized} onNavigationExpired={refreshExpiredNavigation} />;
 
   const title = browse.parent?.name ?? "Home";
   const currentProgram = !browse.parent && browse.items[focusedIndex]?.itemType === "root"

@@ -28,6 +28,7 @@ export interface VideoPlayerProps {
 
 export function VideoPlayer(props: VideoPlayerProps) {
   const source = props.url?.status === "ready" ? props.url.url : undefined;
+  const noReferrer = { referrerPolicy: "no-referrer" } as const;
   useEffect(() => {
     void loadVideoJs();
   }, []);
@@ -37,11 +38,13 @@ export function VideoPlayer(props: VideoPlayerProps) {
         <media-container class="cloudframe-media-container">
           {source ? (
             <video
+              key={source}
               ref={props.videoRef}
               className="viewer-video"
               src={source}
               aria-label={`Playing ${props.item.name}`}
               preload="metadata"
+              {...noReferrer}
               playsInline
               onLoadedMetadata={event => props.onLoadedMetadata(event.currentTarget)}
               onPlaying={props.onPlaying}
