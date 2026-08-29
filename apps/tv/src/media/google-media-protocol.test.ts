@@ -69,6 +69,19 @@ describe("Google media protocol helpers", () => {
       .toBe("/__cloudframe_media__/session_abc/clip-%EF%BF%BD.mpg");
   });
 
+  it("truncates filenames by code point and makes every alias encodable", () => {
+    const prefix = "a".repeat(254);
+    const sanitized = sanitizeMediaFilename(`${prefix}😀tail`);
+    expect(Array.from(sanitized)).toHaveLength(255);
+    expect(sanitized).toBe(`${prefix}😀`);
+    expect(googleMediaAlias("session_abc", `${prefix}😀tail`))
+      .toBe(`/__cloudframe_media__/session_abc/${prefix}%F0%9F%98%80`);
+
+    expect(sanitizeMediaFilename("\udc00\udc01\ud800")).toBe("���");
+    expect(() => googleMediaAlias("session_abc", "\udc00\udc01\ud800"))
+      .not.toThrow();
+  });
+
   it("creates a stable opaque SHA-256 URL fingerprint", async () => {
     const first = await googleMediaFingerprint(RAW_URL);
     const again = await googleMediaFingerprint(RAW_URL);

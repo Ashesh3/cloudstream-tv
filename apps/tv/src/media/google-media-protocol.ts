@@ -78,11 +78,16 @@ export function validSingleRange(value: string | null): ParsedSingleRange | null
 
 export function sanitizeMediaFilename(value: string): string {
   const segment = value.replace(/\\/gu, "/").split("/").pop() ?? "";
-  const printable = segment
-    .replace(/[\x00-\x1f\x7f]/gu, "")
-    .replace(/[\ud800-\udbff](?![\udc00-\udfff])|(^|[^\ud800-\udbff])[\udc00-\udfff]/gu, "$1�")
-    .trim();
-  const bounded = printable.slice(0, 255);
+  let bounded = "";
+  let length = 0;
+  for (const character of segment) {
+    const codePoint = character.codePointAt(0)!;
+    if (isControlCodePoint(codePoint)) continue;
+    if (length >= 255) break;
+    bounded += codePoint >= 0xd800 && codePoint <= 0xdfff ? "�" : character;
+    length += 1;
+  }
+  bounded = bounded.trim();
   return bounded !== "" && bounded !== "." && bounded !== ".." ? bounded : "media";
 }
 
@@ -105,4 +110,8 @@ function safeInteger(value: string | undefined): number | null {
   if (value === undefined || value.length < 1 || value.length > 16) return null;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function isControlCodePoint(value: number): boolean {
+  return value <= 31 || value === 127;
 }

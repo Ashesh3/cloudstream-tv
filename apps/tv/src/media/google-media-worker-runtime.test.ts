@@ -56,15 +56,16 @@ function workerHarness(options?: { upstream?: Response; fetchError?: Error }): W
   const clients = new Map<string, { id: string; postMessage(message: GoogleMediaWorkerMessage): void }>();
   const skipWaiting = vi.fn(async () => undefined);
   const claim = vi.fn(async () => undefined);
-  const providerFetch = vi.fn(async () => {
+  const providerFetch = vi.fn(async (request: Request) => {
+    void request;
     if (options?.fetchError) throw options.fetchError;
     if (options?.upstream) return options.upstream;
-    return new Response(new Uint8Array([1]), {
+    return new Response(new Uint8Array(100), {
       status: 206,
       headers: {
         "accept-ranges": "bytes",
-        "content-length": "1",
-        "content-range": "bytes 0-0/100",
+        "content-length": "100",
+        "content-range": "bytes 0-99/100",
         "content-type": "video/mpeg",
       },
     });
@@ -181,8 +182,8 @@ describe("Google media worker runtime", () => {
       requestId: "request_test",
       sessionId: "session_test",
     });
-    const headers = new Headers(harness.providerFetch.mock.calls[0]![1]!.headers);
-    expect(headers.get("authorization")).toBe("Bearer ya29.test-token");
+    const request = harness.providerFetch.mock.calls[0]![0];
+    expect(request.headers.get("authorization")).toBe("Bearer ya29.test-token");
     expectSecretSafe(harness.clientMessages);
   });
 
@@ -215,19 +216,22 @@ describe("Google media worker runtime", () => {
     }), "client_tv");
 
     expect(response.status).toBe(206);
-    const headers = new Headers(providerFetch.mock.calls[0]![1]!.headers);
-    expect(headers.get("authorization")).toBe("Bearer ya29.test-token");
-    expect(headers.get("range")).toBe("bytes=0-");
-    expect(headers.has("if-range")).toBe(false);
-    expect([...headers.keys()]).toEqual(["authorization", "range"]);
-    expect(providerFetch.mock.calls[0]![0]).toBe(RAW_URL);
-    expect(providerFetch.mock.calls[0]![1]).toMatchObject({
-      method: "GET",
-      mode: "cors",
-      credentials: "omit",
-      cache: "no-store",
-      redirect: "follow",
-    });
+    const providerRequest = providerFetch.mock.calls[0]![0] as unknown;
+    expect(providerRequest).toBeInstanceOf(Request);
+    const request = providerRequest as Request;
+    expect(request.url).toBe(RAW_URL);
+    expect(request.method).toBe("GET");
+    expect(request.mode).toBe("cors");
+    expect(request.credentials).toBe("omit");
+    expect(request.cache).toBe("no-store");
+    expect(request.redirect).toBe("follow");
+    expect(request.referrer).toBe("");
+    expect(request.referrerPolicy).toBe("no-referrer");
+    expect(request.headers.get("authorization")).toBe("Bearer ya29.test-token");
+    expect(request.headers.get("range")).toBe("bytes=0-");
+    expect(request.headers.has("if-range")).toBe(false);
+    expect([...request.headers.keys()]).toEqual(["authorization", "range"]);
+    expect(providerFetch.mock.calls[0]).toHaveLength(1);
     expectSecretSafe(clientMessages);
   });
 
@@ -282,6 +286,102 @@ describe("Google media worker runtime", () => {
     expect(response.headers.get("content-length")).toBe(contentLength);
     expect(response.headers.get("accept-ranges")).toBe("bytes");
     expectSecretSafe(clientMessages);
+  });
+
+  it.each([
+    ["content-range", { "content-range": "bytes 10-20/100" }, "bytes 10-20/100", "11"],
+    ["content-length", { "content-length": "11" }, "bytes 10-20/100", "11"],
+  ])("synthesizes only the compatible hidden %s metadata", async (_label, visible, contentRange, contentLength) => {
+    const upstream = new Response(new Uint8Array(11), {
+      status: 206,
+      headers: { "content-type": "video/mpeg", ...visible },
+    });
+    const harness = workerHarness({ upstream });
+    await harness.dispatchMessage(grantMessage(), { id: "client_tv" });
+    const response = await harness.dispatchFetch(rawRequest({ range: "bytes=10-20" }), "client_tv");
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe(contentRange);
+    expect(response.headers.get("content-length")).toBe(contentLength);
+    expectSecretSafe(harness.clientMessages);
+  });
+
+  it("accepts internally consistent exposed 206 metadata when the grant size is unknown", async () => {
+    const upstream = new Response(new Uint8Array(11), {
+      status: 206,
+      headers: {
+        "content-range": "bytes 10-20/100",
+        "content-length": "11",
+        "content-type": "video/mpeg",
+      },
+    });
+    const message = grantMessage();
+    message.grant.size = null;
+    const harness = workerHarness({ upstream });
+    await harness.dispatchMessage(message, { id: "client_tv" });
+    const response = await harness.dispatchFetch(rawRequest({ range: "bytes=10-20" }), "client_tv");
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 10-20/100");
+    expect(response.headers.get("content-length")).toBe("11");
+    expectSecretSafe(harness.clientMessages);
+  });
+
+  it("accepts a provider-clamped open range when exposed metadata is internally consistent", async () => {
+    const upstream = new Response(new Uint8Array(90), {
+      status: 206,
+      headers: {
+        "content-range": "bytes 10-99/100",
+        "content-length": "90",
+      },
+    });
+    const message = grantMessage();
+    message.grant.size = null;
+    const harness = workerHarness({ upstream });
+    await harness.dispatchMessage(message, { id: "client_tv" });
+    const response = await harness.dispatchFetch(rawRequest({ range: "bytes=10-200" }), "client_tv");
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 10-99/100");
+    expect(response.headers.get("content-length")).toBe("90");
+  });
+
+  it.each([
+    ["malformed content-range", { "content-range": "bytes nope", "content-length": "1" }, "bytes=0-0"],
+    ["a different requested interval", { "content-range": "bytes 1-1/100", "content-length": "1" }, "bytes=0-0"],
+    ["a different known total", { "content-range": "bytes 0-0/101", "content-length": "1" }, "bytes=0-0"],
+    ["content-length shorter than the interval", { "content-range": "bytes 0-1/100", "content-length": "1" }, "bytes=0-1"],
+    ["content-length longer than the interval", { "content-range": "bytes 0-0/100", "content-length": "2" }, "bytes=0-0"],
+    ["only an incompatible content-range", { "content-range": "bytes 1-1/100" }, "bytes=0-0"],
+    ["only an incompatible content-length", { "content-length": "2" }, "bytes=0-0"],
+  ])("fails closed for 206 metadata with %s", async (_label, headers, range) => {
+    const upstream = new Response(new Uint8Array([1]), {
+      status: 206,
+      headers: { "content-type": "video/mpeg", ...headers },
+    });
+    const harness = workerHarness({ upstream });
+    await harness.dispatchMessage(grantMessage(), { id: "client_tv" });
+    const response = await harness.dispatchFetch(rawRequest({ range }), "client_tv");
+    expect(response.type).toBe("error");
+    expect(harness.clientMessages).toContainEqual({
+      type: "cloudframe-media-result",
+      sessionId: "session_test",
+      attempt: "google-raw",
+      outcome: "bridge-error",
+    });
+    expectSecretSafe(harness.clientMessages);
+  });
+
+  it("rejects a 206 response when no byte range was requested", async () => {
+    const upstream = new Response(new Uint8Array([1]), {
+      status: 206,
+      headers: {
+        "content-range": "bytes 0-0/100",
+        "content-length": "1",
+      },
+    });
+    const harness = workerHarness({ upstream });
+    await harness.dispatchMessage(grantMessage(), { id: "client_tv" });
+    const response = await harness.dispatchFetch(rawRequest(), "client_tv");
+    expect(response.type).toBe("error");
+    expectSecretSafe(harness.clientMessages);
   });
 
   it.each([
@@ -386,7 +486,7 @@ describe("Google media worker runtime", () => {
   it("turns a rejected provider fetch into secret-safe network evidence", async () => {
     const harness = workerHarness({ fetchError: new Error(`${RAW_URL} ya29.test-token`) });
     await harness.dispatchMessage(grantMessage(), { id: "client_tv" });
-    const response = await harness.dispatchFetch(rawRequest(), "client_tv");
+    const response = await harness.dispatchFetch(rawRequest({ range: "bytes=0-" }), "client_tv");
     expect(response.type).toBe("error");
     expect(harness.clientMessages).toContainEqual({
       type: "cloudframe-media-result",
@@ -404,13 +504,14 @@ describe("Google media worker runtime", () => {
       type: "cloudframe-media-revoke",
       sessionId: "session_test",
     }, { id: "client_other" });
-    await expect(harness.dispatchFetch(rawRequest(), "client_tv")).resolves.toMatchObject({ status: 206 });
+    await expect(harness.dispatchFetch(rawRequest({ range: "bytes=0-" }), "client_tv"))
+      .resolves.toMatchObject({ status: 206 });
 
     await harness.dispatchMessage({
       type: "cloudframe-media-revoke",
       sessionId: "session_test",
     }, { id: "client_tv" });
-    const response = await harness.dispatchFetch(rawRequest(), "client_tv");
+    const response = await harness.dispatchFetch(rawRequest({ range: "bytes=0-" }), "client_tv");
     expect(response.type).toBe("error");
     expect(harness.providerFetch).toHaveBeenCalledOnce();
     expectSecretSafe(harness.clientMessages);
@@ -423,10 +524,13 @@ describe("Google media worker runtime", () => {
     collision.grant.token = "ya29.other-client-token";
     await harness.dispatchMessage(collision, { id: "client_other" });
 
-    const response = await harness.dispatchFetch(rawRequest(), "client_tv");
+    const response = await harness.dispatchFetch(
+      rawRequest({ range: "bytes=0-" }),
+      "client_tv",
+    );
     expect(response.status).toBe(206);
-    const headers = new Headers(harness.providerFetch.mock.calls[0]![1]!.headers);
-    expect(headers.get("authorization")).toBe("Bearer ya29.test-token");
+    const request = harness.providerFetch.mock.calls[0]![0];
+    expect(request.headers.get("authorization")).toBe("Bearer ya29.test-token");
     expect(harness.clientMessages).not.toContainEqual(expect.objectContaining({
       type: "cloudframe-media-grant-ack",
       requestId: "request_collision",
@@ -451,7 +555,9 @@ describe("Google media worker runtime", () => {
     expect(oldest.type).toBe("error");
     for (let index = 2; index <= 5; index += 1) {
       const response = await harness.dispatchFetch(
-        new Request(`https://tv.test${googleMediaAlias(`session_${index}`, `clip-${index}.mpg`)}`),
+        new Request(`https://tv.test${googleMediaAlias(`session_${index}`, `clip-${index}.mpg`)}`, {
+          headers: { range: "bytes=0-" },
+        }),
         "client_tv",
       );
       expect(response.status).toBe(206);

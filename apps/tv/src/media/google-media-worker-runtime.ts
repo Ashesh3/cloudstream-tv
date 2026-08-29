@@ -184,15 +184,15 @@ export function installGoogleMediaWorker(
       !FINGERPRINT.test(value.fingerprint) ||
       typeof value.token !== "string" ||
       value.token.length < 1 || value.token.length > 8192 ||
-      !/^[\x21-\x7e]+$/u.test(value.token) ||
+      !isVisibleAscii(value.token) ||
       (value.kind !== "image" && value.kind !== "video") ||
       typeof value.mimeType !== "string" ||
       value.mimeType.length < 3 || value.mimeType.length > 256 ||
       !/^(?:image|video)\/[A-Za-z0-9!#$&^_.+-]+$/u.test(value.mimeType) ||
       !value.mimeType.startsWith(`${value.kind}/`) ||
       typeof value.filename !== "string" ||
-      value.filename.length < 1 || value.filename.length > 255 ||
-      /[\x00-\x1f\x7f]/u.test(value.filename) ||
+      value.filename.length < 1 || codePointLength(value.filename) > 255 ||
+      hasControlCharacters(value.filename) ||
       sanitizeMediaFilename(value.filename) !== value.filename ||
       typeof expiresAtEpoch !== "number" ||
       !Number.isSafeInteger(expiresAtEpoch) ||
@@ -299,14 +299,17 @@ export function installGoogleMediaWorker(
 
     let upstream: Response;
     try {
-      upstream = await dependencies.fetch(bound.grant.rawUrl, {
+      const providerRequest = new Request(bound.grant.rawUrl, {
         method: event.request.method,
         mode: "cors",
         credentials: "omit",
         cache: "no-store",
         redirect: "follow",
+        referrer: "",
+        referrerPolicy: "no-referrer",
         headers,
       });
+      upstream = await dependencies.fetch(providerRequest);
     } catch {
       postResult(client, bound.grant.sessionId, attempt, "network-error");
       return Response.error();
@@ -410,16 +413,20 @@ function rebuildResponse(
   if (upstream.status < 200 || upstream.status > 599) return null;
   const headers = new Headers();
   for (const name of RESPONSE_HEADERS) {
+    if (upstream.status === 206 && (name === "content-length" || name === "content-range")) continue;
     const value = upstream.headers.get(name);
     if (value !== null) headers.set(name, value);
   }
   if (upstream.status === 206) {
-    if (!headers.has("content-range") || !headers.has("content-length")) {
-      const interval = concreteInterval(range, size);
-      if (!interval) return null;
-      headers.set("content-range", `bytes ${interval.start}-${interval.end}/${interval.size}`);
-      headers.set("content-length", String(interval.length));
-    }
+    const metadata = partialResponseMetadata(
+      range,
+      size,
+      upstream.headers.get("content-range"),
+      upstream.headers.get("content-length"),
+    );
+    if (!metadata) return null;
+    headers.set("content-range", metadata.contentRange);
+    headers.set("content-length", metadata.contentLength);
     if (!headers.has("accept-ranges")) headers.set("accept-ranges", "bytes");
   }
   const body = upstream.status === 204 || upstream.status === 205 || upstream.status === 304
@@ -429,6 +436,67 @@ function rebuildResponse(
     status: upstream.status,
     headers,
   });
+}
+
+function partialResponseMetadata(
+  range: ParsedSingleRange | null,
+  knownSize: number | null,
+  visibleContentRange: string | null,
+  visibleContentLength: string | null,
+): { contentRange: string; contentLength: string } | null {
+  if (!range) return null;
+  const parsedContentRange = visibleContentRange === null
+    ? null
+    : parseContentRange(visibleContentRange);
+  if (visibleContentRange !== null && !parsedContentRange) return null;
+  if (
+    parsedContentRange && knownSize !== null &&
+    parsedContentRange.size !== knownSize
+  ) return null;
+  const size = parsedContentRange?.size ?? knownSize;
+  const interval = concreteInterval(range, size);
+  if (!interval) return null;
+  if (
+    parsedContentRange && (
+      parsedContentRange.start !== interval.start ||
+      parsedContentRange.end !== interval.end ||
+      parsedContentRange.size !== interval.size
+    )
+  ) return null;
+  const parsedContentLength = visibleContentLength === null
+    ? null
+    : parseDecimalInteger(visibleContentLength);
+  if (
+    visibleContentLength !== null &&
+    (parsedContentLength === null || parsedContentLength !== interval.length)
+  ) return null;
+  return {
+    contentRange: visibleContentRange ??
+      `bytes ${interval.start}-${interval.end}/${interval.size}`,
+    contentLength: visibleContentLength ?? String(interval.length),
+  };
+}
+
+function parseContentRange(
+  value: string,
+): { start: number; end: number; size: number } | null {
+  const match = /^bytes (\d+)-(\d+)\/(\d+)$/u.exec(value);
+  if (!match) return null;
+  const start = parseDecimalInteger(match[1]!);
+  const end = parseDecimalInteger(match[2]!);
+  const size = parseDecimalInteger(match[3]!);
+  return start !== null && end !== null && size !== null &&
+    start <= end && end < size
+    ? { start, end, size }
+    : null;
+}
+
+function parseDecimalInteger(value: string): number | null {
+  if (!/^\d+$/u.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 0 && String(parsed) === value
+    ? parsed
+    : null;
 }
 
 function concreteInterval(
@@ -468,7 +536,7 @@ function validClient(value: GoogleMediaWorkerClient | null | undefined): GoogleM
 }
 
 function validClientId(value: unknown): value is string {
-  return typeof value === "string" && value.length >= 1 && value.length <= 1024 && !/[\x00-\x1f\x7f]/u.test(value);
+  return typeof value === "string" && value.length >= 1 && value.length <= 1024 && !hasControlCharacters(value);
 }
 
 function validSessionId(value: unknown): value is string {
@@ -498,4 +566,36 @@ function plainDataRecord(value: unknown): value is Record<string, unknown> {
     ) return false;
   }
   return true;
+}
+
+function isVisibleAscii(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 33 || code > 126) return false;
+  }
+  return true;
+}
+
+function hasControlCharacters(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 31 || code === 127) return true;
+  }
+  return false;
+}
+
+function codePointLength(value: string): number {
+  let length = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const first = value.charCodeAt(index);
+    if (
+      first >= 0xd800 && first <= 0xdbff &&
+      index + 1 < value.length
+    ) {
+      const second = value.charCodeAt(index + 1);
+      if (second >= 0xdc00 && second <= 0xdfff) index += 1;
+    }
+    length += 1;
+  }
+  return length;
 }
