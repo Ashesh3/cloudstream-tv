@@ -23,6 +23,7 @@ export default defineProject({
     include: ["tests/**/*.test.ts", "apps/tv/**/*.test.ts", "apps/tv/**/*.test.tsx"],
     restoreMocks: true,
     clearMocks: true,
-    isolate: true
+    isolate: true,
+    fileParallelism: false
   }
 });

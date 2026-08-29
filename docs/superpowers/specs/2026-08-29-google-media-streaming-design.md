@@ -1,5 +1,8 @@
 # Google Media Streaming Design
 
+> Superseded by `docs/superpowers/specs/2026-08-29-direct-google-tv-media-design.md`.
+> The Vercel Google media relay described below is retired and must not be implemented.
+
 ## Goal
 
 Restore Google Drive image, video, and thumbnail playback on LG webOS while preserving current device, root, source, and credential authorization.

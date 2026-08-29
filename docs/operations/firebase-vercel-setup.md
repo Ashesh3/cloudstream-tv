@@ -115,7 +115,9 @@ https://<host>/api/admin/sources/onedrive/callback
 
 Google uses Drive read-only offline access. Microsoft uses `Files.Read`, `offline_access`, and identity scopes. The callback host is derived server-side; the browser cannot supply an arbitrary redirect.
 
-Folder/media metadata is listed live through Vercel with no-store responses. Media URLs are vended only after current authorization. Google returns a same-origin handle URL; Vercel reauthorizes and streams Drive with a bearer header and Range forwarding. OneDrive returns its temporary download URL directly. Never log either URL, provider IDs, tokens, or response bodies.
+Folder/media metadata is listed live through Vercel with no-store responses. Media descriptors are vended only after current TV, root, source, and browse-handle authorization. OneDrive returns its provider-signed temporary download URL. Google returns the validated raw Drive URL and current short-lived bearer token to the approved TV. The root-scoped service worker holds the token in memory, attaches it to the exact registered URL, and forwards a valid single Range request directly to Google. Media bytes go directly from Google and Microsoft; no Cloudframe/Vercel route proxies, caches, stores, remuxes, or transcodes provider bodies.
+
+This design accepts that an already-vended Google token cannot be revoked before provider expiry. Revoking a device, removing a root, or disabling a source stops new descriptors immediately, but the approved TV may continue using a still-live in-memory token. Never persist or log raw provider URLs, provider IDs, access tokens, refresh tokens, worker grants, or response bodies. Reject any media URL containing an `access_token` query parameter; do not reintroduce query-token delivery.
 
 ## Build and preview deployment
 

@@ -34,18 +34,25 @@ Automated compatibility proves that the legacy bundle parses and stays within bu
 
 ## Direct provider media and viewer
 
-Perform these checks once with Google Drive and once with OneDrive:
+Perform these checks on the exact candidate, recording secret-safe timestamps and outcomes:
 
-- Open an image, move Right to a video, and Left back to the image.
-- Confirm the browser fetches media from the provider host rather than the Vercel application host.
-- Play the video and seek forward/backward with LG playback keys; verify range seeking resumes playback at the selected position.
+- Open a full-size Google image, move Right to a known H.264/AAC MP4, and Left back to the image. Confirm both bodies come from `https://www.googleapis.com/drive/v3/files/...`, not Vercel.
+- Confirm normal Google playback uses the exact raw Drive URL. For the legacy MPEG retry only, confirm the browser may use `/__cloudframe_media__/<session-id>/<sanitized-filename>` and that this alias is handled by the service worker rather than reaching Vercel.
+- In the Google/network evidence, confirm playback and seeking receive successful HTTP `206` responses and that Range seeking resumes at the selected position.
+- Open representative OneDrive image and video items and confirm their provider-signed Microsoft URLs, playback, seeking, and thumbnails remain unchanged.
 - Confirm the Video.js 10 state/container wrapper initializes on the TV. If it cannot initialize, confirm the same native video still plays, pauses, seeks, resumes, and reports errors through Cloudframe controls.
 - Enter toggles image slideshow or video play/pause; Up opens details/filmstrip; Down closes it.
 - Back returns focus to the exact grid card.
-- Cause or wait for a media URL to expire, then confirm the TV requests one renewed URL and playback recovers without a loop.
-- Confirm an unsupported codec produces a bounded error without crashing the shell.
+- Cause or wait for one Google token to expire, then confirm the TV makes one new `/api/tv/media-url` descriptor request, renews the in-memory grant once, and restores playback and the prior resume position without a loop.
+- Close and reopen the known MP4 after passing the resume threshold and confirm local resume still works after direct delivery.
+- In Vercel logs, confirm descriptor calls to `/api/tv/media-url` and confirm there are no requests to `/api/tv/google-media/`. Logs must not contain the Google token, raw provider URL, provider ID, worker grant, or response body.
 
-Google's TV URL must be same-origin under `/api/tv/google-media/` and must not contain an access token or provider ID. Confirm seeking produces HTTP 206 range responses and Vercel logs contain no token, provider URL, provider ID, or response body.
+### Exact `MOV00516.MPG` result
+
+- Play `MOV00516.MPG` and record separately whether the raw Google URL attempt succeeds and whether the one filename-alias attempt is used or succeeds.
+- Confirm the filename attempt happens at most once and sends identical provider bytes and MIME type. It must not trigger remuxing, transcoding, caching, full-file buffering, or a Vercel media route.
+- If either attempt fails before successful Google bytes arrive, record the precise worker, CORS, authorization, network, or HTTP transport failure.
+- If both attempts receive successful `200` or `206` bytes and the native media element still fails to decode, record **exact decoder/container/profile limitation on this TV** rather than a transport failure. Do not claim that Cloudframe can make that exact bitstream playable without offline conversion or a native player.
 
 ## Local TV watch history
 

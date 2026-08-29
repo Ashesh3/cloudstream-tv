@@ -44,7 +44,7 @@ describe("screening room material contract", () => {
       "zero steady-state Firestore reads",
       "live Google Drive and OneDrive metadata",
       "local TV watch history",
-      "authenticated streaming",
+      "browser-side authenticated direct delivery",
       "explicit recovery"
     ]) {
       expect(documentation).toContain(required);
@@ -55,7 +55,8 @@ describe("screening room material contract", () => {
       "reconciliation schedule",
       "indexed nodes",
       "Firestore quota recovery",
-      "15-minute sync"
+      "15-minute sync",
+      "authenticated streaming through Vercel"
     ]) {
       expect(documentation).not.toContain(retired);
     }

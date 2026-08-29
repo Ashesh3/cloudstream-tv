@@ -1,5 +1,8 @@
 # Google Media Streaming Implementation Plan
 
+> Superseded by `docs/superpowers/specs/2026-08-29-direct-google-tv-media-design.md`.
+> The Vercel Google media relay described below is retired and must not be implemented.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace broken Google query-token URLs with authenticated same-origin streaming and resilient Google thumbnails.

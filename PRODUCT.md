@@ -21,8 +21,9 @@ Cloudframe is a private, single-household cloud-media browser. The administrator
 - The encrypted private Vercel Blob snapshot is authoritative active control state. Vercel Runtime Cache is a five-minute hot copy and every protected request conditionally revalidates its Blob ETag.
 - Firestore contains one compact write-only recovery mirror. Ordinary TV, admin, and provider traffic performs zero steady-state Firestore reads.
 - Approved TVs receive signed, sealed sessions and opaque browse handles. Current device, root, and source authorization is revalidated before live provider operations.
-- OneDrive media bytes go directly from Microsoft. Google Drive media is streamed through a same-origin authenticated Vercel route because Chromium 68 media elements cannot attach Google's required OAuth header.
-- Google access tokens remain server-only. The Google route revalidates device/root/source authorization, forwards range requests, and never caches, persists, or transcodes media.
+- Browser-side authenticated direct delivery means media bytes go directly from Google and Microsoft; Cloudframe/Vercel never proxies, caches, stores, remuxes, or transcodes provider bodies.
+- Vercel authorizes the approved TV and vends bounded media metadata. OneDrive returns its provider-signed direct URL. Google returns the raw Drive URL plus a short-lived Google access token to the approved TV, where the root-scoped service worker keeps it in memory, attaches it to exact registered requests, and forwards Range requests directly to Google.
+- The accepted trust trade-off is explicit: revocation and root removal stop new descriptors but cannot revoke an already-vended Google token before expiry. URLs containing an `access_token` query parameter are rejected and must not be reintroduced.
 - Local TV watch history is stored in browser `localStorage`, capped at 500 entries, and removed when browser data is cleared. Playback continues without resume history when storage is unavailable.
 
 ## Operating Context
@@ -40,6 +41,7 @@ Cloudframe is a private, single-household cloud-media browser. The administrator
 - The admin app is mobile-first and keyboard/screen-reader operable.
 - Firestore browser rules deny direct access. The permanent runtime identity has exact write-only recovery permission and no read/list permission.
 - Provider refresh tokens stay server-side and are encrypted at rest. Routine access-token refresh uses Runtime Cache and does not touch Firestore unless the provider rotates the refresh token.
+- Legacy MPEG gets one native filename-preserving retry with identical bytes. Exact codec, container, and profile support remains a real-TV result; Cloudframe does not claim transport can manufacture decoder support.
 - The active product has no provider-file catalog, workflow runtime, refresh schedule or button, server watch history, or Firestore request counters.
 - Migration and restore are dry-run-first operator actions. Existing legacy documents and Google Cloud/Firebase projects remain untouched until a separately approved cleanup.
 

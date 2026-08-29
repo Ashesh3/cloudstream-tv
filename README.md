@@ -7,13 +7,13 @@ Cloudframe is a private household cloud-media browser for televisions. The TV ap
 - Lists live Google Drive and OneDrive metadata through authenticated, no-store Vercel API responses.
 - Lets the administrator select folder roots and assign them to named, approved TVs.
 - Revalidates current device, root, source, and browse-handle authorization on every protected request.
-- Sends OneDrive media directly from Microsoft and streams Google Drive media through an authenticated, no-store Vercel route that forwards range requests.
+- Uses browser-side authenticated direct delivery so media bytes go directly from Google and Microsoft.
 - Stores authoritative active control state as an encrypted private Vercel Blob snapshot.
 - Uses Vercel Runtime Cache as a five-minute hot copy with Blob ETag revalidation on every protected request.
 - Writes one compact Firestore recovery mirror after control mutations, while ordinary TV, admin, and provider traffic causes zero steady-state Firestore reads.
 - Keeps local TV watch history in browser `localStorage`, capped at 500 entries. It clears with browser data and is disabled for the session if storage is unavailable.
 
-This is live Google Drive and OneDrive metadata. Cloudframe stores no provider media catalog or media bodies; only Google playback transits Vercel because Drive requires an OAuth header that TV media elements cannot attach. There is no workflow runtime, refresh schedule/button, server watch history, or Firestore-backed rate counter in the active application.
+This is live Google Drive and OneDrive metadata. Cloudframe stores no provider media catalog or media bodies, and Vercel never proxies, caches, stores, remuxes, or transcodes provider media. There is no workflow runtime, refresh schedule/button, server watch history, or Firestore-backed rate counter in the active application.
 
 ## Repository
 
@@ -88,11 +88,13 @@ The migration reads only legacy household, request, device, source, and root rec
 
 ## Direct media security boundary
 
-Provider refresh tokens and access tokens remain encrypted/server-only. Vercel obtains or refreshes access tokens to list metadata and authorize media.
+Provider refresh tokens remain encrypted and server-only. Vercel obtains or refreshes access tokens to list metadata and authorize media descriptors.
 
-Google playback uses a same-origin URL containing only the sealed, device-bound browse handle. Vercel revalidates the current device/root/source on every request, attaches `Authorization: Bearer` server-side, forwards range requests, and streams the response without caching or persistence. Revocation or root removal therefore blocks the next Google request, and the Google access token is never exposed to the TV URL.
+Vercel revalidates the approved TV, assigned root, source, and browse handle before vending bounded media metadata. OneDrive returns its provider-signed direct URL. Google returns the validated raw Drive URL plus a short-lived Google access token to the approved TV. The root-scoped classic service worker keeps that bearer token in memory, attaches it to an exact registered Google URL, forwards a valid single `Range` request directly to Google, and reconstructs the streaming response for the native image or video element. URLs containing an `access_token` query parameter are rejected and must not be reintroduced.
 
-OneDrive uses its temporary provider download URL and has the same direct-byte path without exposing the stored refresh token.
+Media bytes go directly from Google and Microsoft. Cloudframe/Vercel does not proxy, cache, persist, remux, or transcode provider bodies. The approved TV deliberately receives the short-lived Google access token in memory; after vending, device revocation or root removal blocks new descriptors but cannot revoke that token before its provider expiry. The token is never written to browser storage, cookies, URLs, logs, telemetry, or error text.
+
+Legacy MPEG candidates get one native retry through a worker-only alias ending in the sanitized original filename. The retry uses identical bytes and MIME type; it does not change the container or codec. Whether an exact file such as `MOV00516.MPG` decodes remains a real-LG result, and confirmed successful delivery followed by both native failures is an honest decoder limitation rather than a transport failure.
 
 ## Firestore identities after cutover
 

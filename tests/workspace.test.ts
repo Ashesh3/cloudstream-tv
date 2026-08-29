@@ -36,6 +36,9 @@ describe("workspace", () => {
     await expect(access("packages/server/src/auth/media-handles.ts"))
       .rejects.toMatchObject({ code: "ENOENT" });
     expect(`${readme}\n${product}`).toContain("server-only");
+    expect(`${readme}\n${product}`).toContain("media bytes go directly from Google and Microsoft");
+    expect(`${readme}\n${product}`).toContain("short-lived Google access token");
+    expect(`${readme}\n${product}`).not.toContain("Google media is streamed through");
     expect(`${readme}\n${product}`).not.toMatch(/access token in the (?:media )?URL|access token in the query string/i);
   });
 

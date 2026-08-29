@@ -27,8 +27,8 @@ Media bytes continue to flow directly from Google Drive or OneDrive to the telev
 | Firestore | One compact write-only recovery mirror containing authorized devices, provider credentials, approved roots, and household configuration. |
 | Media index | Removed. Cloudframe stores no provider file or folder catalog. |
 | Folder listing | Vercel requests the current folder live from Google Drive or OneDrive and returns sanitized metadata. |
-| Provider credentials | Refresh tokens never leave Vercel. Access tokens are used server-side for listing and refresh. |
-| Google playback | Vercel returns a short-lived same-origin handle URL, reauthorizes each request, and streams Drive with a server-side bearer header. |
+| Provider credentials | Refresh tokens never leave Vercel. Access tokens are used server-side for listing and refresh; a short-lived Google access token is vended in a bounded media descriptor to an approved TV. |
+| Google playback | Vercel authorizes the descriptor, then the TV service worker attaches the bearer token and streams directly from the raw Google Drive URL. |
 | OneDrive playback | After authorization, Vercel returns Microsoft's temporary pre-authorized download URL; the TV streams directly from Microsoft. |
 | Watch/resume history | Stored locally on the television in `localStorage`, never in Firestore or Vercel storage. |
 | Sessions | Signed, sealed HTTP-only cookies; no Firestore session lookup on each request. |
@@ -38,23 +38,24 @@ Media bytes continue to flow directly from Google Drive or OneDrive to the telev
 
 ## 3. Google playback authorization boundary
 
-Google Drive download requires an OAuth `Authorization` header, while a normal HTML `<video>` element on the Chromium 68 target cannot attach one. Cloudframe therefore exposes a same-origin streaming URL containing only the sealed browse handle.
+Google Drive download requires an OAuth `Authorization` header, while a normal HTML `<video>` element on the Chromium 68 target cannot attach one. Cloudframe therefore uses browser-side authenticated direct delivery: a root-scoped classic service worker attaches the bearer token to an exact registered raw Drive URL or a worker-only filename alias.
 
 The boundary is:
 
-- the Google access token remains server-only;
-- every media request revalidates the device, root, source, sealed handle, and credential version;
-- revocation or root removal blocks the next media request;
-- Vercel carries Google bytes and range traffic but never caches, persists, or transcodes them.
+- Vercel revalidates the device, root, source, and sealed browse handle before vending each descriptor;
+- the approved TV holds the short-lived Google access token only in page/worker memory;
+- revocation or root removal blocks the next descriptor, but cannot revoke an already-vended token before its provider expiry;
+- media bytes and Range traffic go directly from Google to the TV; Vercel never proxies, caches, persists, remuxes, or transcodes them.
 
 Mitigations remain mandatory:
 
 - the refresh token is never returned to either browser;
-- Google media streams start only after current device and root authorization succeeds;
+- Google media grants are installed only after current device and root authorization succeeds;
 - media URL responses use `Cache-Control: private, no-store` and `Referrer-Policy: no-referrer`;
 - the TV document sets a no-referrer policy;
 - media URLs, OAuth codes, access tokens, refresh tokens, encrypted token material, and provider response bodies are never logged;
-- the TV keeps the same-origin handle URL only in memory and discards it when the viewer closes or the handle expires.
+- the TV keeps the bearer token and exact URL grant only in memory and discards them when the viewer closes or the token expires;
+- URLs containing an `access_token` query parameter are rejected and must not be reintroduced.
 
 Google's header-authenticated download contract is documented in [Download and export files](https://developers.google.com/drive/api/guides/manage-downloads). OneDrive continues to use `@microsoft.graph.downloadUrl` directly.
 
@@ -404,11 +405,14 @@ Routine hourly access-token refresh therefore causes no Firestore read or write.
 
 `POST /api/tv/media-url` accepts a signed media handle. After current device/root/source authorization:
 
-- Google returns `/api/tv/google-media/{sealed-handle}` with expiry bounded by the handle and access-token expiry;
+- Google returns the validated raw `https://www.googleapis.com/drive/v3/files/...` URL, a short-lived bearer token, and its actual expiry;
 - OneDrive returns the provider's temporary `@microsoft.graph.downloadUrl`;
 - the response is no-store/no-referrer and never logged;
-- the TV assigns the URL directly to the image/video element;
-- Google range requests, seeking, buffering, and bytes stream through Vercel; OneDrive remains direct.
+- the TV validates the descriptor, installs a bounded memory-only worker grant, and only then assigns the URL to the native image/video element;
+- the root-scoped worker attaches `Authorization`, forwards one valid `Range` header directly to Google, deliberately drops `If-Range`, and reconstructs the streaming response without buffering it;
+- Google and OneDrive media bodies both bypass Vercel.
+
+For legacy MPEG candidates, one retry may use the worker-only `/__cloudframe_media__/<session-id>/<sanitized-filename>` alias. The alias maps to the same Google URL, bytes, and MIME type and never reaches the Vercel application. If both native attempts receive successful bytes and fail to decode, the result is an exact real-TV decoder/container/profile limitation, not a transport failure.
 
 ## 10. Local TV watch history
 
@@ -577,7 +581,7 @@ Production structured logs include secret-safe counters for private Blob reads, 
 
 - one approved TV browses Google and OneDrive folder pages from synthetic provider APIs;
 - unassigned roots, forged handles, stale handles, revoked devices, and disabled sources fail closed;
-- Google media response points to the authenticated same-origin streaming route and contains no access token;
+- Google media response contains the validated raw Drive URL and bounded bearer credential only after authorization;
 - OneDrive media response points to Microsoft's pre-authorized URL;
 - admin folder selection is immediately visible on TV without indexing;
 - admin snapshot uses the active Vercel control store;
@@ -590,14 +594,14 @@ Production structured logs include secret-safe counters for private Blob reads, 
 - all unit, type, lint, build, Vercel Build Output API, TV bundle, and Chromium 68 checks pass;
 - Playwright covers enrollment, approval, live browsing, local resume, source reconnect, and revocation;
 - authenticated production browser verification confirms TV and admin load through the Vercel snapshot;
-- Vercel logs remain secret-safe while Google media streams through the authenticated route;
+- Vercel logs show descriptor calls but no Google media-body route or secret material;
 - Google and OneDrive playback seek successfully on the real TV;
 - Cloud Monitoring shows no Firestore reads during a continuous browse/playback observation window;
 - an explicit recovery drill restores the Vercel snapshot from the one Firestore document in an isolated staging environment.
 
 ## 17. Non-goals
 
-- server-side media transcoding, caching, persistence, or proxying for providers other than the required Google compatibility route;
+- server-side or browser-side media transcoding, remuxing, caching, persistence, full-file buffering, or proxying;
 - provider file indexing, search, timelines, global descendant counts, or folder mosaics;
 - cross-device watch-history synchronization;
 - hard cryptographic restriction of a Google bearer token to assigned roots;
@@ -614,7 +618,7 @@ The correction is complete when:
 3. the active Firestore model reads and writes only one compact recovery document for authorized devices, provider credentials, approved roots, and household configuration; retained legacy documents remain inert until separately approved cleanup;
 4. Vercel lists provider metadata live and enforces current device/root configuration;
 5. refresh tokens remain server-only;
-6. Google access tokens remain server-only while authenticated range streaming works on the TV;
+6. an approved TV receives a short-lived Google access token in memory and its service worker performs authenticated Range delivery directly from Google;
 7. OneDrive media also bypasses Vercel;
 8. watch history persists locally on the TV and nowhere else;
 9. indexing, workflows, sync state, Firestore rate limits, and server watch history are absent from the active application;
