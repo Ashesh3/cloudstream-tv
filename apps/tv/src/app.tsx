@@ -15,6 +15,7 @@ import { WaitingScreen } from "./components/waiting-screen";
 import { createLocalWatchHistory, type LocalWatchHistory, type LocalWatchHistoryEntry } from "./state/local-watch-history";
 import { useTvSession } from "./state/use-tv-session";
 import { createThumbnailWarmer, thumbnailRequestBatches } from "./thumbnails";
+import { scheduleIdlePrefetch } from "./pagination";
 
 type BrowseItem =
   | ({ itemType: "root" } & TvRootDto)
@@ -102,6 +103,8 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   const thumbnailRetryTimer = useRef<number | null>(null);
   const thumbnailInstallRetries = useRef<Record<string, boolean>>({});
   const thumbnailWarmer = useRef(createThumbnailWarmer());
+  const idlePrefetchCancel = useRef<(() => void) | null>(null);
+  const idlePrefetchedPages = useRef<Record<string, boolean>>({});
   const browseRef = useRef(browse);
   const scrollTopRef = useRef(scrollTop);
   const columns = useResponsiveColumns();
@@ -113,6 +116,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     clearScheduled(thumbnailExpiryTimers.current);
     if (thumbnailRetryTimer.current !== null) window.clearTimeout(thumbnailRetryTimer.current);
     thumbnailWarmer.current.clear();
+    idlePrefetchCancel.current?.();
   }, []);
 
   const clearThumbnailLifecycle = useCallback(() => {
@@ -121,6 +125,8 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     thumbnailRetryTimer.current = null;
     thumbnailInstallRetries.current = {};
     thumbnailWarmer.current.clear();
+    idlePrefetchCancel.current?.();
+    idlePrefetchCancel.current = null;
   }, []);
 
   const closeDrawerAndRestore = useCallback(() => {
@@ -229,10 +235,15 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
               : null
         };
         browseRef.current = next;
-        if (append && pending !== null) {
-          const targetId = noProgress ? previousFocusId : pageTargetId;
-          const restored = targetId ? items.findIndex(item => item.id === targetId) : -1;
-          setFocusedIndex(restored >= 0 ? restored : Math.min(pending, Math.max(0, items.length - 1)));
+        if (append) {
+          if (pending !== null) {
+            const targetId = noProgress ? previousFocusId : pageTargetId;
+            const restored = targetId ? items.findIndex(item => item.id === targetId) : -1;
+            setFocusedIndex(restored >= 0 ? restored : Math.min(pending, Math.max(0, items.length - 1)));
+          } else if (previousFocusId) {
+            const restored = items.findIndex(item => item.id === previousFocusId);
+            if (restored >= 0) setFocusedIndex(restored);
+          }
         }
         return next;
       });
@@ -246,14 +257,21 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     }
   }, [api, handleBrowseError, mediaOrder]);
 
-  const appendNextPage = useCallback((pendingIndex?: number) => {
-    if (!browse.parent || !browse.nextCursor || pageRequest.current) return;
+  const appendNextPage = useCallback((pendingIndex?: number, preserveIndex = focusedIndex) => {
+    if (!browse.parent || !browse.nextCursor) return;
+    if (pageRequest.current) {
+      if (pendingIndex !== undefined) {
+        requestedFocus.current = pendingIndex;
+        requestedFocusItemId.current = browse.items[preserveIndex]?.id ?? null;
+      }
+      return;
+    }
     if (browse.loadedPageCursors.indexOf(browse.nextCursor) >= 0) {
       setBrowse(current => ({ ...current, nextCursor: null, paginationError: "More items could not be loaded. Refresh this collection to try again." }));
       return;
     }
     requestedFocus.current = pendingIndex ?? null;
-    requestedFocusItemId.current = browse.items[focusedIndex]?.id ?? null;
+    requestedFocusItemId.current = browse.items[preserveIndex]?.id ?? null;
     const promise = loadFolder(browse.parent.handle, {
       expectedParentId: browse.parent.id,
       cursor: browse.nextCursor,
@@ -356,6 +374,27 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
       delete thumbnailExpiryTimers.current[itemId];
     });
   }, [browse.items, thumbnails]);
+
+  useEffect(() => {
+    idlePrefetchCancel.current?.();
+    idlePrefetchCancel.current = null;
+    if (!browse.parent || !browse.nextCursor || browse.loadedPageCursors.length !== 1) return;
+    const pageKey = `${browse.parent.id}:${browse.parent.handle}`;
+    if (idlePrefetchedPages.current[pageKey]) return;
+    const expectedParentId = browse.parent.id;
+    const expectedCursor = browse.nextCursor;
+    const cancel = scheduleIdlePrefetch(() => {
+      const current = browseRef.current;
+      if (current.parent?.id !== expectedParentId || current.nextCursor !== expectedCursor) return;
+      idlePrefetchedPages.current[pageKey] = true;
+      appendNextPage();
+    });
+    idlePrefetchCancel.current = cancel;
+    return () => {
+      cancel();
+      if (idlePrefetchCancel.current === cancel) idlePrefetchCancel.current = null;
+    };
+  }, [appendNextPage, browse.loadedPageCursors.length, browse.nextCursor, browse.parent]);
 
   const goBack = useCallback(() => {
     const entry = stack[stack.length - 1];
@@ -494,6 +533,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
             hasNextPage={Boolean(browse.nextCursor)}
             focusRevision={restoredFocusTick}
             onScrollTopChange={setScrollTop}
+            onNearEnd={index => appendNextPage(undefined, index)}
             onFocusedIndexChange={(index, extend, pendingIndex) => {
               setFocusedIndex(index);
               const activeColumns = browse.parent ? columns : programColumnsForWidth(window.innerWidth);

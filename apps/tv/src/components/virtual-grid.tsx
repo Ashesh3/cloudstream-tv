@@ -1,6 +1,7 @@
 import type { ComponentChild } from "preact";
 import { useEffect, useRef } from "preact/hooks";
 import { moveFocus, normalizeTvKey, shouldHandleTvKey } from "@cloudframe/tv-core";
+import { shouldPrefetchNextPage } from "../pagination";
 
 export interface VirtualGridItem {
   id: string;
@@ -35,6 +36,7 @@ interface VirtualGridProps<T extends VirtualGridItem> {
   onScrollTopChange?: (value: number) => void;
   onFocusedIndexChange: (index: number, needsPageExtension?: boolean, pendingIndex?: number) => void;
   onMountedItemsChange?: (ids: string[]) => void;
+  onNearEnd?: (focusedIndex: number) => void;
   onSelect?: (item: T, index: number) => void;
   onBack?: () => boolean | void;
   renderItem: (item: T, state: { focused: boolean; index: number }) => ComponentChild;
@@ -93,7 +95,20 @@ export function VirtualGrid<T extends VirtualGridItem>(props: VirtualGridProps<T
       role="grid"
       aria-label={props.ariaLabel}
       style={{ height: `${props.viewportHeight}px` }}
-      onScroll={event => props.onScrollTopChange?.(event.currentTarget.scrollTop)}
+      onScroll={event => {
+        const nextScrollTop = event.currentTarget.scrollTop;
+        props.onScrollTopChange?.(nextScrollTop);
+        if (props.hasNextPage && props.onNearEnd && shouldPrefetchNextPage({
+          itemCount: props.items.length,
+          columns: props.columns,
+          rowHeight: props.rowHeight,
+          viewportHeight: props.viewportHeight,
+          scrollTop: nextScrollTop,
+          focusedIndex: props.focusedIndex,
+        })) {
+          props.onNearEnd(props.focusedIndex);
+        }
+      }}
       onKeyDown={event => {
         const action = normalizeTvKey(event);
         if (!action || !shouldHandleTvKey(action, event.repeat)) return;
@@ -110,7 +125,19 @@ export function VirtualGrid<T extends VirtualGridItem>(props: VirtualGridProps<T
             hasNextPage: props.hasNextPage
           }, action);
           if (next.needsPageExtension) props.onFocusedIndexChange(next.index, true, next.pendingIndex);
-          else props.onFocusedIndexChange(next.index);
+          else {
+            props.onFocusedIndexChange(next.index);
+            if (props.hasNextPage && props.onNearEnd && shouldPrefetchNextPage({
+              itemCount: props.items.length,
+              columns: props.columns,
+              rowHeight: props.rowHeight,
+              viewportHeight: props.viewportHeight,
+              scrollTop,
+              focusedIndex: next.index,
+            })) {
+              props.onNearEnd(next.index);
+            }
+          }
         } else return;
         event.preventDefault();
       }}

@@ -200,6 +200,47 @@ describe("TV enrollment and browse states", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: /Node 12/ })).toHaveFocus());
   });
 
+  it("prefetches the first continuation after thumbnail work settles without scrolling", async () => {
+    vi.useFakeTimers();
+    const client = pagedClient(
+      folderPage("root-1", 0, 10, "page-2"),
+      folderPage("root-1", 10, 10, "page-3"),
+      folderPage("root-1", 20, 5, null),
+    );
+    vi.mocked(client.thumbnailUrls).mockImplementation(async handles => ({
+      items: handles.map(handle => ({
+        itemId: handle.replace(/^sealed-/, ""),
+        status: "unavailable" as const,
+      })),
+    }));
+
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await findButtonWithFakeTimers(/Family/));
+    await flushFakeTimersUntil(() => vi.mocked(client.thumbnailUrls).mock.calls.length === 1);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(300); await Promise.resolve(); });
+    await flushFakeTimersUntil(() => vi.mocked(client.folder).mock.calls.length === 2);
+    expect(screen.getByRole("grid")).toHaveProperty("scrollTop", 0);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); await Promise.resolve(); });
+    expect(client.folder).toHaveBeenCalledTimes(2);
+  });
+
+  it("prefetches the next continuation when scrolling exposes the final two rows", async () => {
+    const client = pagedClient(
+      folderPage("root-1", 0, 50, "page-2"),
+      folderPage("root-1", 50, 5, null),
+    );
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    const grid = await screen.findByRole("grid", { name: "Parent" });
+    expect(client.folder).toHaveBeenCalledTimes(1);
+
+    fireEvent.scroll(grid, { target: { scrollTop: 4_650 } });
+
+    await waitFor(() => expect(client.folder).toHaveBeenCalledTimes(2));
+  });
+
   it("restores accumulated pages and focus from the local stack without refetching ancestry", async () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
@@ -256,7 +297,8 @@ describe("TV enrollment and browse states", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
     const grid = await screen.findByRole("grid", { name: "Parent" });
     await requestNextPage(grid, client, 2);
-    expect(screen.getByRole("button", { name: /Node 12/ })).toHaveFocus();
+    expect(screen.getByRole("button", { name: /Node 6/ })).toHaveFocus();
+    expect(screen.getByRole("status")).toHaveTextContent("More items could not be loaded. Refresh this collection to try again.");
 
     fireEvent.keyDown(grid, { key: "ArrowDown" });
 
