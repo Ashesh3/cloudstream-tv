@@ -233,7 +233,7 @@ function navigate(state: ViewerState, direction: -1 | 1): ViewerState {
     ...state,
     index,
     mode: nextItem.kind,
-    playbackIntent: state.slideshowActive && nextItem.kind === "video" ? "play" : "pause",
+    playbackIntent: !nextError && state.slideshowActive && nextItem.kind === "video" ? "play" : "pause",
     videoPlaying: false,
     controlsVisible: true,
     slideshowActive: nextError ? false : state.slideshowActive,

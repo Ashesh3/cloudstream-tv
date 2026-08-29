@@ -140,6 +140,23 @@ describe("viewer reducer", () => {
     expect(activeViewerItem(state).id).toBe("image-2");
   });
 
+  it("pauses when an active slideshow reaches a cached failed video", () => {
+    let state = createViewerState(media.slice(0, 3), "image-1");
+    state = viewerReducer(state, { type: "enter" });
+    const failed = state.urls["video-1"]!;
+    state = viewerReducer(state, { type: "url-failed", nodeId: "video-1", requestId: failed.requestId, kind: "bridge" });
+
+    state = viewerReducer(state, { type: "slideshow-tick" });
+    expect(activeViewerItem(state).id).toBe("video-1");
+    expect(state.mediaError).toEqual({ nodeId: "video-1", kind: "bridge" });
+    expect(state.slideshowActive).toBe(false);
+    expect(state.playbackIntent).toBe("pause");
+    expect(state.videoPlaying).toBe(false);
+
+    state = viewerReducer(state, { type: "slideshow-tick" });
+    expect(activeViewerItem(state).id).toBe("video-1");
+  });
+
   it("ignores stale URL completions and permits one refresh for each issued URL", () => {
     let state = createViewerState(media, "image-1");
     const first = state.urls["image-1"]!;
