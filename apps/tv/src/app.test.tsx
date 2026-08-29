@@ -708,7 +708,7 @@ describe("TV enrollment and browse states", () => {
       nextCursor: null
     });
     vi.mocked(client.mediaUrl).mockImplementation(async handle => ({
-      itemId: "item_duplicate", kind: "video", url: `https://provider.example/${handle}`,
+      itemId: "item_duplicate", kind: "video", transport: "direct", url: `https://provider.example/${handle}`,
       expiresAt: futureIso(), revision: null
     }));
 
@@ -793,7 +793,7 @@ describe("TV enrollment and browse states", () => {
       children: [videoNode("item_video_1", "Lake")], nextCursor: null
     });
     vi.mocked(client.thumbnailUrls).mockResolvedValue({ items: [] });
-    vi.mocked(client.mediaUrl).mockResolvedValue({ itemId: "item_video_1", kind: "video", url: "https://provider.example/item_video_1", expiresAt: futureIso(), revision: "r1" });
+    vi.mocked(client.mediaUrl).mockResolvedValue({ itemId: "item_video_1", kind: "video", transport: "direct", url: "https://provider.example/item_video_1", expiresAt: futureIso(), revision: "r1" });
 
     render(<TvApp api={client} browserSupported />);
     fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
@@ -870,6 +870,7 @@ describe("TV API live browse contract", () => {
       .mockResolvedValueOnce(apiResponse({
         itemId: "item_video",
         kind: "video",
+        transport: "direct",
         url: "https://provider.example/video",
         expiresAt: futureIso(),
         revision: "r1"
@@ -888,17 +889,20 @@ describe("TV API live browse contract", () => {
     expect(JSON.parse(fetchMock.mock.calls[3]![1]!.body as string)).toEqual({ handle: "sealed-video" });
   });
 
-  it("accepts a same-origin Google media path without exposing a provider token", async () => {
+  it("accepts an exact Google bearer media descriptor", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => apiResponse({
       itemId: "item_video",
       kind: "video",
-      url: "/api/tv/google-media/sealed-google-handle",
+      transport: "google-bearer",
+      url: "https://www.googleapis.com/drive/v3/files/file_123?alt=media&supportsAllDrives=true",
+      authorization: { scheme: "Bearer", token: "ya29.test-token" },
       expiresAt: futureIso(),
       revision: null
     })));
 
     await expect(tvApi.mediaUrl("sealed-google-handle")).resolves.toMatchObject({
-      url: "/api/tv/google-media/sealed-google-handle"
+      transport: "google-bearer",
+      url: "https://www.googleapis.com/drive/v3/files/file_123?alt=media&supportsAllDrives=true"
     });
   });
 
@@ -941,9 +945,9 @@ describe("TV API live browse contract", () => {
     ["thumbnail bad item ID", () => tvApi.thumbnailUrls(["sealed-image"]), { items: [{ itemId: "raw-provider", status: "unavailable" }] }],
     ["thumbnail unavailable smuggles URL", () => tvApi.thumbnailUrls(["sealed-image"]), { items: [{ itemId: "item_image", status: "unavailable", url: "https://provider.example/image", expiresAt: futureIso() }] }],
     ["thumbnail expired URL", () => tvApi.thumbnailUrls(["sealed-image"]), { items: [{ itemId: "item_image", status: "ready", url: "https://provider.example/image", expiresAt: "2020-01-01T00:00:00.000Z", revision: null }] }],
-    ["media bad URL", () => tvApi.mediaUrl("sealed-image"), { itemId: "item_image", kind: "image", url: "http://provider.example/image", expiresAt: futureIso(), revision: null }],
-    ["media expired URL", () => tvApi.mediaUrl("sealed-image"), { itemId: "item_image", kind: "image", url: "https://provider.example/image", expiresAt: "2020-01-01T00:00:00.000Z", revision: null }],
-    ["media extra provider field", () => tvApi.mediaUrl("sealed-image"), { itemId: "item_image", kind: "image", url: "https://provider.example/image", expiresAt: futureIso(), revision: null, providerNodeId: "raw-provider" }]
+    ["media bad URL", () => tvApi.mediaUrl("sealed-image"), { itemId: "item_image", kind: "image", transport: "direct", url: "http://provider.example/image", expiresAt: futureIso(), revision: null }],
+    ["media expired URL", () => tvApi.mediaUrl("sealed-image"), { itemId: "item_image", kind: "image", transport: "direct", url: "https://provider.example/image", expiresAt: "2020-01-01T00:00:00.000Z", revision: null }],
+    ["media extra provider field", () => tvApi.mediaUrl("sealed-image"), { itemId: "item_image", kind: "image", transport: "direct", url: "https://provider.example/image", expiresAt: futureIso(), revision: null, providerNodeId: "raw-provider" }]
   ])("rejects malformed successful %s responses", async (_name, call, data) => {
     vi.stubGlobal("fetch", vi.fn(async () => apiResponse(data)));
     await expect(call()).rejects.toMatchObject({ code: "INVALID_RESPONSE", message: "The server returned an unexpected response." });
@@ -960,7 +964,7 @@ describe("TV API live browse contract", () => {
   });
 
   it("rejects media item ID and kind mismatches against the requested DTO context", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => apiResponse({ itemId: "item_other", kind: "video", url: "https://provider.example/video", expiresAt: futureIso(), revision: null })));
+    vi.stubGlobal("fetch", vi.fn(async () => apiResponse({ itemId: "item_other", kind: "video", transport: "direct", url: "https://provider.example/video", expiresAt: futureIso(), revision: null })));
     await expect(tvApi.mediaUrl("sealed-image", undefined, { itemId: "item_image", kind: "image" })).rejects.toMatchObject({ code: "INVALID_RESPONSE" });
   });
 
@@ -979,7 +983,7 @@ describe("TV API live browse contract", () => {
   it.each([
     ["custom root prototype", Object.assign(Object.create({ inherited: true }), rootCards[0])],
     ["folder child accessor", Object.defineProperty({ ...browseItem("item_image", "sealed-image", "Image", "image") }, "name", { enumerable: true, get() { throw new Error("name secret"); } })],
-    ["media symbol field", Object.assign({ itemId: "item_image", kind: "image", url: "https://provider.example/image", expiresAt: futureIso(), revision: null }, { [Symbol("secret")]: true })]
+    ["media symbol field", Object.assign({ itemId: "item_image", kind: "image", transport: "direct", url: "https://provider.example/image", expiresAt: futureIso(), revision: null }, { [Symbol("secret")]: true })]
   ])("rejects nested plain-data violation: %s", async (name, value) => {
     const data = name === "custom root prototype"
       ? { roots: [value] }
@@ -1139,6 +1143,7 @@ function mediaResponse(handle: string) {
   return {
     itemId,
     kind: itemId.indexOf("video") >= 0 ? "video" as const : "image" as const,
+    transport: "direct" as const,
     url: `https://provider.example/${itemId}`,
     expiresAt: futureIso(),
     revision: "r1"

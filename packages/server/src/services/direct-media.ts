@@ -14,7 +14,6 @@ import type {
 
 import type { AuthenticatedControlDevice } from "./control-auth";
 import {
-  MEDIA_HANDLE_LIFETIME_MS,
   type MediaHandleClaims,
   type MediaHandleCodec,
 } from "../auth/media-handles";
@@ -44,9 +43,9 @@ export interface DirectThumbnailResponse {
   responseHeaders: typeof RESPONSE_HEADERS;
 }
 
-export interface DirectMediaResponse extends DirectMediaUrlResponse {
+export type DirectMediaResponse = DirectMediaUrlResponse & {
   responseHeaders: typeof RESPONSE_HEADERS;
-}
+};
 
 export interface DirectMediaService {
   thumbnails(
@@ -596,28 +595,14 @@ export function createDirectMediaService(
       now(),
     );
     if (item.source.provider === "google") {
-      const issuedAt = now().getTime();
-      const mediaHandle = options.mediaHandles.seal({
-        version: 1,
-        householdId: item.claims.householdId,
-        deviceId: item.claims.deviceId,
-        sourceId: item.claims.sourceId,
-        rootId: item.claims.rootId,
-        rootProviderNodeId: item.claims.rootProviderNodeId,
-        providerNodeId: item.claims.providerNodeId,
-        parentProviderNodeId: item.claims.parentProviderNodeId,
-        kind: item.claims.kind,
-        name: item.claims.name,
-        mimeType: item.claims.mimeType!,
-        credentialVersion: item.claims.credentialVersion,
-        issuedAt,
-        expiresAt: issuedAt + MEDIA_HANDLE_LIFETIME_MS,
-      });
+      if (!("headers" in safe)) throw directMediaError("INVALID_PROVIDER_URL");
       return {
         itemId: item.id,
         kind: item.claims.kind,
-        url: `/api/tv/google-media/${encodeURIComponent(mediaHandle)}`,
-        expiresAt: new Date(issuedAt + MEDIA_HANDLE_LIFETIME_MS).toISOString(),
+        transport: "google-bearer",
+        url: safe.url,
+        authorization: { scheme: "Bearer", token: credentials!.accessToken },
+        expiresAt: safe.expiresAt.toISOString(),
         revision: null,
         responseHeaders: RESPONSE_HEADERS,
       };
@@ -625,6 +610,7 @@ export function createDirectMediaService(
     return {
       itemId: item.id,
       kind: item.claims.kind,
+      transport: "direct",
       url: safe.url,
       expiresAt: safe.expiresAt.toISOString(),
       revision: null,

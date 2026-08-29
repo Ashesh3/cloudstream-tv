@@ -113,13 +113,29 @@ export interface DirectThumbnailItem {
   revision?: string | null;
 }
 
-export interface DirectMediaUrlResponse {
+export interface DirectMediaResponseBase {
   itemId: string;
   kind: "image" | "video";
   url: string;
   expiresAt: string;
   revision: string | null;
 }
+
+export interface DirectProviderMediaUrlResponse extends DirectMediaResponseBase {
+  transport: "direct";
+}
+
+export interface GoogleBearerMediaUrlResponse extends DirectMediaResponseBase {
+  transport: "google-bearer";
+  authorization: {
+    scheme: "Bearer";
+    token: string;
+  };
+}
+
+export type DirectMediaUrlResponse =
+  | DirectProviderMediaUrlResponse
+  | GoogleBearerMediaUrlResponse;
 
 export type ApiResult<T> =
   | { ok: true; data: T }

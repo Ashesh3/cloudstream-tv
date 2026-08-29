@@ -295,7 +295,7 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     );
   });
 
-  it("returns direct temporary thumbnail and media URLs without proxying bytes", async () => {
+  it("returns temporary thumbnail URLs and authenticated media requests without proxying bytes", async () => {
     const { adapter, requests } = createHarness(provider);
     const providerNodeId = provider === "google" ? "g-image-a" : "o-image-a";
     const thumbnail = await adapter.getThumbnailUrl({

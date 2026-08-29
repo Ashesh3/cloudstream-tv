@@ -91,7 +91,7 @@ export async function installTvFixture(
         calls.media.push(handle);
         const item = itemByHandle.get(handle);
         if (!item || item.kind === "folder") return reject("ITEM_NOT_FOUND");
-        return { itemId: item.id, kind: item.kind, url: item.kind === "video" ? media.video : media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" };
+        return { itemId: item.id, kind: item.kind, transport: "direct", url: item.kind === "video" ? media.video : media.image, expiresAt: new Date(Date.now()+3600000).toISOString(), revision: "1" };
       }
     };
   }, { state, media, longFolder: options.longFolder === true });

@@ -36,33 +36,26 @@ describe("direct provider URL vending", () => {
     providerNodeId = "google-video",
     kind: "image" | "video" = "video",
   ): Promise<string> {
-    const result = await harness.media.media(
-      harness.auth(),
-      harness.handle("source-google", "root-google", providerNodeId, kind),
-    );
-    return decodeURIComponent(result.url.split("/").at(-1)!);
+    return harness.googleMediaHandle(providerNodeId, kind);
   }
 
-  it("returns a same-origin Google media URL without exposing credentials", async () => {
+  it("returns the validated raw Google URL and short-lived bearer credential", async () => {
     const harness = createHarness();
-
     const result = await harness.media.media(
       harness.auth(),
       harness.handle("source-google", "root-google", "google-video", "video"),
     );
 
-    expect(result.url).toMatch(/^\/api\/tv\/google-media\//);
-    expect(result.url).not.toContain("access_token=");
-    expect(result.responseHeaders).toMatchObject(RESPONSE_HEADERS);
     expect(result).toMatchObject({
-      itemId: expect.stringMatching(/^item_/),
+      itemId: harness.itemId("source-google", "google-video"),
       kind: "video",
-      expiresAt: new Date(TEST_NOW.getTime() + 12 * 60 * 60_000).toISOString(),
+      transport: "google-bearer",
+      url: "https://www.googleapis.com/drive/v3/files/google-video?alt=media&supportsAllDrives=true",
+      authorization: { scheme: "Bearer", token: "access-token" },
+      expiresAt: harness.expiry.toISOString(),
       revision: null,
     });
-    expect(harness.vercelBodyBytes).toBe(0);
-    expect(result).not.toHaveProperty("providerNodeId");
-    expect(result).not.toHaveProperty("handle");
+    expect(result.url).not.toContain("access_token");
   });
 
   it("keeps a minted Google media handle valid after the browse handle expires", async () => {
@@ -75,14 +68,7 @@ describe("direct provider URL vending", () => {
       },
       () => current,
     );
-    const browseHandle = harness.handle(
-      "source-google",
-      "root-google",
-      "google-video",
-      "video",
-    );
-    const media = await harness.media.media(harness.auth(), browseHandle);
-    const mediaHandle = decodeURIComponent(media.url.split("/").at(-1)!);
+    const mediaHandle = await googleMediaHandle(harness);
 
     current = new Date(TEST_NOW.getTime() + 31 * 60_000);
     const response = await harness.media.googleMedia(
@@ -135,7 +121,7 @@ describe("direct provider URL vending", () => {
     expect(result.items.map((item) => item.status)).toEqual(["ready"]);
     expect(harness.credentialRefreshes).toBe(1);
     expect(harness.google.thumbnailTokens).toEqual([
-      "initial-google-access",
+      "access-token",
       "refreshed-google-access",
     ]);
   });
@@ -206,7 +192,7 @@ describe("direct provider URL vending", () => {
       const harness = createHarness();
       harness.google.mediaResult = {
         url: "https://www.googleapis.com/drive/v3/files/google-video?alt=media&supportsAllDrives=true",
-        headers: { authorization: "Bearer initial-google-access" },
+        headers: { authorization: "Bearer access-token" },
         expiresAt: harness.expiry,
       } as AuthenticatedMediaRequest;
       harness.google.rewriteGoogleMediaToken = false;
@@ -223,7 +209,7 @@ describe("direct provider URL vending", () => {
       expect(response.headers.get("x-private-google-header")).toBeNull();
       expect(calls).toHaveLength(1);
       const headers = new Headers(calls[0]!.init?.headers);
-      expect(headers.get("authorization")).toBe("Bearer initial-google-access");
+      expect(headers.get("authorization")).toBe("Bearer access-token");
       expect(headers.get("range")).toBe("bytes=0-0");
       expect(headers.get("accept-encoding")).toBe("identity");
       expect(calls[0]!.url).not.toContain("access_token");
@@ -350,7 +336,7 @@ describe("direct provider URL vending", () => {
       expect(response.status).toBe(200);
       expect(await response.text()).toBe("fresh");
       expect(authorization).toEqual([
-        "Bearer initial-google-access",
+        "Bearer access-token",
         "Bearer refreshed-google-access",
       ]);
       expect(harness.credentialRefreshes).toBe(1);
@@ -390,8 +376,11 @@ describe("direct provider URL vending", () => {
       ),
     );
 
-    expect(new URL(result.url).hostname).toMatch(/sharepoint|onedrive|microsoft/);
-    expect(result.itemId).toMatch(/^item_/);
+    expect(result).toMatchObject({
+      transport: "direct",
+      url: "https://public.dm.files.1drv.com/download?capability=1",
+    });
+    expect(result).not.toHaveProperty("authorization");
   });
 
   it("does not expose raw handles or provider ids in thumbnail results", async () => {
@@ -780,11 +769,14 @@ describe("direct provider URL vending", () => {
       harness.handle("source-google", "root-google", "google-video", "video"),
     );
 
-    expect(result.url).toMatch(/^\/api\/tv\/google-media\//);
+    expect(result).toMatchObject({
+      transport: "google-bearer",
+      authorization: { scheme: "Bearer", token: "refreshed-google-access" },
+    });
     expect(result.url).not.toContain("refreshed-google-access");
     expect(harness.credentialRefreshes).toBe(1);
     expect(harness.mediaTokens).toEqual([
-      "initial-google-access",
+      "access-token",
       "refreshed-google-access",
     ]);
   });
@@ -851,7 +843,7 @@ describe("direct provider URL vending", () => {
         ),
       ),
     ).rejects.toEqual(new LiveBrowseError("NAVIGATION_EXPIRED"));
-    expect(harness.mediaTokens).toEqual(["initial-google-access"]);
+    expect(harness.mediaTokens).toEqual(["access-token"]);
   });
 
   it("normalizes unstable provider URL objects before building a response", async () => {
@@ -977,7 +969,7 @@ describe("direct provider URL vending", () => {
   it.each([
     [
       "wrong item",
-      "https://www.googleapis.com/drive/v3/files/another-item?alt=media&access_token=initial-google-access&supportsAllDrives=true",
+      "https://www.googleapis.com/drive/v3/files/another-item?alt=media&access_token=access-token&supportsAllDrives=true",
     ],
     [
       "wrong token",
@@ -985,19 +977,19 @@ describe("direct provider URL vending", () => {
     ],
     [
       "missing alt",
-      "https://www.googleapis.com/drive/v3/files/google-video?access_token=initial-google-access&supportsAllDrives=true",
+      "https://www.googleapis.com/drive/v3/files/google-video?access_token=access-token&supportsAllDrives=true",
     ],
     [
       "duplicate token",
-      "https://www.googleapis.com/drive/v3/files/google-video?alt=media&access_token=initial-google-access&access_token=attacker-token&supportsAllDrives=true",
+      "https://www.googleapis.com/drive/v3/files/google-video?alt=media&access_token=access-token&access_token=attacker-token&supportsAllDrives=true",
     ],
     [
       "extra query",
-      "https://www.googleapis.com/drive/v3/files/google-video?alt=media&access_token=initial-google-access&supportsAllDrives=true&fields=id",
+      "https://www.googleapis.com/drive/v3/files/google-video?alt=media&access_token=access-token&supportsAllDrives=true&fields=id",
     ],
     [
       "wrong purpose",
-      "https://www.googleapis.com/drive/v3/files/google-video?alt=metadata&access_token=initial-google-access&supportsAllDrives=true",
+      "https://www.googleapis.com/drive/v3/files/google-video?alt=metadata&access_token=access-token&supportsAllDrives=true",
     ],
   ])("rejects a Google media URL with %s", async (_label, url) => {
     const harness = createHarness();
@@ -1210,7 +1202,7 @@ describe("direct provider URL vending", () => {
     const expiresAt = new TrickyDate(harness.expiry);
     harness.google.mediaResult = {
       url: "https://www.googleapis.com/drive/v3/files/google-video?alt=media&supportsAllDrives=true",
-      headers: { authorization: "Bearer initial-google-access" },
+      headers: { authorization: "Bearer access-token" },
       expiresAt,
     } as AuthenticatedMediaRequest;
 
@@ -1225,7 +1217,7 @@ describe("direct provider URL vending", () => {
         ),
       ),
     ).resolves.toMatchObject({
-      expiresAt: new Date(TEST_NOW.getTime() + 12 * 60 * 60_000).toISOString(),
+      expiresAt: harness.expiry.toISOString(),
     });
   });
 
@@ -1234,7 +1226,7 @@ describe("direct provider URL vending", () => {
     const fakeDate = Object.create(Date.prototype) as Date;
     harness.google.mediaResult = {
       url: "https://www.googleapis.com/drive/v3/files/google-video?alt=media&supportsAllDrives=true",
-      headers: { authorization: "Bearer initial-google-access" },
+      headers: { authorization: "Bearer access-token" },
       expiresAt: fakeDate,
     } as AuthenticatedMediaRequest;
 
@@ -1320,7 +1312,7 @@ function createHarness(
   });
   const oneDrive = new MediaProviderHarness(
     "onedrive",
-    "https://tenant.sharepoint.com/personal/user/_layouts/15/download.aspx?token=media",
+    "https://public.dm.files.1drv.com/download?capability=1",
     "https://public.dm.files.1drv.com/y4m/thumbnail?token=preview",
     expiry,
   );
@@ -1337,7 +1329,7 @@ function createHarness(
       credentialGets += 1;
       credentialGetsBySource.push(sourceId);
       return credentials(
-        `initial-${sourceId === "source-google" ? "google" : "onedrive"}-access`,
+        sourceId === "source-google" ? "access-token" : "initial-onedrive-access",
         1,
         expiry,
       );
@@ -1423,6 +1415,25 @@ function createHarness(
     expiry,
     auth,
     handle,
+    googleMediaHandle(providerNodeId: string, kind: "image" | "video") {
+      const issuedAt = currentNow().getTime();
+      return mediaCodec.seal({
+        version: 1,
+        householdId: document.householdId,
+        deviceId: "device-1",
+        sourceId: "source-google",
+        rootId: "root-google",
+        rootProviderNodeId: "google-root",
+        providerNodeId,
+        parentProviderNodeId: providerNodeId === "google-root" ? null : "google-root",
+        kind,
+        name: providerNodeId,
+        mimeType: kind === "video" ? "video/mp4" : "image/jpeg",
+        credentialVersion: 1,
+        issuedAt,
+        expiresAt: issuedAt + 12 * 60 * 60_000,
+      });
+    },
     itemId: (sourceId: string, providerNodeId: string) =>
       codec.stableItemId(document.householdId, sourceId, providerNodeId),
     credentialGetsBySource,

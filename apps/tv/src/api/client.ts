@@ -12,6 +12,8 @@ import type {
   TvRootDto
 } from "@cloudframe/shared";
 
+import { decodeDirectMediaUrlResponse } from "./media-response";
+
 export interface TvHomeResponse {
   roots: TvRootDto[];
 }
@@ -85,7 +87,7 @@ export const tvApi: TvApi = {
     body: JSON.stringify({ handles, maxDimension: 720, ...(options?.refresh ? { refresh: true } : {}) }),
     signal
   }),
-  mediaUrl: (handle, signal, expected) => request("/api/tv/media-url", value => decodeMedia(value, expected), {
+  mediaUrl: (handle, signal, expected) => request("/api/tv/media-url", value => decodeDirectMediaUrlResponse(value, expected), {
     method: "POST",
     body: JSON.stringify({ handle }),
     signal
@@ -153,18 +155,6 @@ function decodeThumbnails(value: unknown): { items: DirectThumbnailItem[] } | nu
     items.push(item);
   }
   return { items };
-}
-
-function decodeMedia(value: unknown, expected?: { itemId: string; kind: "image" | "video" }): DirectMediaUrlResponse | null {
-  if (!exactRecord(value, ["itemId", "kind", "url", "expiresAt", "revision"])) return null;
-  const itemId = validItemId(value.itemId);
-  const kind = value.kind === "image" || value.kind === "video" ? value.kind : null;
-  const url = validHttpsUrl(value.url);
-  const expiry = futureTimestamp(value.expiresAt);
-  const revision = nullableRevision(value.revision);
-  return itemId && kind && (!expected || (expected.itemId === itemId && expected.kind === kind)) && url && expiry && revision.valid
-    ? { itemId, kind, url, expiresAt: expiry.iso, revision: revision.value }
-    : null;
 }
 
 function decodeThumbnail(value: unknown): DirectThumbnailItem | null {
@@ -397,7 +387,6 @@ function futureTimestamp(value: unknown): { iso: string; epoch: number } | null 
 
 function validHttpsUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.length < 1 || value.length > 8192) return null;
-  if (/^\/api\/tv\/google-media\/[A-Za-z0-9._~-]+$/u.test(value)) return value;
   try {
     const url = new URL(value);
     return url.protocol === "https:" && url.username === "" && url.password === "" && url.hash === "" ? value : null;

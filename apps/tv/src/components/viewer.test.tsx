@@ -373,7 +373,7 @@ describe("unified TV viewer", () => {
     fireEvent.keyDown(window, { key: "ArrowRight" });
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(await screen.findByRole("img", { name: "Last.jpg" })).toBeVisible();
-    await act(async () => { resolveFirst?.({ itemId: "item_image_1", kind: "image", url: "https://provider.example/stale", expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: "revision-1" }); });
+    await act(async () => { resolveFirst?.({ itemId: "item_image_1", kind: "image", transport: "direct", url: "https://provider.example/stale", expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: "revision-1" }); });
     expect(screen.getByRole("img", { name: "Last.jpg" })).toHaveAttribute("src", "https://provider.example/item_image_2");
     expect(screen.queryByDisplayValue("https://provider.example/stale")).not.toBeInTheDocument();
   });
@@ -724,6 +724,7 @@ function mediaResponse(handle: string): DirectMediaUrlResponse {
   return {
     itemId: id,
     kind,
+    transport: "direct",
     url: `https://provider.example/${id}`,
     expiresAt: new Date(Date.now() + 60_000).toISOString(),
     revision: "revision-1"
@@ -733,7 +734,7 @@ function mediaResponse(handle: string): DirectMediaUrlResponse {
 function mediaResponseFor(sequence: TvBrowseItemDto[], handle: string): DirectMediaUrlResponse {
   const id = handle.replace(/^sealed-/, "");
   const item = sequence.find(candidate => candidate.id === id)!;
-  return { itemId: id, kind: item.kind as "image" | "video", url: `https://provider.example/${id}`, expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: "revision-1" };
+  return { itemId: id, kind: item.kind as "image" | "video", transport: "direct", url: `https://provider.example/${id}`, expiresAt: new Date(Date.now() + 60_000).toISOString(), revision: "revision-1" };
 }
 
 function viewerHistory(): LocalWatchHistory {
