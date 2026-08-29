@@ -5,6 +5,7 @@ const root = fileURLToPath(new URL(".", import.meta.url));
 
 export default defineProject({
   root,
+  define: { __CLOUDFRAME_CONTAINER_TEST__: "false" },
   resolve: {
     alias: {
       "react/jsx-dev-runtime": `${root}node_modules/preact/jsx-runtime/dist/jsxRuntime.module.js`,

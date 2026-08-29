@@ -93,6 +93,14 @@ describe("bounded child process runner", () => {
     await expect(pending).rejects.toEqual(new ProcessRunnerError("PROCESS_ABORTED"));
   });
 
+  it("rejects immediately when an executable cannot be spawned", async () => {
+    const runner = createProcessRunner({ terminationGraceMs: 20 });
+    await expect(runner.run("cloudframe-command-that-does-not-exist", [], {
+      signal: new AbortController().signal,
+      timeoutMs: 10_000,
+    })).rejects.toEqual(new ProcessRunnerError("PROCESS_SPAWN_FAILED"));
+  });
+
   it("uses direct, hidden, shell-free child process options", async () => {
     const spawn = vi.fn((command: string, args: readonly string[], options: Parameters<typeof nodeSpawn>[2]) => nodeSpawn(command, [...args], options as never) as never);
     const runner = createProcessRunner({ spawn });

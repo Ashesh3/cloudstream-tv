@@ -1,14 +1,15 @@
 import { createServer } from "node:http";
-import {
-  createNodeRequest,
-  createSelfHostedComposition,
-  parseSelfHostedConfig,
-  writeNodeResponse,
-} from "@cloudframe/server";
+import { fileURLToPath } from "node:url";
+import { createNodeRequest, writeNodeResponse } from "../packages/server/src/http/node-adapter.ts";
+import { createSelfHostedComposition } from "../packages/server/src/runtime/self-hosted-composition.ts";
+import { parseSelfHostedConfig } from "../packages/server/src/runtime/self-hosted-config.ts";
+
+declare const __CLOUDFRAME_CONTAINER_TEST__: boolean;
 
 const config = parseSelfHostedConfig(process.env);
 const composition = await createSelfHostedComposition(config, {
-  publicRoot: new URL("../public/", import.meta.url).pathname,
+  publicRoot: fileURLToPath(new URL("../public/", import.meta.url)),
+  ...(__CLOUDFRAME_CONTAINER_TEST__ ? { containerTestFixturePath: fileURLToPath(new URL("../test-fixtures/legacy-mpeg.mpg", import.meta.url)) } : {}),
 });
 
 const server = createServer((incoming, outgoing) => {

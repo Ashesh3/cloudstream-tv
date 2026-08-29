@@ -19,7 +19,7 @@ describe("browser acceptance harness", () => {
     expect(siteBuild).toContain('process.env.CLOUDFRAME_E2E_BUILD === "1"');
   });
 
-  it("omits test hooks and public sourcemaps from ordinary app and Vercel static output", async () => {
+  it("omits test hooks and public sourcemaps from the ordinary self-hosted public output", async () => {
     const npmCli = process.platform === "win32"
       ? process.env.npm_execpath ?? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
       : "npm";
@@ -28,11 +28,13 @@ describe("browser acceptance harness", () => {
       : ["run", "build:e2e"], { cwd: process.cwd(), env: process.env, maxBuffer: 20 * 1024 * 1024 });
     expect((await filesUnder("apps/tv/dist")).some(path => path.endsWith(".map"))).toBe(true);
 
-    await exec(process.execPath, ["scripts/build-vercel.mjs"], {
-      cwd: process.cwd(), env: { ...process.env, CLOUDFRAME_E2E_BUILD: "1" }, maxBuffer: 20 * 1024 * 1024
+    await exec(process.platform === "win32" ? process.execPath : npmCli, process.platform === "win32"
+      ? [npmCli, "run", "build:server"]
+      : ["run", "build:server"], {
+      cwd: process.cwd(), env: process.env, maxBuffer: 30 * 1024 * 1024
     });
 
-    for (const root of ["apps/tv/dist", "apps/admin/dist", ".vercel/output/static"]) {
+    for (const root of ["apps/tv/dist", "apps/admin/dist", "build/self-hosted/public"]) {
       const files = await filesUnder(root);
       expect(files.some(path => path.endsWith(".map")), root).toBe(false);
       for (const path of files) {

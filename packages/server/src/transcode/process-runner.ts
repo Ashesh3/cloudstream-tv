@@ -51,7 +51,13 @@ export function createProcessRunner(dependencies: { spawn?: SpawnLike; terminati
       });
     });
     const result = await new Promise<ProcessResult>((resolve, reject) => {
-      child.once("error", () => { terminalError = new ProcessRunnerError("PROCESS_SPAWN_FAILED"); });
+      child.once("error", () => {
+        terminalError = new ProcessRunnerError("PROCESS_SPAWN_FAILED");
+        clearTimeout(timeout);
+        if (killTimer) clearTimeout(killTimer);
+        options.signal.removeEventListener("abort", abort);
+        reject(terminalError);
+      });
       child.once("close", (exitCode, signal) => {
         clearTimeout(timeout); if (killTimer) clearTimeout(killTimer); options.signal.removeEventListener("abort", abort);
         if (stdoutPending) options.onStdoutLine?.(stdoutPending);

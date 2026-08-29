@@ -6,6 +6,7 @@ const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 
 export default defineProject({
   root: adminRoot,
+  define: { __CLOUDFRAME_CONTAINER_TEST__: "false" },
   resolve: {
     alias: {
       "@": `${adminRoot}src`,

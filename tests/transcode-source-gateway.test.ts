@@ -82,6 +82,68 @@ describe("loopback transcode source gateway", () => {
     } finally { await current.gateway.close(); }
   });
 
+  it("allows the sequential requests FFprobe uses for an MPEG program stream", async () => {
+    const current = harness();
+    const { origin } = await current.gateway.start();
+    try {
+      const grant = current.gateway.grant(binding, "job_" + "a".repeat(32));
+      for (const range of ["bytes=0-", "bytes=50-", "bytes=0-"]) {
+        expect((await fetch(grant.inputUrl, { headers: { range } })).status).toBeLessThan(400);
+      }
+      expect((await fetch(grant.inputUrl, { headers: { range: "bytes=0-" } })).status).toBeLessThan(400);
+    } finally { await current.gateway.close(); }
+  });
+
+  it("permits at most two concurrent source connections per job capability", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve; });
+    const fetcher = vi.fn(async () => {
+      await pending;
+      return response("ok", { status: 200, url: "https://www.googleapis.com/drive/v3/files/video-1?alt=media&supportsAllDrives=true" });
+    });
+    const current = harness(fetcher as typeof fetch);
+    const { origin } = await current.gateway.start();
+    try {
+      const grant = current.gateway.grant(binding, "job_" + "a".repeat(32));
+      const first = fetch(grant.inputUrl);
+      const second = fetch(grant.inputUrl);
+      await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+      expect((await fetch(grant.inputUrl)).status).toBe(404);
+      release();
+      expect((await first).status).toBe(200);
+      expect((await second).status).toBe(200);
+      expect((await fetch(grant.inputUrl)).status).toBe(200);
+    } finally { release(); await current.gateway.close(); }
+  });
+
+  it("resolves provider credentials only while the reauthorization context is active", async () => {
+    let contextActive = false;
+    const current = harness();
+    current.authorizer.withReauthorizedItem.mockImplementation(async (_binding, operation) => {
+      contextActive = true;
+      try { return await operation(item); }
+      finally { contextActive = false; }
+    });
+    current.mediaSources.resolve.mockImplementation(async () => {
+      if (!contextActive) throw new Error("CONTROL_REQUEST_CONTEXT_MISSING");
+      return {
+        item,
+        provider: "google" as const,
+        credentialVersion: 1,
+        request: {
+          url: "https://www.googleapis.com/drive/v3/files/video-1?alt=media&supportsAllDrives=true",
+          headers: new Headers({ authorization: "Bearer initial" }),
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      };
+    });
+    const { origin } = await current.gateway.start();
+    try {
+      const grant = current.gateway.grant(binding, "job_" + "a".repeat(32));
+      expect((await fetch(grant.inputUrl)).status).toBe(200);
+    } finally { await current.gateway.close(); }
+  });
+
   it("passes through provider 416 and retries 401 exactly once with refreshed authorization", async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(response(null, { status: 416, url: "https://www.googleapis.com/drive/v3/files/video-1?alt=media&supportsAllDrives=true", headers: { "content-range": "bytes */100" } }))

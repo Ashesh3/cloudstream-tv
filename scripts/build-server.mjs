@@ -9,6 +9,7 @@ const output = join(root, "build", "self-hosted");
 const serverDirectory = join(output, "server");
 const exec = promisify(execFile);
 const linuxX64 = { name: "@node-rs/argon2-linux-x64-gnu", version: "2.1.0" };
+const containerTest = process.env.CLOUDFRAME_CONTAINER_TEST === "1";
 
 await rm(output, { recursive: true, force: true });
 await mkdir(serverDirectory, { recursive: true });
@@ -22,10 +23,16 @@ await esbuild({
   target: "node24",
   sourcemap: false,
   external: ["@node-rs/argon2", "@node-rs/argon2/*", "@node-rs/argon2-linux-*"],
+  define: { __CLOUDFRAME_CONTAINER_TEST__: JSON.stringify(containerTest) },
 });
 await writeFile(join(output, "package.json"), JSON.stringify({ type: "module" }, null, 2));
 await copyRuntimePackage("@node-rs/argon2");
 await copyOrFetchRuntimePackage(linuxX64);
+if (containerTest) {
+  const fixtures = join(output, "test-fixtures");
+  await mkdir(fixtures, { recursive: true });
+  await cp(join(root, "tests", "fixtures", "media", "legacy-mpeg.mpg"), join(fixtures, "legacy-mpeg.mpg"));
+}
 
 async function copyRuntimePackage(name) {
   await cp(

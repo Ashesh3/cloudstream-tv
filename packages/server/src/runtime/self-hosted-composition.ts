@@ -51,6 +51,8 @@ import { transcodeProfile } from "../transcode/profile.ts";
 import { createWindowEncoder } from "../transcode/window-encoder.ts";
 import { createTranscodeCoordinator } from "../transcode/coordinator.ts";
 
+declare const __CLOUDFRAME_CONTAINER_TEST__: boolean;
+
 export interface SelfHostedComposition {
   app(request: Request): Promise<Response>;
   readiness: ReadinessController;
@@ -64,6 +66,7 @@ export interface SelfHostedCompositionDependencies {
   now?: () => Date;
   randomBytes?: (size: number) => Uint8Array;
   log?: (line: string) => void;
+  containerTestFixturePath?: string;
 }
 
 export async function createSelfHostedComposition(
@@ -102,11 +105,21 @@ export async function createSelfHostedComposition(
     );
     if (initialized.setupCode) log(`CLOUDFRAME_SETUP_CODE=${initialized.setupCode}`);
 
-    const adapters = dependencies.providerAdapters ?? buildProviderAdapters(
+    const realFetch = dependencies.fetch ?? fetch;
+    let containerFixtureModule: typeof import("./container-test-fixture.ts") | null = null;
+    let containerFixture: Awaited<ReturnType<typeof import("./container-test-fixture.ts")["createContainerTestFixture"]>> | null = null;
+    if (__CLOUDFRAME_CONTAINER_TEST__) {
+      if (dependencies.containerTestFixturePath) {
+        containerFixtureModule = await import("./container-test-fixture.ts");
+        containerFixture = await containerFixtureModule.createContainerTestFixture({ fixturePath: dependencies.containerTestFixturePath, providerTokenKeyring: keys.providerTokens, fallbackFetch: realFetch, now });
+      }
+    }
+    const adapters = { ...(dependencies.providerAdapters ?? buildProviderAdapters(
       config,
-      dependencies.fetch ?? fetch,
+      realFetch,
       now,
-    );
+    )) };
+    if (containerFixture) adapters.google = containerFixture.adapter;
     const providers = createProviderRegistry(adapters);
     const requestContext = createControlRequestContextScope();
     const credentialCache = createExpiringMemoryCache(now);
@@ -159,8 +172,9 @@ export async function createSelfHostedComposition(
       rootIdSecret: keys.rootIdSecret,
       now,
     });
+    const handles = createBrowseHandleCodec(keys.browseHandles, keys.browseIdSecret, now);
     const browse = createLiveBrowseService({
-      handles: createBrowseHandleCodec(keys.browseHandles, keys.browseIdSecret, now),
+      handles,
       credentialBroker,
       providers,
       now,
@@ -181,7 +195,7 @@ export async function createSelfHostedComposition(
       now,
     });
     await transcodeCache.reconcile();
-    const gateway = createTranscodeSourceGateway({ authorizer: sourceAuthorizer, mediaSources, fetch: dependencies.fetch ?? fetch, now });
+    const gateway = createTranscodeSourceGateway({ authorizer: sourceAuthorizer, mediaSources, fetch: containerFixture?.fetcher ?? realFetch, now, log });
     await gateway.start();
     const runner = createProcessRunner();
     const probe = createMediaProbeService({ runner });
@@ -218,14 +232,18 @@ export async function createSelfHostedComposition(
       requestSubject,
     });
     const transcodeHandler = createTranscodeApiApp({ controlStore, requestContext, auth, sourceAuthorizer, coordinator, cache: transcodeCache, cacheMaxBytes: config.transcode.cacheMaxBytes, allowedOrigin: config.appOrigin, now });
+    const fixtureHandler = containerFixture && containerFixtureModule ? containerFixtureModule.createContainerTestFixtureHandler({ controlStore, requestContext, auth, sessionCodec, handles, providerTokenKeyring: keys.providerTokens, allowedOrigin: config.appOrigin, size: containerFixture.size, now }) : null;
     const app = createSelfHostedApp({
       readiness,
       setupApp,
       transcodeApp: transcodeHandler,
-      controlApp: async (request) =>
-        new URL(request.url).pathname.startsWith("/api/")
-          ? controlHandler(request)
-          : null,
+      controlApp: async (request) => {
+        if (fixtureHandler) {
+          const fixtureResponse = await fixtureHandler(request);
+          if (fixtureResponse) return fixtureResponse;
+        }
+        return new URL(request.url).pathname.startsWith("/api/") ? controlHandler(request) : null;
+      },
       staticApp: createStaticApp({ publicRoot }),
     });
     readiness.markReady();

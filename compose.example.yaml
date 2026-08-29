@@ -1,0 +1,17 @@
+services:
+  cloudframe:
+    image: ${CLOUDFRAME_IMAGE:-cloudframe:local}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - "./cloudframe-data:/data"
+    env_file:
+      - .env
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # read_only: true
+    # tmpfs:
+    #   - /tmp:rw,noexec,nosuid,size=256m
