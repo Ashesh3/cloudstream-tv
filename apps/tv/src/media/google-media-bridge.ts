@@ -69,6 +69,7 @@ interface GoogleMediaBridgeDependencies {
 interface LiveGrant {
   grant: GoogleMediaGrant;
   prepared: PreparedGoogleMediaSource;
+  workers: Set<ServiceWorker>;
 }
 
 interface PendingGrant {
@@ -152,7 +153,7 @@ export function createGoogleMediaBridge(
         sessionId,
         fingerprint,
       };
-      grants.set(sessionId, { grant, prepared });
+      grants.set(sessionId, { grant, prepared, workers: new Set() });
       evidenceBySession.set(sessionId, noneEvidence("google-raw"));
 
       return new Promise<PreparedGoogleMediaSource>((resolve, reject) => {
@@ -207,17 +208,15 @@ export function createGoogleMediaBridge(
     release(sessionId) {
       const live = grants.get(sessionId);
       if (!live) return;
+      const pendingRequestId = findPendingRequest(sessionId);
+      if (pendingRequestId) {
+        failPending(pendingRequestId, "GOOGLE_MEDIA_BRIDGE_CANCELLED");
+        return;
+      }
       grants.delete(sessionId);
       resolveEvidenceWaiters(sessionId, noneEvidence("google-raw"));
       evidenceBySession.delete(sessionId);
-      try {
-        serviceWorker?.controller?.postMessage({
-          type: "cloudframe-media-revoke",
-          sessionId,
-        } satisfies GoogleMediaPageMessage);
-      } catch {
-        // Local credential disposal must not depend on worker availability.
-      }
+      revokeWorkers(live.workers, sessionId);
     },
   };
 
@@ -234,7 +233,10 @@ export function createGoogleMediaBridge(
       cancel(entry.timer);
       removeAbort(entry);
       const live = grants.get(entry.sessionId);
-      if (live) entry.resolve(live.prepared);
+      if (live) {
+        live.workers.add(entry.worker);
+        entry.resolve(live.prepared);
+      }
       else entry.reject(new GoogleMediaBridgeError("GOOGLE_MEDIA_BRIDGE_CANCELLED"));
       return;
     }
@@ -247,12 +249,14 @@ export function createGoogleMediaBridge(
       const live = findGrant(message.lookup.kind, message.lookup.value);
       if (!live) return;
       const target = messageTarget(event.source);
+      if (!target) return;
       try {
-        target?.postMessage({
+        target.postMessage({
           type: "cloudframe-media-grant",
           requestId: message.requestId,
           grant: live.grant,
         } satisfies GoogleMediaPageMessage);
+        live.workers.add(target);
       } catch {
         // A replaced worker may disappear between request and response.
       }
@@ -262,7 +266,10 @@ export function createGoogleMediaBridge(
     if (message.type === "cloudframe-media-result") {
       const evidence = parseResult(message);
       const sessionId = message.sessionId;
-      if (!evidence || typeof sessionId !== "string" || !grants.has(sessionId)) return;
+      const source = messageTarget(event.source);
+      if (typeof sessionId !== "string") return;
+      const live = grants.get(sessionId);
+      if (!evidence || !live || !source || !live.workers.has(source)) return;
       evidenceBySession.set(sessionId, evidence);
       resolveEvidenceWaiters(sessionId, evidence);
     }
@@ -280,9 +287,15 @@ export function createGoogleMediaBridge(
     const timestamp = now();
     for (const [sessionId, live] of grants) {
       if (live.grant.expiresAtEpoch <= timestamp) {
+        const pendingRequestId = findPendingRequest(sessionId);
+        if (pendingRequestId) {
+          failPending(pendingRequestId, "GOOGLE_MEDIA_BRIDGE_CANCELLED");
+          continue;
+        }
         grants.delete(sessionId);
         resolveEvidenceWaiters(sessionId, noneEvidence("google-raw"));
         evidenceBySession.delete(sessionId);
+        revokeWorkers(live.workers, sessionId);
       }
     }
   }
@@ -293,15 +306,21 @@ export function createGoogleMediaBridge(
     pending.delete(requestId);
     cancel(entry.timer);
     removeAbort(entry);
+    const live = grants.get(entry.sessionId);
     grants.delete(entry.sessionId);
     resolveEvidenceWaiters(entry.sessionId, noneEvidence("google-raw"));
     evidenceBySession.delete(entry.sessionId);
-    try {
-      entry.worker.postMessage({ type: "cloudframe-media-revoke", sessionId: entry.sessionId } satisfies GoogleMediaPageMessage);
-    } catch {
-      // Failure cleanup is complete once closure-owned credentials are removed.
-    }
+    const workers = live?.workers ?? new Set<ServiceWorker>();
+    workers.add(entry.worker);
+    revokeWorkers(workers, entry.sessionId);
     entry.reject(new GoogleMediaBridgeError(code));
+  }
+
+  function findPendingRequest(sessionId: string): string | null {
+    for (const [requestId, entry] of pending) {
+      if (entry.sessionId === sessionId) return requestId;
+    }
+    return null;
   }
 
   function removeAbort(entry: PendingGrant): void {
@@ -322,6 +341,17 @@ export function createGoogleMediaBridge(
     for (const waiter of waiters) {
       cancel(waiter.timer);
       waiter.resolve(evidence);
+    }
+  }
+
+  function revokeWorkers(workers: ReadonlySet<ServiceWorker>, sessionId: string): void {
+    const revoke = { type: "cloudframe-media-revoke", sessionId } satisfies GoogleMediaPageMessage;
+    for (const worker of workers) {
+      try {
+        worker.postMessage(revoke);
+      } catch {
+        // Local credential disposal must not depend on worker availability.
+      }
     }
   }
 }
@@ -461,9 +491,9 @@ function sameWorker(source: MessageEventSource | null, worker: ServiceWorker): b
   return messageTarget(source) === worker;
 }
 
-function messageTarget(source: MessageEventSource | null): { postMessage(message: unknown): void } | null {
+function messageTarget(source: MessageEventSource | null): ServiceWorker | null {
   return source && "postMessage" in source && typeof source.postMessage === "function"
-    ? source as { postMessage(message: unknown): void }
+    ? source as ServiceWorker
     : null;
 }
 

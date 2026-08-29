@@ -33,25 +33,42 @@ function mediaItem() {
 interface FakeServiceWorker {
   register: ReturnType<typeof vi.fn>;
   ready: Promise<ServiceWorkerRegistration>;
-  controller: { postMessage: ReturnType<typeof vi.fn> } | null;
-  emitMessage(message: unknown): void;
-  emitControllerChange(): void;
+  controller: FakeWorker | null;
+  originalWorker: FakeWorker;
+  restartedWorker: FakeWorker;
+  unboundWorker: FakeWorker;
+  emitMessage(message: unknown, source?: FakeWorker | null): void;
+  emitControllerChange(controller?: FakeWorker): void;
 }
 
-function bridgeHarness(options: { serviceWorker?: FakeServiceWorker | undefined; controlled?: boolean } = {}) {
+interface FakeWorker {
+  postMessage: ReturnType<typeof vi.fn<(message: GoogleMediaPageMessage) => void>>;
+}
+
+function bridgeHarness(options: {
+  serviceWorker?: FakeServiceWorker | undefined;
+  controlled?: boolean;
+  now?: () => number;
+} = {}) {
   const messageListeners = new Set<(event: MessageEvent<unknown>) => void>();
   const controllerListeners = new Set<() => void>();
-  const controller = { postMessage: vi.fn<(message: GoogleMediaPageMessage) => void>() };
+  const originalWorker = { postMessage: vi.fn<(message: GoogleMediaPageMessage) => void>() };
+  const restartedWorker = { postMessage: vi.fn<(message: GoogleMediaPageMessage) => void>() };
+  const unboundWorker = { postMessage: vi.fn<(message: GoogleMediaPageMessage) => void>() };
   const fake: FakeServiceWorker = options.serviceWorker ?? {
     register: vi.fn().mockResolvedValue({}),
     ready: Promise.resolve({} as ServiceWorkerRegistration),
-    controller: options.controlled === false ? null : controller,
-    emitMessage(message) {
+    controller: options.controlled === false ? null : originalWorker,
+    originalWorker,
+    restartedWorker,
+    unboundWorker,
+    emitMessage(message, source) {
+      if (source === undefined) source = fake.controller;
       for (const listener of messageListeners) {
-        listener({ data: message, source: controller } as unknown as MessageEvent<unknown>);
+        listener({ data: message, source } as unknown as MessageEvent<unknown>);
       }
     },
-    emitControllerChange() {
+    emitControllerChange(controller = restartedWorker) {
       this.controller = controller;
       for (const listener of controllerListeners) listener();
     },
@@ -82,7 +99,7 @@ function bridgeHarness(options: { serviceWorker?: FakeServiceWorker | undefined;
         return array;
       },
     } as Crypto,
-    now: () => TEST_NOW,
+    now: options.now ?? (() => TEST_NOW),
     setTimeout: globalThis.setTimeout,
     clearTimeout: globalThis.clearTimeout,
   });
@@ -201,6 +218,46 @@ describe("Google media page bridge", () => {
     }));
   });
 
+  it("ignores result evidence from a worker source not bound to the live session", async () => {
+    const { bridge, fake, prepared } = await prepareAndAck();
+    const result = {
+      type: "cloudframe-media-result",
+      sessionId: prepared.sessionId,
+      attempt: "google-raw",
+      outcome: "response",
+      status: 206,
+    } satisfies GoogleMediaWorkerMessage;
+    fake.emitMessage(result, fake.unboundWorker);
+    expect(bridge.evidence(prepared.sessionId)).toEqual({ attempt: "google-raw", outcome: "none" });
+    fake.emitMessage(result, fake.originalWorker);
+    expect(bridge.evidence(prepared.sessionId)).toEqual({
+      attempt: "google-raw", outcome: "response", status: 206,
+    });
+  });
+
+  it("binds a restarted worker after successful exact rehydration", async () => {
+    const { bridge, fake, prepared } = await prepareAndAck();
+    fake.emitMessage({
+      type: "cloudframe-media-grant-request",
+      requestId: "request_worker_restarted",
+      lookup: { kind: "fingerprint", value: prepared.fingerprint },
+    } satisfies GoogleMediaWorkerMessage, fake.restartedWorker);
+    expect(fake.restartedWorker.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({
+      type: "cloudframe-media-grant",
+      requestId: "request_worker_restarted",
+    }));
+    fake.emitMessage({
+      type: "cloudframe-media-result",
+      sessionId: prepared.sessionId,
+      attempt: "google-raw",
+      outcome: "response",
+      status: 206,
+    } satisfies GoogleMediaWorkerMessage, fake.restartedWorker);
+    expect(bridge.evidence(prepared.sessionId)).toEqual({
+      attempt: "google-raw", outcome: "response", status: 206,
+    });
+  });
+
   it("fails with a stable error when service workers are unavailable", async () => {
     const { bridge } = bridgeHarness({ serviceWorker: undefined });
     await expect(bridge.prepare(descriptor(), mediaItem()))
@@ -246,6 +303,87 @@ describe("Google media page bridge", () => {
       type: "cloudframe-media-revoke", sessionId: prepared.sessionId,
     });
     expect(bridge.filenameSource(prepared.sessionId)).toBeNull();
+  });
+
+  it("revokes both the original and regranted workers after a controller change", async () => {
+    const { bridge, fake, prepared } = await prepareAndAck();
+    fake.emitControllerChange(fake.restartedWorker);
+    fake.emitMessage({
+      type: "cloudframe-media-grant-request",
+      requestId: "request_worker_regrant",
+      lookup: { kind: "session", value: prepared.sessionId },
+    } satisfies GoogleMediaWorkerMessage, fake.restartedWorker);
+
+    bridge.release(prepared.sessionId);
+
+    const revoke = { type: "cloudframe-media-revoke", sessionId: prepared.sessionId };
+    expect(fake.originalWorker.postMessage).toHaveBeenCalledWith(revoke);
+    expect(fake.restartedWorker.postMessage).toHaveBeenCalledWith(revoke);
+  });
+
+  it("revokes every authorized worker exactly once", async () => {
+    const { bridge, fake, prepared } = await prepareAndAck();
+    for (const requestId of ["request_worker_first", "request_worker_again"]) {
+      fake.emitMessage({
+        type: "cloudframe-media-grant-request",
+        requestId,
+        lookup: { kind: "fingerprint", value: prepared.fingerprint },
+      } satisfies GoogleMediaWorkerMessage, fake.restartedWorker);
+    }
+
+    bridge.release(prepared.sessionId);
+    bridge.release(prepared.sessionId);
+
+    const isRevoke = ([message]: [GoogleMediaPageMessage]) => message.type === "cloudframe-media-revoke";
+    expect(fake.originalWorker.postMessage.mock.calls.filter(isRevoke)).toHaveLength(1);
+    expect(fake.restartedWorker.postMessage.mock.calls.filter(isRevoke)).toHaveLength(1);
+  });
+
+  it("revokes every worker reached by an unacknowledged grant when preparation times out", async () => {
+    const { bridge, fake } = bridgeHarness();
+    const pending = bridge.prepare(descriptor(), mediaItem());
+    const rejection = expect(pending).rejects.toMatchObject({ code: "GOOGLE_MEDIA_BRIDGE_TIMEOUT" });
+    const posted = await postedGrant(fake);
+    fake.emitMessage({
+      type: "cloudframe-media-grant-request",
+      requestId: "request_worker_pending",
+      lookup: { kind: "session", value: posted.grant.sessionId },
+    } satisfies GoogleMediaWorkerMessage, fake.restartedWorker);
+
+    await vi.advanceTimersByTimeAsync(5_001);
+    await rejection;
+
+    const isRevoke = ([message]: [GoogleMediaPageMessage]) => message.type === "cloudframe-media-revoke";
+    expect(fake.originalWorker.postMessage.mock.calls.filter(isRevoke)).toHaveLength(1);
+    expect(fake.restartedWorker.postMessage.mock.calls.filter(isRevoke)).toHaveLength(1);
+  });
+
+  it("cancels preparation and revokes the reached worker when released before acknowledgement", async () => {
+    const { bridge, fake } = bridgeHarness();
+    const pending = bridge.prepare(descriptor(), mediaItem());
+    const rejection = expect(pending).rejects.toMatchObject({ code: "GOOGLE_MEDIA_BRIDGE_CANCELLED" });
+    const posted = await postedGrant(fake);
+
+    bridge.release(posted.grant.sessionId);
+    await rejection;
+
+    const isRevoke = ([message]: [GoogleMediaPageMessage]) => message.type === "cloudframe-media-revoke";
+    expect(fake.originalWorker.postMessage.mock.calls.filter(isRevoke)).toHaveLength(1);
+  });
+
+  it("cancels preparation and revokes the reached worker when its grant expires", async () => {
+    let timestamp = TEST_NOW;
+    const { bridge, fake } = bridgeHarness({ now: () => timestamp });
+    const pending = bridge.prepare(descriptor(), mediaItem());
+    const rejection = expect(pending).rejects.toMatchObject({ code: "GOOGLE_MEDIA_BRIDGE_CANCELLED" });
+    const posted = await postedGrant(fake);
+
+    timestamp = TEST_NOW + 60_001;
+    expect(bridge.filenameSource(posted.grant.sessionId)).toBeNull();
+    await rejection;
+
+    const isRevoke = ([message]: [GoogleMediaPageMessage]) => message.type === "cloudframe-media-revoke";
+    expect(fake.originalWorker.postMessage.mock.calls.filter(isRevoke)).toHaveLength(1);
   });
 
   it("waits through one controllerchange before granting", async () => {
