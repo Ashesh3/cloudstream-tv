@@ -50,6 +50,8 @@ export * from "./transcode/types";
 export * from "./transcode/profile";
 export * from "./transcode/catalog";
 export * from "./transcode/cache";
+export * from "./transcode/source-authorizer";
+export * from "./transcode/source-gateway";
 export type {
   ProviderAdapter,
   ProviderCredentials,
