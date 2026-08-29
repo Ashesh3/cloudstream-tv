@@ -14,11 +14,6 @@ import type {
 
 import type { AuthenticatedControlDevice } from "./control-auth";
 import {
-  type MediaHandleClaims,
-  type MediaHandleCodec,
-} from "../auth/media-handles";
-import { SealedValueError } from "../crypto/aead";
-import {
   CredentialBrokerError,
   type BrokeredProviderCredentials,
   type CredentialBroker,
@@ -58,26 +53,12 @@ export interface DirectMediaService {
     auth: AuthenticatedControlDevice,
     sealedHandle: string,
   ): Promise<DirectMediaResponse>;
-  googleMedia(
-    auth: AuthenticatedControlDevice,
-    sealedHandle: string,
-    request: GoogleMediaRequest,
-  ): Promise<Response>;
-}
-
-export interface GoogleMediaRequest {
-  method: "GET" | "HEAD";
-  range: string | null;
-  ifRange: string | null;
-  signal?: AbortSignal;
 }
 
 export interface CreateDirectMediaServiceOptions {
-  browse: Pick<LiveBrowseService, "authorizeHandle" | "authorizeClaims">;
-  mediaHandles: MediaHandleCodec;
+  browse: Pick<LiveBrowseService, "authorizeHandle">;
   credentialBroker: CredentialBroker;
   providers: ProviderRegistry;
-  fetch?: typeof globalThis.fetch;
   now?: () => Date;
 }
 
@@ -432,7 +413,6 @@ export function createDirectMediaService(
   options: CreateDirectMediaServiceOptions,
 ): DirectMediaService {
   const now = options.now ?? (() => new Date());
-  const providerFetch = options.fetch ?? fetch;
 
   async function thumbnails(
     auth: AuthenticatedControlDevice,
@@ -618,196 +598,5 @@ export function createDirectMediaService(
     };
   }
 
-  async function googleMedia(
-    auth: AuthenticatedControlDevice,
-    sealedHandle: string,
-    request: GoogleMediaRequest,
-  ): Promise<Response> {
-    let claims: MediaHandleClaims;
-    try {
-      claims = options.mediaHandles.open(sealedHandle);
-    } catch (error) {
-      if (error instanceof SealedValueError) throw navigationExpired();
-      throw error;
-    }
-    const item = options.browse.authorizeClaims(auth, {
-      ...claims,
-      version: 2,
-    });
-    if (item.source.provider !== "google" || item.claims.kind === "folder") {
-      throw directMediaError("ITEM_NOT_FOUND");
-    }
-    if (request.range !== null && !validRange(request.range)) {
-      throw directMediaError("ITEM_NOT_FOUND");
-    }
-    if (request.ifRange !== null && !validIfRange(request.ifRange)) {
-      throw directMediaError("ITEM_NOT_FOUND");
-    }
-
-    let credentials = compatibleCredentials(
-      item,
-      await brokerGet(options.credentialBroker, item),
-    );
-    const fetchGoogle = async (active: ProviderCredentials) => {
-      const adapter = providerAdapter(options.providers, "google");
-      const upstream = await adapter.getMediaUrl({
-        credentials: active,
-        providerNodeId: item.claims.providerNodeId,
-      });
-      const safe = validTemporaryUrl(upstream, item, active, now());
-      if (!("headers" in safe)) throw directMediaError("INVALID_PROVIDER_URL");
-      const headers = new Headers(safe.headers);
-      headers.set("accept-encoding", "identity");
-      if (request.range !== null) headers.set("range", request.range);
-      if (request.ifRange !== null) headers.set("if-range", request.ifRange);
-      return providerFetch(safe.url, {
-        method: request.method,
-        headers,
-        signal: request.signal,
-      });
-    };
-
-    let upstream: Response;
-    try {
-      upstream = await fetchGoogle(credentials);
-    } catch (error) {
-      normalizeDependencyError(error);
-    }
-    if (upstream.status === 401) {
-      cancelBodyBestEffort(upstream);
-      try {
-        credentials = compatibleCredentials(
-          item,
-          await options.credentialBroker.refresh(
-            item.source.id,
-            item.claims.householdId,
-          ),
-        );
-        upstream = await fetchGoogle(credentials);
-      } catch (error) {
-        normalizeDependencyError(error);
-      }
-    }
-    if (upstream.status === 416) {
-      cancelBodyBestEffort(upstream);
-      return googleRangeNotSatisfiableResponse(upstream);
-    }
-    if (!upstream.ok) {
-      const error = providerResponseError(upstream, now());
-      cancelBodyBestEffort(upstream);
-      throw error;
-    }
-    return googleMediaResponse(upstream, request.method);
-  }
-
-  return { thumbnails, media, googleMedia };
-}
-
-async function brokerGet(
-  broker: CredentialBroker,
-  item: AuthorizedBrowseItem,
-): Promise<BrokeredProviderCredentials> {
-  try {
-    return await broker.get(item.source.id, item.claims.householdId);
-  } catch (error) {
-    normalizeDependencyError(error);
-  }
-}
-
-function validRange(value: string): boolean {
-  if (value.length > 128) return false;
-  const match = /^bytes=(\d*)-(\d*)$/u.exec(value);
-  if (!match) return false;
-  const start = match[1]!;
-  const end = match[2]!;
-  if (start.length === 0 && end.length === 0) return false;
-  if (start.length === 0) return end !== "0";
-  if (end.length === 0) return true;
-  try {
-    return BigInt(start) <= BigInt(end);
-  } catch {
-    return false;
-  }
-}
-
-function validIfRange(value: string): boolean {
-  return value.length >= 1 && value.length <= 256 && !/[\r\n]/u.test(value);
-}
-
-function googleMediaResponse(upstream: Response, method: "GET" | "HEAD"): Response {
-  const headers = new Headers(RESPONSE_HEADERS);
-  for (const name of [
-    "accept-ranges",
-    "content-length",
-    "content-range",
-    "content-type",
-    "etag",
-    "last-modified",
-  ]) {
-    const value = upstream.headers.get(name);
-    if (value !== null) headers.set(name, value);
-  }
-  return new Response(method === "HEAD" ? null : upstream.body, {
-    status: upstream.status,
-    headers,
-  });
-}
-
-function googleRangeNotSatisfiableResponse(upstream: Response): Response {
-  const headers = new Headers(RESPONSE_HEADERS);
-  const contentRange = upstream.headers.get("content-range");
-  if (contentRange !== null) headers.set("content-range", contentRange);
-  return new Response(null, { status: 416, headers });
-}
-
-function providerResponseError(upstream: Response, now: Date): ProviderError {
-  const retryAfterSeconds = parseRetryAfter(
-    upstream.headers.get("retry-after"),
-    now,
-  );
-  if (upstream.status === 429) {
-    return new ProviderError("PROVIDER_THROTTLED", "Provider request failed.", {
-      retryable: true,
-      retryAfterSeconds,
-    });
-  }
-  if (upstream.status >= 500) {
-    return new ProviderError("PROVIDER_UNAVAILABLE", "Provider request failed.", {
-      retryable: true,
-      retryAfterSeconds,
-    });
-  }
-  if (upstream.status === 404) {
-    return new ProviderError("PROVIDER_NOT_FOUND", "Provider request failed.", {
-      retryable: false,
-    });
-  }
-  if (upstream.status === 401) {
-    return new ProviderError(
-      "PROVIDER_REAUTH_REQUIRED",
-      "Provider request failed.",
-      { retryable: false },
-    );
-  }
-  return new ProviderError("PROVIDER_BAD_RESPONSE", "Provider request failed.", {
-    retryable: false,
-  });
-}
-
-function parseRetryAfter(value: string | null, now: Date): number | null {
-  if (!value) return null;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds);
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  return Math.max(0, Math.ceil((date.getTime() - now.getTime()) / 1_000));
-}
-
-function cancelBodyBestEffort(response: Response): void {
-  try {
-    const cancellation = response.body?.cancel();
-    if (cancellation) void cancellation.catch(() => undefined);
-  } catch {
-    // Cleanup is advisory and never changes the client-visible error.
-  }
+  return { thumbnails, media };
 }

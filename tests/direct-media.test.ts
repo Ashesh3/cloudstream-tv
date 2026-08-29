@@ -12,7 +12,6 @@ import {
   createBrowseHandleCodec,
   createDirectMediaService,
   createLiveBrowseService,
-  createMediaHandleCodec,
   type AuthenticatedControlDevice,
   type BrowseItemClaims,
   type CredentialBroker,
@@ -31,14 +30,6 @@ const RESPONSE_HEADERS = {
 };
 
 describe("direct provider URL vending", () => {
-  async function googleMediaHandle(
-    harness: ReturnType<typeof createHarness>,
-    providerNodeId = "google-video",
-    kind: "image" | "video" = "video",
-  ): Promise<string> {
-    return harness.googleMediaHandle(providerNodeId, kind);
-  }
-
   it("returns the validated raw Google URL and short-lived bearer credential", async () => {
     const harness = createHarness();
     const result = await harness.media.media(
@@ -56,29 +47,6 @@ describe("direct provider URL vending", () => {
       revision: null,
     });
     expect(result.url).not.toContain("access_token");
-  });
-
-  it("keeps a minted Google media handle valid after the browse handle expires", async () => {
-    let current = new Date(TEST_NOW);
-    const calls: string[] = [];
-    const harness = createHarness(
-      async (input) => {
-        calls.push(String(input));
-        return new Response("x", { status: 206, headers: { "content-range": "bytes 1-1/2" } });
-      },
-      () => current,
-    );
-    const mediaHandle = await googleMediaHandle(harness);
-
-    current = new Date(TEST_NOW.getTime() + 31 * 60_000);
-    const response = await harness.media.googleMedia(
-      harness.auth(),
-      mediaHandle,
-      { method: "GET", range: "bytes=1-1", ifRange: null },
-    );
-
-    expect(response.status).toBe(206);
-    expect(calls).toHaveLength(1);
   });
 
   it("returns unavailable for one failed Google thumbnail without rejecting the batch", async () => {
@@ -171,196 +139,6 @@ describe("direct provider URL vending", () => {
         720,
       ),
     ).rejects.toMatchObject({ code });
-  });
-
-  it("streams Google media with bearer authentication and Range forwarding", async () => {
-    const upstreamFetch = globalThis.fetch;
-    const calls: Array<{ url: string; init?: RequestInit }> = [];
-    globalThis.fetch = async (input, init) => {
-      calls.push({ url: String(input), init });
-      return new Response("x", {
-        status: 206,
-        headers: {
-          "accept-ranges": "bytes",
-          "content-range": "bytes 0-0/100",
-          "content-type": "video/mp4",
-          "x-private-google-header": "secret",
-        },
-      });
-    };
-    try {
-      const harness = createHarness();
-      harness.google.mediaResult = {
-        url: "https://www.googleapis.com/drive/v3/files/google-video?alt=media&supportsAllDrives=true",
-        headers: { authorization: "Bearer access-token" },
-        expiresAt: harness.expiry,
-      } as AuthenticatedMediaRequest;
-      harness.google.rewriteGoogleMediaToken = false;
-
-      const response = await harness.media.googleMedia(
-        harness.auth(),
-        await googleMediaHandle(harness),
-        { method: "GET", range: "bytes=0-0", ifRange: null },
-      );
-
-      expect(response.status).toBe(206);
-      expect(await response.text()).toBe("x");
-      expect(response.headers.get("content-range")).toBe("bytes 0-0/100");
-      expect(response.headers.get("x-private-google-header")).toBeNull();
-      expect(calls).toHaveLength(1);
-      const headers = new Headers(calls[0]!.init?.headers);
-      expect(headers.get("authorization")).toBe("Bearer access-token");
-      expect(headers.get("range")).toBe("bytes=0-0");
-      expect(headers.get("accept-encoding")).toBe("identity");
-      expect(calls[0]!.url).not.toContain("access_token");
-    } finally {
-      globalThis.fetch = upstreamFetch;
-    }
-  });
-
-  it("forwards downstream cancellation to the Google media fetch", async () => {
-    const controller = new AbortController();
-    const calls: RequestInit[] = [];
-    const harness = createHarness(async (_input, init) => {
-      calls.push(init ?? {});
-      return new Response("x", { status: 200 });
-    });
-
-    const response = await harness.media.googleMedia(
-      harness.auth(),
-      await googleMediaHandle(harness),
-      { method: "GET", range: null, ifRange: null, signal: controller.signal },
-    );
-
-    expect(response.status).toBe(200);
-    expect(calls[0]?.signal).toBe(controller.signal);
-  });
-
-  it.each([
-    "bytes=0-0,2-2",
-    "bytes=-",
-    "bytes=-0",
-    "bytes=10-9",
-    "bytes=0-1,",
-  ])("rejects invalid single-range syntax %s before provider traffic", async (range) => {
-    let providerCalls = 0;
-    const harness = createHarness(async () => {
-      providerCalls += 1;
-      return new Response("x");
-    });
-
-    await expect(
-      harness.media.googleMedia(
-        harness.auth(),
-        await googleMediaHandle(harness),
-        { method: "GET", range, ifRange: null },
-      ),
-    ).rejects.toEqual(new DirectMediaError("ITEM_NOT_FOUND"));
-    expect(providerCalls).toBe(0);
-  });
-
-  it.each([
-    [403, "PROVIDER_BAD_RESPONSE", undefined],
-    [429, "PROVIDER_THROTTLED", 7],
-    [503, "PROVIDER_UNAVAILABLE", undefined],
-  ] as const)(
-    "normalizes Google media HTTP %s without relaying its body",
-    async (status, code, retryAfterSeconds) => {
-      const privatePayload = "private Google upstream body";
-      const harness = createHarness(async () =>
-        new Response(privatePayload, {
-          status,
-          headers: retryAfterSeconds
-            ? { "retry-after": String(retryAfterSeconds) }
-            : undefined,
-        }),
-      );
-
-      const error = await harness.media.googleMedia(
-        harness.auth(),
-        await googleMediaHandle(harness),
-        { method: "GET", range: null, ifRange: null },
-      ).catch((value) => value);
-
-      expect(error).toMatchObject({ code, retryAfterSeconds: retryAfterSeconds ?? null });
-      expect(String(error)).not.toContain(privatePayload);
-    },
-  );
-
-  it("returns a bodyless 416 with only the safe range header", async () => {
-    const harness = createHarness(async () =>
-      new Response("private upstream body", {
-        status: 416,
-        headers: {
-          "content-range": "bytes */100",
-          "content-type": "text/html",
-          "x-private-google-header": "secret",
-        },
-      }),
-    );
-
-    const response = await harness.media.googleMedia(
-      harness.auth(),
-      await googleMediaHandle(harness),
-      { method: "GET", range: "bytes=100-", ifRange: null },
-    );
-
-    expect(response.status).toBe(416);
-    expect(response.headers.get("content-range")).toBe("bytes */100");
-    expect(response.headers.get("content-type")).toBeNull();
-    expect(response.headers.get("x-private-google-header")).toBeNull();
-    expect(await response.text()).toBe("");
-  });
-
-  it("refreshes Google credentials once when the media origin returns 401", async () => {
-    const upstreamFetch = globalThis.fetch;
-    const authorization: string[] = [];
-    globalThis.fetch = async (_input, init) => {
-      authorization.push(new Headers(init?.headers).get("authorization") ?? "");
-      return authorization.length === 1
-        ? new Response(null, { status: 401 })
-        : new Response("fresh", { status: 200, headers: { "content-type": "image/jpeg" } });
-    };
-    try {
-      const harness = createHarness();
-      harness.google.mediaResult = {
-        url: "https://www.googleapis.com/drive/v3/files/google-image?alt=media&supportsAllDrives=true",
-        expiresAt: harness.expiry,
-      };
-      const response = await harness.media.googleMedia(
-        harness.auth(),
-        await googleMediaHandle(harness, "google-image", "image"),
-        { method: "GET", range: null, ifRange: null },
-      );
-
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe("fresh");
-      expect(authorization).toEqual([
-        "Bearer access-token",
-        "Bearer refreshed-google-access",
-      ]);
-      expect(harness.credentialRefreshes).toBe(1);
-    } finally {
-      globalThis.fetch = upstreamFetch;
-    }
-  });
-
-  it("returns reauthorization after a refreshed Google media token is also rejected", async () => {
-    let calls = 0;
-    const harness = createHarness(async () => {
-      calls += 1;
-      return new Response("private unauthorized body", { status: 401 });
-    });
-
-    await expect(
-      harness.media.googleMedia(
-        harness.auth(),
-        await googleMediaHandle(harness),
-        { method: "GET", range: null, ifRange: null },
-      ),
-    ).rejects.toMatchObject({ code: "PROVIDER_REAUTH_REQUIRED" });
-    expect(calls).toBe(2);
-    expect(harness.credentialRefreshes).toBe(1);
   });
 
   it("returns the OneDrive pre-authorized URL", async () => {
@@ -595,6 +373,16 @@ describe("direct provider URL vending", () => {
 
     await expect(
       harness.media.thumbnails(harness.auth(), [valid, "not-a-sealed-handle"], 720),
+    ).rejects.toEqual(new LiveBrowseError("NAVIGATION_EXPIRED"));
+    expect(harness.credentialGets).toBe(0);
+    expect(harness.providerCalls).toBe(0);
+  });
+
+  it("authorizes a media handle before credential or provider access", async () => {
+    const harness = createHarness();
+
+    await expect(
+      harness.media.media(harness.auth(), "not-a-sealed-handle"),
     ).rejects.toEqual(new LiveBrowseError("NAVIGATION_EXPIRED"));
     expect(harness.credentialGets).toBe(0);
     expect(harness.providerCalls).toBe(0);
@@ -917,6 +705,42 @@ describe("direct provider URL vending", () => {
     );
 
     expect(result.items[0]).toMatchObject({ status: "ready", url: validated });
+  });
+
+  it("returns the validated Google descriptor snapshot when provider getters change", async () => {
+    const harness = createHarness();
+    let reads = 0;
+    const validated =
+      "https://www.googleapis.com/drive/v3/files/google-video?alt=media&supportsAllDrives=true";
+    harness.google.rewriteGoogleMediaToken = false;
+    harness.google.mediaResult = Object.defineProperties({}, {
+      url: {
+        enumerable: true,
+        get() {
+          reads += 1;
+          return reads === 1 ? validated : "https://attacker.example/media";
+        },
+      },
+      headers: {
+        enumerable: true,
+        value: { authorization: "Bearer access-token" },
+      },
+      expiresAt: {
+        enumerable: true,
+        value: harness.expiry,
+      },
+    }) as AuthenticatedMediaRequest;
+
+    const result = await harness.media.media(
+      harness.auth(),
+      harness.handle("source-google", "root-google", "google-video", "video"),
+    );
+
+    expect(result).toMatchObject({
+      transport: "google-bearer",
+      url: validated,
+      authorization: { scheme: "Bearer", token: "access-token" },
+    });
   });
 
   it.each([
@@ -1248,10 +1072,7 @@ function harnessExpiry() {
   return new Date(TEST_NOW.getTime() + 45 * 60_000);
 }
 
-function createHarness(
-  providerFetch?: typeof globalThis.fetch,
-  currentNow: () => Date = () => new Date(TEST_NOW),
-) {
+function createHarness(currentNow: () => Date = () => new Date(TEST_NOW)) {
   const document = testControlDocument();
   document.devices["device-1"]!.assignedRootIds = [
     "root-google",
@@ -1294,10 +1115,6 @@ function createHarness(
   const codec = createBrowseHandleCodec(
     testAeadKeyring(),
     "browse-id-secret",
-    currentNow,
-  );
-  const mediaCodec = createMediaHandleCodec(
-    testAeadKeyring(),
     currentNow,
   );
   const google = new MediaProviderHarness(
@@ -1356,16 +1173,10 @@ function createHarness(
         authorizations += 1;
         return liveBrowse.authorizeHandle(auth, sealedHandle);
       },
-      authorizeClaims(auth, claims) {
-        authorizations += 1;
-        return liveBrowse.authorizeClaims(auth, claims);
-      },
     },
-    mediaHandles: mediaCodec,
     credentialBroker: broker,
     providers,
     now: currentNow,
-    fetch: providerFetch,
   });
 
   function auth(): AuthenticatedControlDevice {
@@ -1415,25 +1226,6 @@ function createHarness(
     expiry,
     auth,
     handle,
-    googleMediaHandle(providerNodeId: string, kind: "image" | "video") {
-      const issuedAt = currentNow().getTime();
-      return mediaCodec.seal({
-        version: 1,
-        householdId: document.householdId,
-        deviceId: "device-1",
-        sourceId: "source-google",
-        rootId: "root-google",
-        rootProviderNodeId: "google-root",
-        providerNodeId,
-        parentProviderNodeId: providerNodeId === "google-root" ? null : "google-root",
-        kind,
-        name: providerNodeId,
-        mimeType: kind === "video" ? "video/mp4" : "image/jpeg",
-        credentialVersion: 1,
-        issuedAt,
-        expiresAt: issuedAt + 12 * 60 * 60_000,
-      });
-    },
     itemId: (sourceId: string, providerNodeId: string) =>
       codec.stableItemId(document.householdId, sourceId, providerNodeId),
     credentialGetsBySource,
@@ -1455,9 +1247,6 @@ function createHarness(
     },
     get mediaTokens() {
       return google.mediaTokens;
-    },
-    get vercelBodyBytes() {
-      return 0;
     },
   };
 }

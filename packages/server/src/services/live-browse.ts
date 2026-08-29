@@ -54,10 +54,6 @@ export interface LiveBrowseService {
     auth: AuthenticatedControlDevice,
     sealedHandle: string
   ): AuthorizedBrowseItem;
-  authorizeClaims(
-    auth: AuthenticatedControlDevice,
-    claims: BrowseItemClaims,
-  ): AuthorizedBrowseItem;
 }
 
 export interface CreateLiveBrowseServiceOptions {
@@ -507,32 +503,6 @@ export function createLiveBrowseService(
     return authorizeItem(auth, auth.context, options.handles, sealedHandle);
   }
 
-  function authorizeClaims(
-    auth: AuthenticatedControlDevice,
-    claims: BrowseItemClaims,
-  ): AuthorizedBrowseItem {
-    activeDevice(auth, auth.context);
-    const { root, source } = activeRootAndSource(auth, auth.context, claims);
-    if (
-      (claims.parentProviderNodeId === null &&
-        claims.providerNodeId !== root.providerNodeId) ||
-      (claims.providerNodeId === root.providerNodeId &&
-        claims.parentProviderNodeId !== null)
-    ) {
-      throw browseError("ITEM_NOT_FOUND");
-    }
-    return {
-      claims,
-      id: options.handles.stableItemId(
-        claims.householdId,
-        claims.sourceId,
-        claims.providerNodeId,
-      ),
-      root,
-      source,
-    };
-  }
-
   async function home(
     auth: AuthenticatedControlDevice
   ): Promise<LiveBrowseHomeResponse> {
@@ -689,5 +659,5 @@ export function createLiveBrowseService(
     };
   }
 
-  return { home, folder, authorizeHandle, authorizeClaims };
+  return { home, folder, authorizeHandle };
 }

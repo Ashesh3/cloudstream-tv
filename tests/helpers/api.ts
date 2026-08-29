@@ -19,7 +19,6 @@ import {
   createDirectMediaService,
   createFirestoreRecoveryMirror,
   createLiveBrowseService,
-  createMediaHandleCodec,
   createLiveProviderFolderService,
   createSealedSessionCodec,
   encryptControlPlaneDocument,
@@ -89,7 +88,6 @@ export interface ControlApiHarness {
 
 export interface ControlApiHarnessOptions {
   telemetryObserver?: ControlPlaneTelemetryObserver;
-  providerFetch?: typeof globalThis.fetch;
 }
 
 export async function createControlApiHarness(
@@ -188,7 +186,6 @@ export async function createControlApiHarness(
     "test-browse-id-secret",
     () => now
   );
-  const mediaCodec = createMediaHandleCodec(testAeadKeyring(), () => now);
   const activeContext = () => {
     const active = durable.currentDocument!;
     return { document: active, revision: active.revision };
@@ -272,11 +269,9 @@ export async function createControlApiHarness(
   });
   const directMedia = createDirectMediaService({
     browse,
-    mediaHandles: mediaCodec,
     credentialBroker: broker,
     providers,
-    now: () => new Date(now),
-    fetch: options.providerFetch
+    now: () => new Date(now)
   });
   const events: ControlApiLoggerEvent[] = [];
   const logger: ControlApiLogger = {

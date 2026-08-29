@@ -24,12 +24,17 @@ describe("workspace", () => {
     expect(spa.src).not.toContain("workflow");
   });
 
-  it("documents the bounded Google streaming route without reviving provider indexing", async () => {
+  it("removes the Vercel Google media relay composition", async () => {
     const readme = await readFile("README.md", "utf8");
     const product = await readFile("PRODUCT.md", "utf8");
     const server = await readFile("packages/server/src/http/control-app.ts", "utf8");
+    const composition = await readFile("deploy/api-entry.ts", "utf8");
 
-    expect(server).toContain("/api/tv/google-media/:handle");
+    expect(server).not.toContain("/api/tv/google-media/:handle");
+    expect(server).not.toContain('"media-stream"');
+    expect(composition).not.toContain("createMediaHandleCodec");
+    await expect(access("packages/server/src/auth/media-handles.ts"))
+      .rejects.toMatchObject({ code: "ENOENT" });
     expect(`${readme}\n${product}`).toContain("server-only");
     expect(`${readme}\n${product}`).not.toMatch(/access token in the (?:media )?URL|access token in the query string/i);
   });
