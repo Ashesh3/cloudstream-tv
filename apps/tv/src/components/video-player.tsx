@@ -1,5 +1,8 @@
 import type { Ref } from "preact";
 import type { ViewerMediaItem, ViewerUrlState } from "@cloudframe/tv-core";
+import { useEffect } from "preact/hooks";
+
+import { loadVideoJs } from "../videojs";
 
 export interface VideoPlayerProps {
   item: ViewerMediaItem;
@@ -25,30 +28,37 @@ export interface VideoPlayerProps {
 
 export function VideoPlayer(props: VideoPlayerProps) {
   const source = props.url?.status === "ready" ? props.url.url : undefined;
+  useEffect(() => {
+    void loadVideoJs();
+  }, []);
   return (
     <div className="video-stage">
-      {source ? (
-        <video
-          ref={props.videoRef}
-          className="viewer-video"
-          src={source}
-          aria-label={`Playing ${props.item.name}`}
-          preload="metadata"
-          playsInline
-          onLoadedMetadata={event => props.onLoadedMetadata(event.currentTarget)}
-          onPlaying={props.onPlaying}
-          onPlay={props.onPlay}
-          onPause={event => props.onPause(event.currentTarget)}
-          onWaiting={props.onWaiting}
-          onCanPlay={props.onCanPlay}
-          onTimeUpdate={event => props.onTimeUpdate(event.currentTarget)}
-          onProgress={event => props.onProgress(event.currentTarget)}
-          onLoadedData={event => props.onProgress(event.currentTarget)}
-          onSeeked={event => props.onSeeked(event.currentTarget)}
-          onEnded={event => props.onEnded(event.currentTarget)}
-          onError={event => props.onError(event.currentTarget)}
-        />
-      ) : <div className="viewer-loading" role="status">Preparing video…</div>}
+      <video-player class="cloudframe-video-player">
+        <media-container class="cloudframe-media-container">
+          {source ? (
+            <video
+              ref={props.videoRef}
+              className="viewer-video"
+              src={source}
+              aria-label={`Playing ${props.item.name}`}
+              preload="metadata"
+              playsInline
+              onLoadedMetadata={event => props.onLoadedMetadata(event.currentTarget)}
+              onPlaying={props.onPlaying}
+              onPlay={props.onPlay}
+              onPause={event => props.onPause(event.currentTarget)}
+              onWaiting={props.onWaiting}
+              onCanPlay={props.onCanPlay}
+              onTimeUpdate={event => props.onTimeUpdate(event.currentTarget)}
+              onProgress={event => props.onProgress(event.currentTarget)}
+              onLoadedData={event => props.onProgress(event.currentTarget)}
+              onSeeked={event => props.onSeeked(event.currentTarget)}
+              onEnded={event => props.onEnded(event.currentTarget)}
+              onError={event => props.onError(event.currentTarget)}
+            />
+          ) : <div className="viewer-loading" role="status">Preparing video…</div>}
+        </media-container>
+      </video-player>
       <div className={`video-controls${props.controlsVisible ? " is-visible" : ""}`} aria-hidden={!props.controlsVisible}>
         <span>{props.buffering ? "Buffering…" : "Play / Pause"}</span>
         <span>−10s</span>

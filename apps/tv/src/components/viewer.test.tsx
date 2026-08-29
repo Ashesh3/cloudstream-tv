@@ -299,6 +299,21 @@ describe("unified TV viewer", () => {
     expect(api.mediaUrl).toHaveBeenCalledWith("sealed-item_video_1", expect.any(AbortSignal), { itemId: "item_video_1", kind: "video" });
   });
 
+  it("keeps one native video inside the Video.js 10 state and container boundary", async () => {
+    render(<Viewer history={viewerHistory()} api={viewerApi()} items={items} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
+
+    const video = await screen.findByLabelText("Playing Clip.mp4") as HTMLVideoElement;
+    expect(video.tagName).toBe("VIDEO");
+    expect(video.getAttribute("src")).toBe("https://provider.example/item_video_1");
+    expect(video.closest("media-container")?.parentElement?.tagName.toLowerCase()).toBe("video-player");
+
+    Object.defineProperty(video, "duration", { configurable: true, value: 100 });
+    Object.defineProperty(video, "currentTime", { configurable: true, writable: true, value: 0 });
+    fireEvent.loadedMetadata(video);
+    fireEvent.play(video);
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
+  });
+
   it("prefetches at most one adjacent image on each side", async () => {
     const sequence = [
       media("item_image_0", "image", "Before.jpg", "image/jpeg"),
