@@ -484,6 +484,7 @@ export function createDirectMediaService(
             adapter!.getThumbnailUrl({
               credentials: activeCredentials,
               providerNodeId: entry.item.claims.providerNodeId,
+              kind: entry.item.claims.kind,
               maxDimension,
             });
           let temporary: TemporaryUrl | null;

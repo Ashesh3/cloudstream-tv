@@ -486,6 +486,7 @@ describe("direct provider URL vending", () => {
       {
         provider: "google",
         providerNodeId: "google-expired-preview",
+        kind: "image",
         maxDimension: 720,
       },
     ]);
@@ -521,7 +522,7 @@ describe("direct provider URL vending", () => {
       url: "https://lh3.googleusercontent.com/fresh-after-decode=s720",
     });
     expect(harness.thumbnailInputs).toEqual([
-      { provider: "google", providerNodeId: "google-decode-failed", maxDimension: 720 },
+      { provider: "google", providerNodeId: "google-decode-failed", kind: "image", maxDimension: 720 },
     ]);
   });
 
@@ -682,9 +683,9 @@ describe("direct provider URL vending", () => {
       "source-google",
     ]);
     expect(harness.thumbnailInputs).toEqual([
-      { provider: "onedrive", providerNodeId: "onedrive-image", maxDimension: 720 },
-      { provider: "google", providerNodeId: "google-image", maxDimension: 720 },
-      { provider: "google", providerNodeId: "google-video", maxDimension: 720 },
+      { provider: "onedrive", providerNodeId: "onedrive-image", kind: "image", maxDimension: 720 },
+      { provider: "google", providerNodeId: "google-image", kind: "image", maxDimension: 720 },
+      { provider: "google", providerNodeId: "google-video", kind: "video", maxDimension: 720 },
     ]);
   });
 
@@ -749,7 +750,7 @@ describe("direct provider URL vending", () => {
     ]);
     expect(harness.credentialGets).toBe(1);
     expect(harness.thumbnailInputs).toEqual([
-      { provider: "google", providerNodeId: "google-folder", maxDimension: 720 },
+      { provider: "google", providerNodeId: "google-folder", kind: "folder", maxDimension: 720 },
     ]);
   });
 
@@ -1468,6 +1469,7 @@ class MediaProviderHarness {
   readonly thumbnailInputs: Array<{
     provider: ProviderKind;
     providerNodeId: string;
+    kind: "folder" | "image" | "video";
     maxDimension: number;
   }> = [];
   readonly thumbnailTokens: string[] = [];
@@ -1510,6 +1512,7 @@ class MediaProviderHarness {
         this.thumbnailInputs.push({
           provider: this.provider,
           providerNodeId: input.providerNodeId,
+          kind: input.kind,
           maxDimension: input.maxDimension,
         });
         const error = this.thumbnailErrors.get(input.providerNodeId);

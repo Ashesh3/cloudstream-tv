@@ -75,6 +75,7 @@ export interface GetNodeInput {
 export interface ThumbnailUrlInput {
   credentials: ProviderCredentials;
   providerNodeId: string;
+  kind: ProviderNode["kind"];
   maxDimension: number;
 }
 

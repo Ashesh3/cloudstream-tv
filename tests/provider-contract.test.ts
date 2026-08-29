@@ -63,7 +63,19 @@ function createHarness(provider: ProviderKind): ContractHarness {
         mimeType: "application/vnd.google-apps.folder",
         parents: ["g-root-actual"]
       });
-      if (url.pathname.endsWith("/files")) return jsonResponse(fixture(provider, "folder-page"));
+      if (url.pathname.endsWith("/files")) {
+        if (url.searchParams.get("pageSize") === "1") return jsonResponse({
+          files: [{
+            id: "g-folder-cover",
+            name: "Folder cover.jpg",
+            mimeType: "image/jpeg",
+            parents: ["g-folder-a"],
+            thumbnailLink: "https://lh3.googleusercontent.com/synthetic-folder-cover=s220",
+            modifiedTime: "2026-08-25T00:00:00.000Z"
+          }]
+        });
+        return jsonResponse(fixture(provider, "folder-page"));
+      }
       if (url.pathname.endsWith("/g-image-a")) {
         return jsonResponse({
           id: "g-image-a",
@@ -289,6 +301,7 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
     const thumbnail = await adapter.getThumbnailUrl({
       credentials,
       providerNodeId,
+      kind: "image",
       maxDimension: 720
     });
     const media = await adapter.getMediaUrl({ credentials, providerNodeId });
@@ -335,6 +348,7 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       await adapter.getThumbnailUrl({
         credentials,
         providerNodeId: "g-image-a",
+        kind: "image",
         maxDimension: 720
       });
       const media = await adapter.getMediaUrl({
@@ -361,6 +375,7 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       await expect(adapter.getThumbnailUrl({
         credentials,
         providerNodeId: "g-video-a",
+        kind: "video",
         maxDimension: 720
       })).resolves.toMatchObject({
         url: "https://lh3.googleusercontent.com/u/0/d/synthetic-video-thumb=s720",
@@ -373,12 +388,56 @@ describe.each(["google", "onedrive"] as const)("%s provider adapter contract", p
       expect(new Headers(requests[0].init?.headers).get("range")).toBeNull();
     });
 
+    it("uses one direct media child as a representative Google folder thumbnail", async () => {
+      const { adapter, requests } = createHarness(provider);
+
+      await expect(adapter.getThumbnailUrl({
+        credentials,
+        providerNodeId: "g-folder-a",
+        kind: "folder",
+        maxDimension: 720
+      })).resolves.toEqual({
+        url: "https://lh3.googleusercontent.com/synthetic-folder-cover=s720",
+        expiresAt: accessExpiresAt
+      });
+
+      expect(requests).toHaveLength(1);
+      const request = requests[0]!.url;
+      expect(request.pathname).toBe("/drive/v3/files");
+      expect(request.searchParams.get("q")).toBe(
+        "'g-folder-a' in parents and trashed=false and (mimeType contains 'image/' or mimeType contains 'video/')"
+      );
+      expect(request.searchParams.get("pageSize")).toBe("1");
+      expect(request.searchParams.get("orderBy")).toBe("modifiedTime desc");
+      expect(request.searchParams.get("fields")).toBe("files(id,mimeType,thumbnailLink)");
+      expect(request.searchParams.get("supportsAllDrives")).toBe("true");
+      expect(request.searchParams.get("includeItemsFromAllDrives")).toBe("true");
+    });
+
+    it("returns no Google folder thumbnail when no direct media child has a preview", async () => {
+      const fetch: typeof globalThis.fetch = async () => jsonResponse({ files: [] });
+      const adapter = createGoogleDriveAdapter({
+        clientId: "synthetic-client",
+        clientSecret: "synthetic-secret",
+        fetch,
+        now: () => now
+      });
+
+      await expect(adapter.getThumbnailUrl({
+        credentials,
+        providerNodeId: "g-empty-folder",
+        kind: "folder",
+        maxDimension: 720
+      })).resolves.toBeNull();
+    });
+
     it("rejects a Google thumbnail link without a terminal size directive", async () => {
       const { adapter } = createHarness(provider);
 
       await expect(adapter.getThumbnailUrl({
         credentials,
         providerNodeId: "g-image-bad-thumbnail",
+        kind: "image",
         maxDimension: 720
       })).rejects.toMatchObject({ code: "PROVIDER_BAD_RESPONSE" });
     });
@@ -722,6 +781,7 @@ describe("provider failure normalization", () => {
       adapter.getThumbnailUrl({
         credentials,
         providerNodeId: "o-without-thumbnail",
+        kind: "image",
         maxDimension: 720
       })
     ).resolves.toBeNull();
@@ -740,11 +800,13 @@ describe("temporary provider URL expiry", () => {
     const googleThumbnail = await google.getThumbnailUrl({
       credentials: shortCredentials,
       providerNodeId: "g-image-a",
+      kind: "image",
       maxDimension: 720
     });
     const onedriveThumbnail = await onedrive.getThumbnailUrl({
       credentials: shortCredentials,
       providerNodeId: "o-image-a",
+      kind: "image",
       maxDimension: 720
     });
     const onedriveMedia = await onedrive.getMediaUrl({

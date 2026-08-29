@@ -143,6 +143,32 @@ export function createGoogleDriveAdapter(
     },
 
     async getThumbnailUrl(input: ThumbnailUrlInput): Promise<TemporaryUrl | null> {
+      if (input.kind === "folder") {
+        const url = new URL(`${DRIVE_ENDPOINT}/files`);
+        url.searchParams.set(
+          "q",
+          `'${input.providerNodeId.replaceAll("'", "\\'")}' in parents and trashed=false and (mimeType contains 'image/' or mimeType contains 'video/')`
+        );
+        url.searchParams.set("pageSize", "1");
+        url.searchParams.set("orderBy", "modifiedTime desc");
+        url.searchParams.set("spaces", "drive");
+        url.searchParams.set("supportsAllDrives", "true");
+        url.searchParams.set("includeItemsFromAllDrives", "true");
+        url.searchParams.set("fields", "files(id,mimeType,thumbnailLink)");
+        const page = await googleJson<GoogleFilePage>(
+          fetch,
+          url,
+          input.credentials.accessToken,
+          now
+        );
+        const preview = listedGooglePreview(
+          page.files.find((file) => Boolean(file.thumbnailLink))?.thumbnailLink,
+          input.credentials.accessTokenExpiresAt
+        );
+        return preview
+          ? { url: googleThumbnailUrl(preview.url, input.maxDimension), expiresAt: preview.expiresAt }
+          : null;
+      }
       const file = await googleJson<GoogleFile>(
         fetch,
         `${DRIVE_ENDPOINT}/files/${encodeURIComponent(input.providerNodeId)}?fields=mimeType%2CthumbnailLink&supportsAllDrives=true`,
