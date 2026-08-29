@@ -9,6 +9,7 @@ import {
 } from "./google-media-protocol";
 
 const MAX_GRANTS = 4;
+const MAX_MESSAGE_MUTATIONS = 32;
 const REHYDRATION_TIMEOUT_MS = 500;
 const SESSION_ID = /^session_[A-Za-z0-9_-]{1,128}$/u;
 const REQUEST_ID = /^request_[A-Za-z0-9_-]{1,128}$/u;
@@ -72,6 +73,11 @@ interface PendingGrant {
   timer: ReturnType<typeof globalThis.setTimeout>;
 }
 
+interface MessageMutation {
+  key: string;
+  stamp: object;
+}
+
 interface RuntimeDependencies {
   fetch: typeof globalThis.fetch;
   now: () => number;
@@ -87,6 +93,7 @@ export function installGoogleMediaWorker(
 ): void {
   const grants = new Map<string, BoundGrant>();
   const pending = new Map<string, PendingGrant>();
+  const messageMutations = new Map<string, object>();
   let requestSequence = 0;
 
   scope.addEventListener("install", event => {
@@ -116,9 +123,10 @@ export function installGoogleMediaWorker(
   async function handleMessage(event: GoogleMediaMessageEvent): Promise<void> {
     const source = validClient(event.source);
     if (!source) return;
-    const message = await decodePageMessage(event.data);
+    const message = decodePageMessage(event.data);
     if (!message) return;
     if (message.type === "cloudframe-media-revoke") {
+      advanceMessageMutation(source.id, message.sessionId);
       const existing = grants.get(message.sessionId);
       if (existing?.clientId === source.id) grants.delete(message.sessionId);
       return;
@@ -130,6 +138,9 @@ export function installGoogleMediaWorker(
       (waiting.lookup.kind === "fingerprint" && waiting.lookup.value !== message.grant.fingerprint) ||
       (waiting.lookup.kind === "session" && waiting.lookup.value !== message.grant.sessionId)
     )) return;
+    const mutation = advanceMessageMutation(source.id, message.grant.sessionId);
+    if (!await validGrantFingerprint(message.grant)) return;
+    if (!isCurrentMessageMutation(mutation)) return;
     const existing = grants.get(message.grant.sessionId);
     if (existing && existing.clientId !== source.id) return;
 
@@ -147,7 +158,7 @@ export function installGoogleMediaWorker(
     }
   }
 
-  async function decodePageMessage(value: unknown): Promise<GoogleMediaPageMessage | null> {
+  function decodePageMessage(value: unknown): GoogleMediaPageMessage | null {
     if (!plainDataRecord(value)) return null;
     if (value.type === "cloudframe-media-revoke") {
       if (!exactRecord(value, ["type", "sessionId"]) || !validSessionId(value.sessionId)) return null;
@@ -158,11 +169,11 @@ export function installGoogleMediaWorker(
       !exactRecord(value, ["type", "requestId", "grant"]) ||
       !validRequestId(value.requestId)
     ) return null;
-    const grant = await decodeGrant(value.grant);
+    const grant = decodeGrant(value.grant);
     return grant ? { type: "cloudframe-media-grant", requestId: value.requestId, grant } : null;
   }
 
-  async function decodeGrant(value: unknown): Promise<GoogleMediaGrant | null> {
+  function decodeGrant(value: unknown): GoogleMediaGrant | null {
     if (!exactRecord(value, [
       "sessionId",
       "rawUrl",
@@ -201,13 +212,6 @@ export function installGoogleMediaWorker(
         typeof size !== "number" || !Number.isSafeInteger(size) || size < 0
       ))
     ) return null;
-    let fingerprint: string;
-    try {
-      fingerprint = await dependencies.fingerprint(value.rawUrl);
-    } catch {
-      return null;
-    }
-    if (fingerprint !== value.fingerprint) return null;
     return {
       sessionId: value.sessionId,
       rawUrl: value.rawUrl,
@@ -219,6 +223,34 @@ export function installGoogleMediaWorker(
       filename: value.filename,
       size,
     };
+  }
+
+  async function validGrantFingerprint(grant: GoogleMediaGrant): Promise<boolean> {
+    let fingerprint: string;
+    try {
+      fingerprint = await dependencies.fingerprint(grant.rawUrl);
+    } catch {
+      return false;
+    }
+    return fingerprint === grant.fingerprint;
+  }
+
+  function advanceMessageMutation(clientId: string, sessionId: string): MessageMutation {
+    const key = messageMutationKey(clientId, sessionId);
+    const stamp = {};
+    // A missing stamp is also stale: bounded pruning must fail old continuations closed.
+    messageMutations.delete(key);
+    messageMutations.set(key, stamp);
+    while (messageMutations.size > MAX_MESSAGE_MUTATIONS) {
+      const oldest = messageMutations.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      messageMutations.delete(oldest);
+    }
+    return { key, stamp };
+  }
+
+  function isCurrentMessageMutation(mutation: MessageMutation): boolean {
+    return messageMutations.get(mutation.key) === mutation.stamp;
   }
 
   function storeGrant(bound: BoundGrant): void {
@@ -403,6 +435,10 @@ function aliasLookup(value: string, origin: string): AliasLookup | null {
   } catch {
     return null;
   }
+}
+
+function messageMutationKey(clientId: string, sessionId: string): string {
+  return `${clientId.length}:${clientId}${sessionId}`;
 }
 
 function rebuildResponse(

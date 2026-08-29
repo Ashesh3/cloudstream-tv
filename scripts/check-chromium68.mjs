@@ -297,6 +297,92 @@ try {
     throw new Error(`Chromium 68 Video.js fallback failed: ${JSON.stringify(playerResult)}`);
   }
 
+  const workerRace = JSON.stringify({
+    source: productionWorker,
+    rawUrl: "https://www.googleapis.com/drive/v3/files/file_123?alt=media&supportsAllDrives=true",
+    fingerprint: "3AB37G86_cgrjatvKRIjGFG9CjOZwAtQnDzLhQTUlHs",
+  });
+  const workerRaceResult = await command("Runtime.evaluate", {
+    expression: `(async()=>{
+      const config=${workerRace};
+      const listeners={};
+      const messages=[];
+      let releaseDigest=null;
+      let digestCalls=0;
+      let providerFetches=0;
+      const validatedDigest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(config.rawUrl));
+      const client={id:'client_chromium68_bundle',postMessage:message=>messages.push(message)};
+      const fakeSelf={
+        location:{origin:'https://tv.test'},
+        clients:{claim:()=>Promise.resolve(),get:id=>Promise.resolve(id===client.id?client:undefined)},
+        skipWaiting:()=>Promise.resolve(),
+        addEventListener:(type,listener)=>{listeners[type]=listener;},
+        fetch:()=>{providerFetches+=1;return Promise.reject(new Error('provider-fetch-must-not-run'));},
+        crypto:{subtle:{digest:()=>{
+          digestCalls+=1;
+          return digestCalls===1
+            ? new Promise(resolve=>{releaseDigest=()=>resolve(validatedDigest);})
+            : Promise.resolve(validatedDigest);
+        }}},
+        setTimeout:callback=>setTimeout(callback,1),
+        clearTimeout:clearTimeout.bind(self)
+      };
+      new Function('self','crypto','URL','Request','Response','Headers','TextEncoder','Uint8Array','ReadableStream','btoa',config.source)(
+        fakeSelf,fakeSelf.crypto,URL,Request,Response,Headers,TextEncoder,Uint8Array,ReadableStream,btoa
+      );
+      const dispatch=message=>{
+        const waits=[];
+        listeners.message({data:message,source:client,waitUntil:value=>waits.push(Promise.resolve(value))});
+        return Promise.all(waits);
+      };
+      const pendingGrant=dispatch({
+        type:'cloudframe-media-grant',
+        requestId:'request_chromium68_bundle_race',
+        grant:{
+          sessionId:'session_chromium68_bundle_race',
+          rawUrl:config.rawUrl,
+          fingerprint:config.fingerprint,
+          token:'bundle-test-token',
+          expiresAtEpoch:Date.now()+60000,
+          kind:'video',
+          mimeType:'video/mpeg',
+          filename:'MOV00516.MPG',
+          size:100
+        }
+      });
+      for(let attempt=0;attempt<50&&!releaseDigest;attempt+=1){
+        await new Promise(resolve=>setTimeout(resolve,10));
+      }
+      if(!releaseDigest)return {ok:false,reason:'bundle-validation-did-not-start'};
+      await dispatch({type:'cloudframe-media-revoke',sessionId:'session_chromium68_bundle_race'});
+      releaseDigest();
+      await pendingGrant;
+      let fetched=null;
+      listeners.fetch({
+        request:new Request(config.rawUrl,{headers:{range:'bytes=0-'}}),
+        clientId:client.id,
+        respondWith:value=>{fetched=Promise.resolve(value);},
+        waitUntil:()=>undefined
+      });
+      if(!fetched)return {ok:false,reason:'bundle-fetch-not-intercepted'};
+      const response=await fetched;
+      return {
+        ok:
+          !messages.some(message=>
+            message.type==='cloudframe-media-grant-ack'&&
+            message.requestId==='request_chromium68_bundle_race'
+          )&&
+          response.type==='error'&&providerFetches===0
+      };
+    })()`,
+    awaitPromise: true,
+    returnByValue: true,
+  });
+  const workerRaceValue = workerRaceResult.result.value;
+  if (!workerRaceValue?.ok) {
+    throw new Error(`Chromium 68 production worker ordering failed: ${workerRaceValue?.reason ?? "stale grant acknowledged"}`);
+  }
+
   const probe = JSON.stringify({
     workerUrl: "/cloudframe-media-sw.js",
     rawUrl: mediaUrl,
@@ -446,7 +532,7 @@ try {
 }
 
 if (completed) {
-  process.stdout.write(`Pinned Chromium 68 revision ${revision} loaded authenticated Range media and filename alias successfully.\n`);
+  process.stdout.write(`Pinned Chromium 68 revision ${revision} preserved revoked-grant ordering and loaded authenticated Range media and filename alias successfully.\n`);
 }
 
 async function waitForDebugger(debugPort) {

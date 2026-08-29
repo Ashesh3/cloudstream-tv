@@ -50,7 +50,22 @@ interface WorkerHarness {
   dispatchFetch(request: Request, clientId: string): Promise<Response>;
 }
 
-function workerHarness(options?: { upstream?: Response; fetchError?: Error }): WorkerHarness {
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>(resolvePromise => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function workerHarness(options?: {
+  upstream?: Response;
+  fetchError?: Error;
+  fingerprint?: (url: string) => Promise<string>;
+}): WorkerHarness {
   const listeners = new Map<string, (event: unknown) => void>();
   const clientMessages: GoogleMediaWorkerMessage[] = [];
   const clients = new Map<string, { id: string; postMessage(message: GoogleMediaWorkerMessage): void }>();
@@ -97,7 +112,7 @@ function workerHarness(options?: { upstream?: Response; fetchError?: Error }): W
   installGoogleMediaWorker(scope, {
     fetch: providerFetch as unknown as typeof globalThis.fetch,
     now: () => TEST_NOW,
-    fingerprint: async () => TEST_FINGERPRINT,
+    fingerprint: options?.fingerprint ?? (async () => TEST_FINGERPRINT),
     isAllowedMediaUrl: isExactGoogleMediaUrl,
     setTimeout: ((callback: TimerHandler) => globalThis.setTimeout(callback, 25)) as typeof globalThis.setTimeout,
     clearTimeout: globalThis.clearTimeout.bind(globalThis),
@@ -514,6 +529,159 @@ describe("Google media worker runtime", () => {
     const response = await harness.dispatchFetch(rawRequest({ range: "bytes=0-" }), "client_tv");
     expect(response.type).toBe("error");
     expect(harness.providerFetch).toHaveBeenCalledOnce();
+    expectSecretSafe(harness.clientMessages);
+  });
+
+  it("does not commit a grant revoked while fingerprint validation is pending", async () => {
+    const validation = deferred<string>();
+    const fingerprint = vi.fn()
+      .mockReturnValueOnce(validation.promise)
+      .mockResolvedValue(TEST_FINGERPRINT);
+    const harness = workerHarness({ fingerprint });
+    const pendingGrant = harness.dispatchMessage(
+      grantMessage("request_revoked_during_validation"),
+      { id: "client_tv" },
+    );
+    expect(fingerprint).toHaveBeenCalledOnce();
+
+    await harness.dispatchMessage({
+      type: "cloudframe-media-revoke",
+      sessionId: "session_test",
+    }, { id: "client_tv" });
+    validation.resolve(TEST_FINGERPRINT);
+    await pendingGrant;
+
+    expect(harness.clientMessages).not.toContainEqual(expect.objectContaining({
+      type: "cloudframe-media-grant-ack",
+      requestId: "request_revoked_during_validation",
+    }));
+    const raw = await harness.dispatchFetch(rawRequest({ range: "bytes=0-" }), "client_tv");
+    const alias = await harness.dispatchFetch(
+      new Request(`https://tv.test${googleMediaAlias("session_test", "MOV00516.MPG")}`, {
+        headers: { range: "bytes=0-" },
+      }),
+      "client_tv",
+    );
+    expect(raw.type).toBe("error");
+    expect(alias.type).toBe("error");
+    expect(harness.providerFetch).not.toHaveBeenCalled();
+    expectSecretSafe(harness.clientMessages);
+  });
+
+  it("keeps in-flight grant revocation source-bound", async () => {
+    const validation = deferred<string>();
+    const fingerprint = vi.fn().mockReturnValueOnce(validation.promise);
+    const harness = workerHarness({ fingerprint });
+    const pendingGrant = harness.dispatchMessage(
+      grantMessage("request_source_bound"),
+      { id: "client_tv" },
+    );
+    expect(fingerprint).toHaveBeenCalledOnce();
+
+    await harness.dispatchMessage({
+      type: "cloudframe-media-revoke",
+      sessionId: "session_test",
+    }, { id: "client_other" });
+    validation.resolve(TEST_FINGERPRINT);
+    await pendingGrant;
+
+    expect(harness.clientMessages).toContainEqual({
+      type: "cloudframe-media-grant-ack",
+      requestId: "request_source_bound",
+      sessionId: "session_test",
+    });
+    await expect(harness.dispatchFetch(rawRequest({ range: "bytes=0-" }), "client_tv"))
+      .resolves.toMatchObject({ status: 206 });
+    expectSecretSafe(harness.clientMessages);
+  });
+
+  it("accepts a genuinely later grant after revocation supersedes an older validation", async () => {
+    const validation = deferred<string>();
+    const fingerprint = vi.fn()
+      .mockReturnValueOnce(validation.promise)
+      .mockResolvedValue(TEST_FINGERPRINT);
+    const harness = workerHarness({ fingerprint });
+    const pendingGrant = harness.dispatchMessage(
+      grantMessage("request_before_revoke"),
+      { id: "client_tv" },
+    );
+    expect(fingerprint).toHaveBeenCalledOnce();
+
+    await harness.dispatchMessage({
+      type: "cloudframe-media-revoke",
+      sessionId: "session_test",
+    }, { id: "client_tv" });
+    await harness.dispatchMessage(
+      grantMessage("request_after_revoke"),
+      { id: "client_tv" },
+    );
+    validation.resolve(TEST_FINGERPRINT);
+    await pendingGrant;
+
+    expect(harness.clientMessages).not.toContainEqual(expect.objectContaining({
+      type: "cloudframe-media-grant-ack",
+      requestId: "request_before_revoke",
+    }));
+    expect(harness.clientMessages).toContainEqual({
+      type: "cloudframe-media-grant-ack",
+      requestId: "request_after_revoke",
+      sessionId: "session_test",
+    });
+    await expect(harness.dispatchFetch(rawRequest({ range: "bytes=0-" }), "client_tv"))
+      .resolves.toMatchObject({ status: 206 });
+    expect(harness.providerFetch).toHaveBeenCalledOnce();
+    expectSecretSafe(harness.clientMessages);
+  });
+
+  it("fails closed when bounded mutation tracking prunes an older in-flight grant", async () => {
+    const validation = deferred<string>();
+    const fingerprint = vi.fn().mockReturnValueOnce(validation.promise);
+    const harness = workerHarness({ fingerprint });
+    const pendingGrant = harness.dispatchMessage(
+      grantMessage("request_pruned_validation"),
+      { id: "client_tv" },
+    );
+    expect(fingerprint).toHaveBeenCalledOnce();
+
+    for (let index = 0; index < 33; index += 1) {
+      await harness.dispatchMessage({
+        type: "cloudframe-media-revoke",
+        sessionId: `session_prune_${index}`,
+      }, { id: "client_tv" });
+    }
+    validation.resolve(TEST_FINGERPRINT);
+    await pendingGrant;
+
+    expect(harness.clientMessages).not.toContainEqual(expect.objectContaining({
+      type: "cloudframe-media-grant-ack",
+      requestId: "request_pruned_validation",
+    }));
+    expectSecretSafe(harness.clientMessages);
+  });
+
+  it("does not revive an older grant when a later same-session grant fails validation", async () => {
+    const validation = deferred<string>();
+    const fingerprint = vi.fn()
+      .mockReturnValueOnce(validation.promise)
+      .mockResolvedValueOnce("A".repeat(43));
+    const harness = workerHarness({ fingerprint });
+    const olderGrant = harness.dispatchMessage(
+      grantMessage("request_older_validation"),
+      { id: "client_tv" },
+    );
+    expect(fingerprint).toHaveBeenCalledOnce();
+
+    await harness.dispatchMessage(
+      grantMessage("request_later_invalid"),
+      { id: "client_tv" },
+    );
+    validation.resolve(TEST_FINGERPRINT);
+    await olderGrant;
+
+    expect(harness.clientMessages).not.toContainEqual(expect.objectContaining({
+      type: "cloudframe-media-grant-ack",
+      sessionId: "session_test",
+    }));
     expectSecretSafe(harness.clientMessages);
   });
 
