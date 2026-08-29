@@ -22,6 +22,8 @@ export * from "./http/control-app";
 export * from "./runtime/keyrings";
 export * from "./runtime/local-keys";
 export * from "./runtime/self-hosted-config";
+export * from "./sqlite/database";
+export * from "./sqlite/control-store";
 export * from "./services/control-auth";
 export * from "./services/control-admin";
 export * from "./services/control-enrollment";

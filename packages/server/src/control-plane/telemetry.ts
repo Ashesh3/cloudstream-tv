@@ -1,6 +1,21 @@
 export type ControlPlaneTelemetryEvent =
   | {
       level: "info";
+      event: "control_plane_sqlite_read";
+      requestId: string;
+      householdId: string;
+      count: 1;
+    }
+  | {
+      level: "info";
+      event: "control_plane_sqlite_write";
+      requestId: string;
+      householdId: string;
+      revision: number;
+      count: 1;
+    }
+  | {
+      level: "info";
       event:
         | "control_plane_blob_read"
         | "control_plane_cache_hit"
