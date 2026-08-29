@@ -34,6 +34,19 @@ describe("workspace", () => {
     expect(`${readme}\n${product}`).not.toMatch(/access token in the (?:media )?URL|access token in the query string/i);
   });
 
+  it("keeps the approved direct Google TV media design in the repository", async () => {
+    const spec = await readFile(
+      "docs/superpowers/specs/2026-08-29-direct-google-tv-media-design.md",
+      "utf8",
+    );
+
+    expect(spec).toContain("directly from Google to the LG webOS television");
+    expect(spec).toContain("service worker");
+    expect(spec).toContain("MOV00516.MPG");
+    expect(spec).toContain("alt=media&access_token=...");
+    expect(spec).toContain("not a viable fallback");
+  });
+
   it("has no dormant root application or indexing and workflow packages", async () => {
     await expect(access("src")).rejects.toMatchObject({ code: "ENOENT" });
     await expect(access("next.config.ts")).rejects.toMatchObject({ code: "ENOENT" });
