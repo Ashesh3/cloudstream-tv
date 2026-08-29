@@ -14,6 +14,7 @@ import { Viewer } from "./components/viewer";
 import { WaitingScreen } from "./components/waiting-screen";
 import { createLocalWatchHistory, type LocalWatchHistory, type LocalWatchHistoryEntry } from "./state/local-watch-history";
 import { useTvSession } from "./state/use-tv-session";
+import { createThumbnailWarmer, thumbnailRequestBatches } from "./thumbnails";
 
 type BrowseItem =
   | ({ itemType: "root" } & TvRootDto)
@@ -88,7 +89,6 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   const [stack, setStack] = useState<BrowseStackEntry[]>([]);
   const [thumbnails, setThumbnails] = useState<Record<string, ThumbnailState>>({});
   const [thumbnailRequestRevision, setThumbnailRequestRevision] = useState(0);
-  const [mountedIds, setMountedIds] = useState<string[]>([]);
   const [restoredFocusTick, setRestoredFocusTick] = useState(0);
   const [viewer, setViewer] = useState<{ items: TvBrowseItemDto[]; selectedItemId: string } | null>(null);
   const [, setHistoryRevision] = useState(0);
@@ -101,6 +101,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   const thumbnailExpiryTimers = useRef<Record<string, { identity: string; cancel: () => void }>>({});
   const thumbnailRetryTimer = useRef<number | null>(null);
   const thumbnailInstallRetries = useRef<Record<string, boolean>>({});
+  const thumbnailWarmer = useRef(createThumbnailWarmer());
   const browseRef = useRef(browse);
   const scrollTopRef = useRef(scrollTop);
   const columns = useResponsiveColumns();
@@ -111,6 +112,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
   useEffect(() => () => {
     clearScheduled(thumbnailExpiryTimers.current);
     if (thumbnailRetryTimer.current !== null) window.clearTimeout(thumbnailRetryTimer.current);
+    thumbnailWarmer.current.clear();
   }, []);
 
   const clearThumbnailLifecycle = useCallback(() => {
@@ -118,6 +120,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
     if (thumbnailRetryTimer.current !== null) window.clearTimeout(thumbnailRetryTimer.current);
     thumbnailRetryTimer.current = null;
     thumbnailInstallRetries.current = {};
+    thumbnailWarmer.current.clear();
   }, []);
 
   const closeDrawerAndRestore = useCallback(() => {
@@ -266,57 +269,63 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
 
   useEffect(() => {
     mountedRequest.current?.abort();
-    const requested = visibleThumbnailItems(browse.items, mountedIds).filter(item => thumbnails[item.id]?.requestedHandle !== item.handle);
-    if (requested.length === 0) return;
+    const batches = thumbnailRequestBatches(loadedThumbnailItems(browse.items), thumbnails);
+    if (batches.length === 0) return;
     const controller = new AbortController();
     mountedRequest.current = controller;
-    void api.thumbnailUrls(requested.map(item => item.handle), controller.signal).then(response => {
-      if (controller.signal.aborted) return;
-      let retryExpired = false;
-      const requestedIds: Record<string, boolean> = {};
-      requested.forEach(item => { requestedIds[item.id] = true; });
-      setThumbnails(current => {
-        const next = { ...current };
-        response.items.forEach(item => {
-          if (!requestedIds[item.itemId]) return;
-          const requestedItem = requested.find(candidate => candidate.id === item.itemId);
-          if (!requestedItem) return;
-          if (item.status === "unavailable") {
-            delete thumbnailInstallRetries.current[requestedItem.handle];
-            next[item.itemId] = { ...item, requestedHandle: requestedItem.handle };
-            return;
+    void (async () => {
+      try {
+        for (const requested of batches) {
+          const response = await api.thumbnailUrls(requested.map(item => item.handle), controller.signal);
+          if (controller.signal.aborted) return;
+          let retryExpired = false;
+          const requestedIds: Record<string, boolean> = {};
+          requested.forEach(item => { requestedIds[item.id] = true; });
+          setThumbnails(current => {
+            const next = { ...current };
+            response.items.forEach(item => {
+              if (!requestedIds[item.itemId]) return;
+              const requestedItem = requested.find(candidate => candidate.id === item.itemId);
+              if (!requestedItem) return;
+              if (item.status === "unavailable") {
+                delete thumbnailInstallRetries.current[requestedItem.handle];
+                next[item.itemId] = { ...item, requestedHandle: requestedItem.handle };
+                return;
+              }
+              const expiresAtEpoch = futureExpiryEpoch(item.expiresAt);
+              if (expiresAtEpoch === null) {
+                delete next[item.itemId];
+                if (!thumbnailInstallRetries.current[requestedItem.handle]) {
+                  thumbnailInstallRetries.current[requestedItem.handle] = true;
+                  retryExpired = true;
+                }
+                return;
+              }
+              delete thumbnailInstallRetries.current[requestedItem.handle];
+              thumbnailWarmer.current.warm(item.url!);
+              next[item.itemId] = { ...item, requestedHandle: requestedItem.handle, expiresAtEpoch };
+            });
+            return next;
+          });
+          if (retryExpired && thumbnailRetryTimer.current === null) {
+            thumbnailRetryTimer.current = window.setTimeout(() => {
+              thumbnailRetryTimer.current = null;
+              setThumbnailRequestRevision(value => value + 1);
+            }, 25);
           }
-          const expiresAtEpoch = futureExpiryEpoch(item.expiresAt);
-          if (expiresAtEpoch === null) {
-            delete next[item.itemId];
-            if (!thumbnailInstallRetries.current[requestedItem.handle]) {
-              thumbnailInstallRetries.current[requestedItem.handle] = true;
-              retryExpired = true;
-            }
-            return;
-          }
-          delete thumbnailInstallRetries.current[requestedItem.handle];
-          next[item.itemId] = { ...item, requestedHandle: requestedItem.handle, expiresAtEpoch };
-        });
-        return next;
-      });
-      if (retryExpired && thumbnailRetryTimer.current === null) {
-        thumbnailRetryTimer.current = window.setTimeout(() => {
-          thumbnailRetryTimer.current = null;
-          setThumbnailRequestRevision(value => value + 1);
-        }, 25);
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        const code = errorCode(error);
+        if (code === "DEVICE_UNAUTHORIZED" || code === "NAVIGATION_EXPIRED" || code === "ITEM_NOT_FOUND") handleBrowseError(error, true);
       }
-    }).catch(error => {
-      if (controller.signal.aborted) return;
-      const code = errorCode(error);
-      if (code === "DEVICE_UNAUTHORIZED" || code === "NAVIGATION_EXPIRED" || code === "ITEM_NOT_FOUND") handleBrowseError(error, true);
-    });
+    })();
     return () => controller.abort();
-  }, [api, browse.items, handleBrowseError, mountedIds.join("|"), thumbnailRequestRevision]);
+  }, [api, browse.items, handleBrowseError, thumbnailRequestRevision]);
 
   useEffect(() => {
     const visible: Record<string, boolean> = {};
-    visibleThumbnailItems(browse.items, mountedIds).forEach(item => { visible[item.id] = true; });
+    loadedThumbnailItems(browse.items).forEach(item => { visible[item.id] = true; });
     Object.keys(thumbnails).forEach(itemId => {
       const entry = thumbnails[itemId]!;
       if (entry.status !== "ready" || entry.expiresAtEpoch === undefined || !visible[itemId]) return;
@@ -346,7 +355,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
       thumbnailExpiryTimers.current[itemId]!.cancel();
       delete thumbnailExpiryTimers.current[itemId];
     });
-  }, [browse.items, mountedIds.join("|"), thumbnails]);
+  }, [browse.items, thumbnails]);
 
   const goBack = useCallback(() => {
     const entry = stack[stack.length - 1];
@@ -485,7 +494,6 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
             hasNextPage={Boolean(browse.nextCursor)}
             focusRevision={restoredFocusTick}
             onScrollTopChange={setScrollTop}
-            onMountedItemsChange={setMountedIds}
             onFocusedIndexChange={(index, extend, pendingIndex) => {
               setFocusedIndex(index);
               const activeColumns = browse.parent ? columns : programColumnsForWidth(window.innerWidth);
@@ -500,6 +508,7 @@ function BrowserShell({ api, history, mediaOrder, onUnauthorized, slideshowSecon
               <FolderCard
                 name={item.itemType === "root" ? item.displayName : item.name}
                 subtitle={item.itemType === "root" ? `${providerLabel(item.provider)} · ${item.accountLabel}` : undefined}
+                thumbnailUrl={item.itemType === "node" ? thumbnails[item.id]?.url : undefined}
                 focused={state.focused}
                 program={item.itemType === "root"}
                 onSelect={() => openItem(item, state.index)}
@@ -587,10 +596,10 @@ function sortFolderBrowseItems(items: BrowseItem[], order: MediaOrder): BrowseIt
   return sortBrowseItems(nodes, order);
 }
 
-function visibleThumbnailItems(items: BrowseItem[], mountedIds: string[]): TvBrowseItemDto[] {
-  const mounted: Record<string, boolean> = {};
-  mountedIds.forEach(id => { mounted[id] = true; });
-  return items.filter((item): item is { itemType: "node" } & TvBrowseItemDto => item.itemType === "node" && item.kind !== "folder" && item.hasPreview && mounted[item.id]);
+function loadedThumbnailItems(items: BrowseItem[]): TvBrowseItemDto[] {
+  return items.filter((item): item is { itemType: "node" } & TvBrowseItemDto =>
+    item.itemType === "node" && (item.kind === "folder" || item.hasPreview)
+  );
 }
 
 function clearSessionState(

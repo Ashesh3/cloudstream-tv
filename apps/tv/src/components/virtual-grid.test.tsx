@@ -113,6 +113,35 @@ describe("folder artwork and media cards", () => {
     expect(card.querySelectorAll("img")).toHaveLength(0);
   });
 
+  it("renders a no-referrer folder preview and restores stock art after an image failure", () => {
+    const view = render(
+      <FolderCard
+        name="Trips"
+        thumbnailUrl="https://provider.example/folder-old"
+        focused={false}
+      />
+    );
+    const oldImage = document.querySelector(".folder-art img")!;
+    expect(oldImage).toHaveAttribute("referrerpolicy", "no-referrer");
+    expect(oldImage).toHaveAttribute("src", "https://provider.example/folder-old");
+
+    fireEvent.error(oldImage);
+    expect(document.querySelector(".folder-art img")).not.toBeInTheDocument();
+    expect(screen.getByText("Cloudframe collection")).toBeVisible();
+
+    view.rerender(
+      <FolderCard
+        name="Trips"
+        thumbnailUrl="https://provider.example/folder-fresh"
+        focused={false}
+      />
+    );
+    expect(document.querySelector(".folder-art img")).toHaveAttribute(
+      "src",
+      "https://provider.example/folder-fresh",
+    );
+  });
+
   it("shows video identity and resume progress without hover", () => {
     render(
       <MediaCard

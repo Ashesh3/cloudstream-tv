@@ -345,6 +345,59 @@ describe("TV enrollment and browse states", () => {
     expect(document.body.innerHTML).not.toContain("https://provider.example/wrong");
   });
 
+  it("vends and browser-warms every loaded folder thumbnail before scrolling", async () => {
+    const client = api();
+    const warmed: string[] = [];
+    class WarmingImage {
+      onload: ((event: Event) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      referrerPolicy = "";
+      set src(value: string) {
+        warmed.push(value);
+      }
+    }
+    vi.stubGlobal("Image", WarmingImage);
+    vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(client.home).mockResolvedValue({ roots: [rootCards[0]!] });
+    const children = Array.from({ length: 24 }, (_, index) => {
+      const kind = index === 7 ? "folder" as const : index % 2 === 0 ? "image" as const : "video" as const;
+      return {
+        ...browseItem(`item_${index}`, `sealed-${index}`, `Item ${index}`, kind),
+        hasPreview: true,
+      };
+    });
+    vi.mocked(client.folder).mockResolvedValue({
+      parent: node("root-1", "folder", "Parent"),
+      children,
+      nextCursor: null,
+    });
+    const byHandle = new Map(children.map(item => [item.handle, item]));
+    vi.mocked(client.thumbnailUrls).mockImplementation(async handles => ({
+      items: handles.map(handle => {
+        const item = byHandle.get(handle)!;
+        return {
+          itemId: item.id,
+          status: "ready" as const,
+          url: `https://provider.example/${item.id}`,
+          expiresAt: futureIso(),
+          revision: null,
+        };
+      }),
+    }));
+
+    render(<TvApp api={client} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+
+    await waitFor(() => expect(client.thumbnailUrls).toHaveBeenCalled());
+    const requestedHandles = vi.mocked(client.thumbnailUrls).mock.calls.flatMap(call => call[0]);
+    expect(requestedHandles).toHaveLength(children.length);
+    expect(requestedHandles).toEqual(expect.arrayContaining(children.map(item => item.handle)));
+    await waitFor(() => expect(warmed).toEqual(
+      expect.arrayContaining(children.map(item => `https://provider.example/${item.id}`)),
+    ));
+    expect(screen.getByRole("grid")).toHaveProperty("scrollTop", 0);
+  });
+
   it("refreshes home and removes stale cards when thumbnail vending reports item not found", async () => {
     const client = api();
     vi.mocked(client.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });

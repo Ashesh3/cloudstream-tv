@@ -1,13 +1,18 @@
+import { useState } from "preact/hooks";
+
 interface FolderCardProps {
   name: string;
   subtitle?: string;
+  thumbnailUrl?: string;
   focused: boolean;
   program?: boolean;
   hero?: boolean;
   onSelect?: () => void;
 }
 
-export function FolderCard({ name, subtitle, focused, program = false, hero = false, onSelect }: FolderCardProps) {
+export function FolderCard({ name, subtitle, thumbnailUrl, focused, program = false, hero = false, onSelect }: FolderCardProps) {
+  const [failedUrl, setFailedUrl] = useState<string | undefined>();
+  const previewReady = Boolean(thumbnailUrl && failedUrl !== thumbnailUrl);
   return (
     <button
       type="button"
@@ -18,6 +23,7 @@ export function FolderCard({ name, subtitle, focused, program = false, hero = fa
       tabIndex={focused ? 0 : -1}
     >
       <span className="card-visual folder-art" aria-hidden="true">
+        {previewReady ? <img src={thumbnailUrl} alt="" referrerPolicy="no-referrer" onError={() => setFailedUrl(thumbnailUrl)} /> : null}
         <ProgramStockArt program={program} name={name} />
         {program && <span className="program-frame-mark"><i /><i /></span>}
       </span>
