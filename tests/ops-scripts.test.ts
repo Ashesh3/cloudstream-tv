@@ -1,7 +1,8 @@
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { execFile } from "node:child_process";
+import { createServer } from "node:net";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -259,6 +260,56 @@ describe("operations scripts", () => {
         .toThrow("Production media worker contains probe configuration");
     }
   });
+
+  it("rejects child-process spawn errors without an unhandled EventEmitter crash", async () => {
+    const harnessUrl = new URL("../scripts/chromium68-harness.mjs", import.meta.url);
+    const { runCheckedProcess } = await import(harnessUrl.href);
+
+    await expect(runCheckedProcess("cloudframe-command-that-does-not-exist", [], {
+      stdio: "ignore",
+      windowsHide: true,
+    }, "archive extraction")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("settles a checked child process once when error and close both fire", async () => {
+    const harnessUrl = new URL("../scripts/chromium68-harness.mjs", import.meta.url);
+    const { observeCheckedChild } = await import(harnessUrl.href);
+    const child = new EventTargetChild();
+    const checked = observeCheckedChild(child, "synthetic-process");
+    const failure = Object.assign(new Error("spawn blocked"), { code: "EACCES" });
+
+    child.emit("error", failure);
+    child.emit("close", null, null);
+
+    await expect(checked.started).rejects.toBe(failure);
+    await expect(checked.completed).rejects.toBe(failure);
+  });
+
+  it("cleans the actual Chromium harness after a controlled launch failure", async () => {
+    const isolatedTemp = await temp();
+    const [sitePort, mediaPort, debuggerPort] = await reservePorts(3);
+    const result = await runNode("scripts/check-chromium68.mjs", [], {
+      CLOUDFRAME_CHROMIUM68_TEST_EXECUTABLE: join(isolatedTemp, "missing-chrome.exe"),
+      CLOUDFRAME_CHROMIUM68_TEST_CACHE: join(isolatedTemp, "cache"),
+      CLOUDFRAME_CHROMIUM68_TEST_SITE_PORT: String(sitePort),
+      CLOUDFRAME_CHROMIUM68_TEST_MEDIA_PORT: String(mediaPort),
+      CLOUDFRAME_CHROMIUM68_TEST_DEBUGGER_PORT: String(debuggerPort),
+      NODE_ENV: "test",
+      TEMP: isolatedTemp,
+      TMP: isolatedTemp,
+      TMPDIR: isolatedTemp,
+    });
+
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("ENOENT");
+    expect(result.stderr).not.toContain("Unhandled 'error' event");
+    expect(result.stdout).not.toContain("loaded authenticated Range media");
+    expect((await readdir(isolatedTemp)).filter(name => name.startsWith("cloudframe-chromium68-")))
+      .toEqual([]);
+    for (const port of [sitePort, mediaPort, debuggerPort]) {
+      await expect(canListen(port)).resolves.toBeUndefined();
+    }
+  });
 });
 
 async function temp() {
@@ -309,5 +360,60 @@ async function runNodeWithStripTypes(file: string, args: string[], env: Record<s
   } catch (error) {
     const failure = error as { code?: number; stdout?: string; stderr?: string };
     return { code: failure.code ?? 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? "" };
+  }
+}
+
+async function reservePorts(count: number): Promise<number[]> {
+  const servers = Array.from({ length: count }, () => createServer());
+  try {
+    await Promise.all(servers.map(server => new Promise<void>((resolvePromise, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolvePromise());
+    })));
+    return servers.map(server => {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Test port allocation failed");
+      return address.port;
+    });
+  } finally {
+    await Promise.all(servers.map(server => new Promise<void>(resolvePromise => {
+      if (!server.listening) resolvePromise();
+      else server.close(() => resolvePromise());
+    })));
+  }
+}
+
+async function canListen(port: number): Promise<void> {
+  const server = createServer();
+  await new Promise<void>((resolvePromise, reject) => {
+    server.once("error", reject);
+    server.listen(port, "127.0.0.1", () => resolvePromise());
+  });
+  await new Promise<void>((resolvePromise, reject) => {
+    server.close(error => error ? reject(error) : resolvePromise());
+  });
+}
+
+class EventTargetChild {
+  private readonly listeners = new Map<string, Set<(...args: unknown[]) => void>>();
+
+  once(name: string, listener: (...args: unknown[]) => void): this {
+    const onceListener = (...args: unknown[]) => {
+      this.removeListener(name, onceListener);
+      listener(...args);
+    };
+    const entries = this.listeners.get(name) ?? new Set();
+    entries.add(onceListener);
+    this.listeners.set(name, entries);
+    return this;
+  }
+
+  removeListener(name: string, listener: (...args: unknown[]) => void): this {
+    this.listeners.get(name)?.delete(listener);
+    return this;
+  }
+
+  emit(name: string, ...args: unknown[]): void {
+    for (const listener of [...(this.listeners.get(name) ?? [])]) listener(...args);
   }
 }

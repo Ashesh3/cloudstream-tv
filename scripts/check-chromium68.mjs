@@ -11,15 +11,20 @@ import {
   assertProductionWorker,
   createProbePaths,
   removeProbeRoot,
+  runCheckedProcess,
+  spawnChecked,
 } from "./chromium68-harness.mjs";
 
 const revision = "555668";
-const cache = resolve(".cache", "chromium-68", revision);
+const testCache = testOverride("CLOUDFRAME_CHROMIUM68_TEST_CACHE");
+const cache = testCache ?? resolve(".cache", "chromium-68", revision);
 const archive = join(cache, "chrome-win32.zip");
-const executable = join(cache, "chrome-win32", "chrome.exe");
-const sitePort = await freePort();
-const mediaPort = await freePort();
-const debuggerPort = await freePort();
+const pinnedExecutable = join(cache, "chrome-win32", "chrome.exe");
+const testExecutable = testOverride("CLOUDFRAME_CHROMIUM68_TEST_EXECUTABLE");
+const executable = testExecutable ?? pinnedExecutable;
+const sitePort = await configuredPort("CLOUDFRAME_CHROMIUM68_TEST_SITE_PORT");
+const mediaPort = await configuredPort("CLOUDFRAME_CHROMIUM68_TEST_MEDIA_PORT");
+const debuggerPort = await configuredPort("CLOUDFRAME_CHROMIUM68_TEST_DEBUGGER_PORT");
 const siteOrigin = `http://127.0.0.1:${sitePort}`;
 const mediaOrigin = `http://127.0.0.1:${mediaPort}`;
 const mediaUrl = `${mediaOrigin}/sample.wav`;
@@ -152,17 +157,21 @@ try {
   probeWorkerPath = probePaths.worker;
   profile = probePaths.profile;
   await mkdir(cache, { recursive: true });
-  try {
-    await access(executable);
-  } catch {
-    const url = `https://storage.googleapis.com/chromium-browser-snapshots/Win/${revision}/chrome-win32.zip`;
-    const response = await fetch(url);
-    if (!response.ok || !response.body) throw new Error(`Pinned Chromium download failed: ${response.status}`);
-    await pipeline(response.body, createWriteStream(archive));
-    await new Promise((resolvePromise, reject) => {
-      const tar = spawn("tar", ["-xf", archive, "-C", cache], { stdio: "ignore", windowsHide: true });
-      tar.once("exit", code => code === 0 ? resolvePromise() : reject(new Error(`tar exited ${code}`)));
-    });
+  if (testExecutable === null) {
+    try {
+      await access(pinnedExecutable);
+    } catch {
+      const url = `https://storage.googleapis.com/chromium-browser-snapshots/Win/${revision}/chrome-win32.zip`;
+      const response = await fetch(url);
+      if (!response.ok || !response.body) throw new Error(`Pinned Chromium download failed: ${response.status}`);
+      await pipeline(response.body, createWriteStream(archive));
+      await runCheckedProcess(
+        "tar",
+        ["-xf", archive, "-C", cache],
+        { stdio: "ignore", windowsHide: true },
+        "tar",
+      );
+    }
   }
 
   const productionWorker = await readFile(productionWorkerPath, "utf8");
@@ -183,12 +192,21 @@ try {
     listen(mediaServer, mediaPort),
     listen(staticServer, sitePort),
   ]);
-  chrome = spawn(executable, [
+  const chromium = spawnChecked(executable, [
     "--headless", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
     `--remote-debugging-port=${debuggerPort}`, `--user-data-dir=${profile}`, `${siteOrigin}/`,
   ], { stdio: "ignore", windowsHide: true });
+  chrome = chromium.child;
+  await chromium.started;
 
-  const endpoint = await waitForDebugger(debuggerPort);
+  const chromiumStopped = chromium.completed.then(result => {
+    const outcome = result.signal === null ? String(result.code) : `from ${result.signal}`;
+    throw new Error(`Pinned Chromium exited ${outcome} before the debugger became ready`);
+  });
+  const endpoint = await Promise.race([
+    waitForDebugger(debuggerPort),
+    chromiumStopped,
+  ]);
   ws = new WebSocket(endpoint.webSocketDebuggerUrl);
   await new Promise((resolvePromise, reject) => { ws.once("open", resolvePromise); ws.once("error", reject); });
   let id = 0;
@@ -455,6 +473,25 @@ async function freePort() {
   const free = typeof address === "object" && address ? address.port : 0;
   await new Promise(resolvePromise => server.close(resolvePromise));
   return free;
+}
+
+async function configuredPort(name) {
+  const value = testOverride(name);
+  if (value === null) return freePort();
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`Invalid ${name}`);
+  }
+  return port;
+}
+
+function testOverride(name) {
+  if (!Object.prototype.hasOwnProperty.call(process.env, name)) return null;
+  const value = process.env[name];
+  if (process.env.NODE_ENV !== "test" || typeof value !== "string" || value.length < 1) {
+    throw new Error(`Invalid ${name}`);
+  }
+  return value;
 }
 
 function listen(server, port) {
