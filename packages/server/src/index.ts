@@ -56,6 +56,7 @@ export * from "./transcode/process-runner";
 export * from "./transcode/probe";
 export * from "./transcode/manifests";
 export * from "./transcode/window-encoder";
+export * from "./transcode/coordinator";
 export type {
   ProviderAdapter,
   ProviderCredentials,
