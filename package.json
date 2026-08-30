@@ -23,13 +23,14 @@
     "start": "node build/self-hosted/server/index.js"
   },
   "dependencies": {
-    "@cloudframe/shared": "*",
-    "@cloudframe/server": "*",
     "@cloudframe/providers": "*",
+    "@cloudframe/server": "*",
+    "@cloudframe/shared": "*",
     "@node-rs/argon2": "^2.1.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@astryxdesign/cli": "^0.5.1",
     "@eslint/js": "^9.39.1",
     "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^6.9.1",
