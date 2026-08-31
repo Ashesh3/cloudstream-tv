@@ -6,7 +6,6 @@ import { StrictMode } from "react";
 import type { AdminSnapshotResponse, ControlDeviceDto, ControlRequestDto, ControlRootDto, ControlSourceDto } from "@cloudframe/shared";
 import { AdminApp } from "./app";
 import { AdminApiError, type AdminApi } from "./api/client";
-import { CHECKED_CONTROL_SELECTORS, CONTROL_HIT_TARGET, DIRECTION_SEED } from "./design/ledger";
 
 const request = (id: string, name: string, createdAt: string): ControlRequestDto => ({ id, requestedName: name, status: "pending", createdAt, expiresAt: "2026-08-29T01:00:00.000Z", resolvedAt: null, approvedDeviceId: null });
 const root: ControlRootDto = { id: "root-1", sourceId: "source-1", displayName: "Family Photos", enabled: true, createdAt: "2026-08-20T00:00:00.000Z" };
@@ -45,7 +44,7 @@ async function login(client: AdminApi) {
   fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
   await screen.findByRole("heading", { name: "Device requests" });
 }
-const go = (name: string) => fireEvent.click(within(screen.getByRole("navigation", { name: "Admin sections" })).getByRole("button", { name }));
+const go = (name: string) => fireEvent.click(within(screen.getByRole("navigation", { name: "Side navigation" })).getByRole("button", { name }));
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); window.history.replaceState({}, "", "/admin/"); });
 
@@ -99,6 +98,8 @@ describe("admin snapshot workflows", () => {
 
   it("shows source and access truth without indexing or quota language", async () => {
     await login(api());
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Device requests");
     const sourceHealth = screen.getByRole("region", { name: "Source health" });
     expect(within(sourceHealth).getByText("Connected")).toBeVisible();
     expect(screen.getByRole("region", { name: "Attention" })).toHaveTextContent("2 televisions waiting");
@@ -170,7 +171,7 @@ describe("admin snapshot workflows", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Approve device" })).not.toBeInTheDocument());
     expect(screen.queryByText("Den TV")).not.toBeInTheDocument();
     expect(screen.getByText("Den TV was approved.")).toBeVisible();
-    expect(screen.getByText("Change saved, but the household ledger could not be refreshed. Refresh to confirm the latest state.")).toBeVisible();
+    expect(screen.getByText("Change saved, but household data could not be refreshed. Refresh to confirm the latest state.")).toBeVisible();
     expect(screen.queryByText("Action could not be completed")).not.toBeInTheDocument();
   });
 
@@ -197,7 +198,7 @@ describe("admin snapshot workflows", () => {
 
     await waitFor(() => expect(screen.queryByText("Kitchen")).not.toBeInTheDocument());
     expect(screen.getByText("Kitchen was denied.")).toBeVisible();
-    expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
+    expect(screen.getByText(/Change saved, but household data could not be refreshed/)).toBeVisible();
   });
 
   it("preserves device edits and closes the editor when its snapshot refresh fails", async () => {
@@ -212,7 +213,7 @@ describe("admin snapshot workflows", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit device" })).not.toBeInTheDocument());
     expect(screen.getByRole("heading", { name: "Family TV" })).toBeVisible();
     expect(screen.getByText("Device updated.")).toBeVisible();
-    expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
+    expect(screen.getByText(/Change saved, but household data could not be refreshed/)).toBeVisible();
   });
 
   it("closes device editing immediately while the committed refresh remains pending", async () => {
@@ -239,7 +240,7 @@ describe("admin snapshot workflows", () => {
     await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "Revoke device" })).not.toBeInTheDocument());
     expect(screen.getByText("No approved devices")).toBeVisible();
     expect(screen.getByText("Living Room was revoked.")).toBeVisible();
-    expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
+    expect(screen.getByText(/Change saved, but household data could not be refreshed/)).toBeVisible();
   });
 
   it("closes revocation immediately while the committed refresh remains pending", async () => {
@@ -262,7 +263,7 @@ describe("admin snapshot workflows", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
 
     expect(await screen.findByText("Household defaults saved.")).toBeVisible();
-    expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
+    expect(screen.getByText(/Change saved, but household data could not be refreshed/)).toBeVisible();
     expect(screen.getByLabelText("Allow new device requests")).not.toBeChecked();
   });
 
@@ -307,7 +308,7 @@ describe("admin snapshot workflows", () => {
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove source" })).not.toBeInTheDocument());
     expect(screen.getByText("No cloud sources")).toBeVisible();
     expect(screen.getByText("Source removed. Television access was removed immediately.")).toBeVisible();
-    expect(screen.getByText(/Change saved, but the household ledger could not be refreshed/)).toBeVisible();
+    expect(screen.getByText(/Change saved, but household data could not be refreshed/)).toBeVisible();
   });
 
   it("ignores stale snapshot responses and updates after unmount", async () => {
@@ -316,11 +317,12 @@ describe("admin snapshot workflows", () => {
     const client = api();
     vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockReturnValueOnce(old).mockResolvedValueOnce({ ...snapshot, revision: 9, pendingRequests: [] });
     await login(client);
-    fireEvent.click(screen.getByRole("button", { name: "Refresh" })); fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
-    await waitFor(() => expect(screen.getByRole("region", { name: "Attention" })).toHaveTextContent("The booth is quiet"));
+    const refreshButton = screen.getByRole("button", { name: "Refresh" });
+    fireEvent.click(refreshButton); fireEvent.click(refreshButton);
+    await waitFor(() => expect(screen.getByRole("region", { name: "Attention" })).toHaveTextContent("No device requests need review"));
     resolveOld(snapshot);
     await Promise.resolve();
-    expect(screen.getByRole("region", { name: "Attention" })).toHaveTextContent("The booth is quiet");
+    expect(screen.getByRole("region", { name: "Attention" })).toHaveTextContent("No device requests need review");
     cleanup();
     expect(() => resolveOld(snapshot)).not.toThrow();
   });
@@ -332,12 +334,11 @@ describe("admin snapshot workflows", () => {
     expect(await screen.findByRole("heading", { name: "Household admin" })).toBeVisible();
   });
 
-  it("keeps mobile navigation, focus targets, and the direction contract", async () => {
+  it("keeps the four accessible navigation targets and a single main landmark", async () => {
     await login(api());
-    expect(within(screen.getByRole("navigation", { name: "Mobile admin sections" })).getAllByRole("button")).toHaveLength(4);
-    expect(CONTROL_HIT_TARGET).toBe(44); expect(CHECKED_CONTROL_SELECTORS).toHaveLength(2);
-    const adminRoot = document.querySelector(".admin-root")!;
-    expect(adminRoot.firstChild?.nodeType).toBe(Node.COMMENT_NODE); expect(adminRoot.firstChild?.textContent).toContain(DIRECTION_SEED);
+    expect(within(screen.getByRole("navigation", { name: "Side navigation" })).getAllByRole("button", { hidden: true })).toHaveLength(4);
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(screen.getByTestId("skip-to-content")).toBeInTheDocument();
     for (const button of screen.getAllByRole("button")) expect(button).toHaveAccessibleName();
   });
 });

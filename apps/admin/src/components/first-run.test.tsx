@@ -52,4 +52,22 @@ describe("first-run ownership", () => {
     expect(await screen.findByText("The passphrases do not match.")).toBeVisible();
     expect(onClaim).not.toHaveBeenCalled();
   });
+
+  it("validates the local setup-code and passphrase bounds before claiming", async () => {
+    const onClaim = vi.fn();
+    render(<FirstRun onClaim={onClaim} />);
+    expect(screen.getByLabelText("Setup code")).toHaveFocus();
+    fireEvent.change(screen.getByLabelText("Setup code"), { target: { value: "not a setup code" } });
+    fireEvent.change(screen.getByLabelText("New admin passphrase"), { target: { value: "too short" } });
+    fireEvent.change(screen.getByLabelText("Confirm admin passphrase"), { target: { value: "too short" } });
+    fireEvent.click(screen.getByRole("button", { name: "Claim installation" }));
+    expect(await screen.findByText(/setup code from the server log/i)).toBeVisible();
+    expect(onClaim).not.toHaveBeenCalled();
+  });
+
+  it("explains stopped-volume backup and runtime ownership truth", () => {
+    render(<FirstRun onClaim={vi.fn()} />);
+    expect(screen.getByText(/complete stopped \/data volume/i)).toBeVisible();
+    expect(screen.getByText(/UID and GID 10001/i)).toBeVisible();
+  });
 });

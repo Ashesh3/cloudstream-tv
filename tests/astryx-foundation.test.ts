@@ -65,4 +65,12 @@ describe("Astryx foundation", () => {
     expect(entry).toContain('import { cloudframeNightTheme } from "@cloudframe/theme"');
     expect(entry).toContain('<Theme theme={cloudframeNightTheme} mode="dark">');
   });
+
+  it("mounts the Admin under the built Cloudframe Night dark theme", async () => {
+    const entry = await readFile("apps/admin/src/main.tsx", "utf8");
+    expect(entry).toContain('import "@cloudframe/theme/cloudframe-night.css"');
+    expect(entry).toContain('import { Theme } from "@astryxdesign/core/theme"');
+    expect(entry).toContain('import { cloudframeNightTheme } from "@cloudframe/theme"');
+    expect(entry).toContain('<Theme theme={cloudframeNightTheme} mode="dark">');
+  });
 });

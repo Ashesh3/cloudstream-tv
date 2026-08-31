@@ -1,29 +1,45 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
 import type { ClaimInstallationBody } from "@cloudframe/shared";
-import { FolderKeyIcon, ShieldCheckIcon } from "lucide-react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { Card } from "@astryxdesign/core/Card";
+import { Center } from "@astryxdesign/core/Center";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Icon } from "@astryxdesign/core/Icon";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { VStack } from "@astryxdesign/core/VStack";
 import { AdminApiError } from "../api/client";
 
-export function FirstRun({
-  onClaim,
-}: {
-  onClaim(input: ClaimInstallationBody): Promise<void>;
-}) {
+const SETUP_CODE = /^[A-Za-z0-9_-]{22}$/u;
+
+export function FirstRun({ onClaim }: { onClaim(input: ClaimInstallationBody): Promise<void> }) {
   const [setupCode, setSetupCode] = useState("");
   const [passphrase, setPassphrase] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
+  const submitting = useRef(false);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (submitting.current) return;
     setError("");
+    if (!SETUP_CODE.test(setupCode)) {
+      setError("Enter the one-time setup code from the server log.");
+      return;
+    }
+    if (passphrase.length < 16 || passphrase.length > 1024) {
+      setError("Use an admin passphrase between 16 and 1024 characters.");
+      return;
+    }
     if (passphrase !== confirmation) {
       setError("The passphrases do not match.");
       return;
     }
+    submitting.current = true;
     setPending(true);
     try {
       await onClaim({ setupCode, passphrase });
@@ -35,38 +51,72 @@ export function FirstRun({
         ? cause.message
         : "Cloudframe could not claim this installation. Try again.");
     } finally {
+      submitting.current = false;
       setPending(false);
     }
   };
 
-  return <main className="login-stage relative grid min-h-screen place-items-center overflow-hidden p-4 sm:p-8">
-    <div className="projection-beam" aria-hidden="true" />
-    <section className="login-ledger relative w-full max-w-lg">
-      <header className="login-ledger-header">
-        <div className="flex items-center gap-3">
-          <span className="login-cue" aria-hidden="true"><FolderKeyIcon /></span>
-          <div><p className="text-sm font-semibold">Cloudframe</p><p className="text-xs text-muted-foreground">Fresh household installation</p></div>
-        </div>
-        <div className="mt-8">
-          <h1 className="font-heading text-4xl font-semibold tracking-[-.025em]">Claim this server</h1>
-          <p className="mt-3 leading-6 text-muted-foreground">This empty <code>/data</code> volume is the installation boundary. No cloud configuration was imported.</p>
-        </div>
-      </header>
-      <form onSubmit={submit}>
-        <div className="login-ledger-body grid gap-4">
-          <label className="field">Setup code<Input autoFocus autoComplete="one-time-code" value={setupCode} onChange={(event) => setSetupCode(event.target.value)} /></label>
-          <label className="field">New admin passphrase<Input autoComplete="new-password" type="password" value={passphrase} onChange={(event) => setPassphrase(event.target.value)} /></label>
-          <label className="field">Confirm admin passphrase<Input autoComplete="new-password" type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label>
-          <p className="text-sm text-muted-foreground">Use the one-time code from the server log. The passphrase becomes the permanent household-admin credential.</p>
-          {error && <Alert variant="destructive" role="alert"><AlertDescription>{error}</AlertDescription></Alert>}
-        </div>
-        <footer className="login-ledger-footer">
-          <Button className="h-11 w-full" disabled={pending || !setupCode || !passphrase || !confirmation}>
-            {pending ? "Claiming installation…" : "Claim installation"}
-          </Button>
-          <div className="flex w-full items-center justify-center gap-2 text-xs text-muted-foreground"><ShieldCheckIcon className="size-3.5" />One-time ownership claim</div>
-        </footer>
-      </form>
-    </section>
-  </main>;
+  return <Center minHeight="100dvh" padding={4}>
+    <Card maxWidth="40rem" width="100%" padding={8} elevation="low">
+      <VStack gap={6}>
+        <VStack gap={2}>
+          <HStack gap={2} align="center">
+            <Icon icon="wrench" color="accent" />
+            <Text type="label">Fresh household installation</Text>
+          </HStack>
+          <Heading level={1}>Claim this server</Heading>
+          <Text as="p">This empty /data volume is the installation boundary. No cloud configuration was imported.</Text>
+        </VStack>
+        <Banner
+          status="info"
+          title="Back up the complete stopped data volume"
+          description="A complete stopped /data volume is the durable backup unit. The mounted directory must remain writable by container UID and GID 10001."
+          container="section"
+        />
+        <form onSubmit={submit}>
+          <FormLayout defaultOptionality="required">
+            <TextInput
+              label="Setup code"
+              description="Use the one-time code from the server log."
+              value={setupCode}
+              onChange={setSetupCode}
+              hasAutoFocus
+              isDisabled={pending}
+              {...{ autoComplete: "one-time-code" }}
+              width="100%"
+            />
+            <TextInput
+              label="New admin passphrase"
+              description="Use 16 to 1024 characters. This becomes the permanent household-admin credential."
+              type="password"
+              value={passphrase}
+              onChange={setPassphrase}
+              isDisabled={pending}
+              {...{ autoComplete: "new-password" }}
+              width="100%"
+            />
+            <TextInput
+              label="Confirm admin passphrase"
+              type="password"
+              value={confirmation}
+              onChange={setConfirmation}
+              isDisabled={pending}
+              {...{ autoComplete: "new-password" }}
+              width="100%"
+            />
+            {error && <Banner status="error" title="Installation could not be claimed" description={error} container="section" />}
+            <Button
+              type="submit"
+              label={pending ? "Claiming installation…" : "Claim installation"}
+              variant="primary"
+              isDisabled={pending || !setupCode || !passphrase || !confirmation}
+              isLoading={pending}
+              width="100%"
+            />
+          </FormLayout>
+        </form>
+        <Text type="supporting" as="p">This one-time ownership claim creates the household administrator.</Text>
+      </VStack>
+    </Card>
+  </Center>;
 }
