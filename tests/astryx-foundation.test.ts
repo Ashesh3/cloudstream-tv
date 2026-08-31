@@ -33,6 +33,7 @@ describe("Astryx foundation", () => {
     expect(source).toContain('"--color-background-surface"');
     expect(source).toContain('"--color-text-primary"');
     expect(source).toContain('"--color-text-secondary"');
+    expect(source).toContain('minHeight: "var(--spacing-11)"');
   });
 
   it("keeps committed theme outputs reproducible", async () => {

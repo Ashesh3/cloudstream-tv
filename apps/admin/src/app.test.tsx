@@ -149,13 +149,14 @@ describe("admin snapshot workflows", () => {
       .mockResolvedValueOnce({ ...snapshot, pendingRequests: snapshot.pendingRequests.filter(value => value.id !== "request-new") })
       .mockResolvedValueOnce({ ...snapshot, pendingRequests: [] });
     await login(client);
-    const first = screen.getAllByTestId("request-card")[0]!;
+    const first = screen.getAllByTestId("request-row")[0]!;
     fireEvent.click(within(first).getByRole("button", { name: "Approve Den TV" }));
     const dialog = screen.getByRole("dialog", { name: "Approve device" });
     fireEvent.click(within(dialog).getByLabelText("Family Photos"));
     fireEvent.click(within(dialog).getByRole("button", { name: "Approve device" }));
     await waitFor(() => expect(client.snapshot).toHaveBeenCalledTimes(2));
-    fireEvent.click(within(screen.getByTestId("request-card")).getByRole("button", { name: "Deny Kitchen" }));
+    fireEvent.click(within(screen.getByTestId("request-row")).getByRole("button", { name: "Deny Kitchen" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "Deny device request" })).getByRole("button", { name: "Deny Kitchen" }));
     await waitFor(() => expect(client.snapshot).toHaveBeenCalledTimes(3));
   });
 
@@ -163,7 +164,7 @@ describe("admin snapshot workflows", () => {
     const client = api();
     vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockRejectedValueOnce(refreshFailure);
     await login(client);
-    fireEvent.click(within(screen.getAllByTestId("request-card")[0]!).getByRole("button", { name: "Approve Den TV" }));
+    fireEvent.click(within(screen.getAllByTestId("request-row")[0]!).getByRole("button", { name: "Approve Den TV" }));
     const dialog = screen.getByRole("dialog", { name: "Approve device" });
     fireEvent.click(within(dialog).getByLabelText("Family Photos"));
     fireEvent.click(within(dialog).getByRole("button", { name: "Approve device" }));
@@ -179,7 +180,7 @@ describe("admin snapshot workflows", () => {
     const client = api();
     vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockReturnValueOnce(never());
     await login(client);
-    fireEvent.click(within(screen.getAllByTestId("request-card")[0]!).getByRole("button", { name: "Approve Den TV" }));
+    fireEvent.click(within(screen.getAllByTestId("request-row")[0]!).getByRole("button", { name: "Approve Den TV" }));
     const dialog = screen.getByRole("dialog", { name: "Approve device" });
     fireEvent.click(within(dialog).getByLabelText("Family Photos"));
     fireEvent.click(within(dialog).getByRole("button", { name: "Approve device" }));
@@ -193,8 +194,9 @@ describe("admin snapshot workflows", () => {
     const client = api();
     vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockRejectedValueOnce(refreshFailure);
     await login(client);
-    const kitchen = screen.getAllByTestId("request-card").find(card => within(card).queryByText("Kitchen"))!;
+    const kitchen = screen.getAllByTestId("request-row").find(card => within(card).queryByText("Kitchen"))!;
     fireEvent.click(within(kitchen).getByRole("button", { name: "Deny Kitchen" }));
+    fireEvent.click(within(screen.getByRole("alertdialog", { name: "Deny device request" })).getByRole("button", { name: "Deny Kitchen" }));
 
     await waitFor(() => expect(screen.queryByText("Kitchen")).not.toBeInTheDocument());
     expect(screen.getByText("Kitchen was denied.")).toBeVisible();
@@ -211,7 +213,7 @@ describe("admin snapshot workflows", () => {
     fireEvent.click(within(screen.getByRole("dialog", { name: "Edit device" })).getByRole("button", { name: "Save device" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit device" })).not.toBeInTheDocument());
-    expect(screen.getByRole("heading", { name: "Family TV" })).toBeVisible();
+    expect(screen.getByTestId("device-row")).toHaveTextContent("Family TV");
     expect(screen.getByText("Device updated.")).toBeVisible();
     expect(screen.getByText(/Change saved, but household data could not be refreshed/)).toBeVisible();
   });
@@ -227,7 +229,7 @@ describe("admin snapshot workflows", () => {
 
     await waitFor(() => expect(client.snapshot).toHaveBeenCalledTimes(2));
     expect(screen.queryByRole("dialog", { name: "Edit device" })).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Family TV" })).toBeVisible();
+    expect(screen.getByTestId("device-row")).toHaveTextContent("Family TV");
   });
 
   it("preserves revocation and closes confirmation when its snapshot refresh fails", async () => {
@@ -239,6 +241,7 @@ describe("admin snapshot workflows", () => {
 
     await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "Revoke device" })).not.toBeInTheDocument());
     expect(screen.getByText("No approved devices")).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveFocus());
     expect(screen.getByText("Living Room was revoked.")).toBeVisible();
     expect(screen.getByText(/Change saved, but household data could not be refreshed/)).toBeVisible();
   });
@@ -340,5 +343,18 @@ describe("admin snapshot workflows", () => {
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(screen.getByTestId("skip-to-content")).toBeInTheDocument();
     for (const button of screen.getAllByRole("button")) expect(button).toHaveAccessibleName();
+  });
+
+  it("cancels revocation with Escape and never calls the destructive action", async () => {
+    const client = api();
+    await login(client); go("Devices");
+    const trigger = screen.getByRole("button", { name: "Revoke Living Room" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("alertdialog", { name: "Revoke device" }), { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "Revoke device" })).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(client.revokeDevice).not.toHaveBeenCalled();
   });
 });

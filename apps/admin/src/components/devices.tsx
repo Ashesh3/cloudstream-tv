@@ -1,15 +1,23 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import type { ControlDeviceDto, ControlRootDto, MediaOrder, UpdateDeviceBody } from "@cloudframe/shared";
-import { FolderOpenIcon, MonitorIcon, PencilIcon, ShieldOffIcon } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
-import { Spinner } from "@/components/ui/spinner";
-import { Switch } from "@/components/ui/switch";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { CheckboxList, CheckboxListItem } from "@astryxdesign/core/CheckboxList";
+import { Dialog, DialogHeader } from "@astryxdesign/core/Dialog";
+import { FormLayout } from "@astryxdesign/core/FormLayout";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Icon } from "@astryxdesign/core/Icon";
+import { Layout, LayoutContent, LayoutFooter } from "@astryxdesign/core/Layout";
+import { List, ListItem } from "@astryxdesign/core/List";
+import { NumberInput } from "@astryxdesign/core/NumberInput";
+import { RadioList, RadioListItem } from "@astryxdesign/core/RadioList";
+import { StatusDot } from "@astryxdesign/core/StatusDot";
+import { Switch } from "@astryxdesign/core/Switch";
+import { Text } from "@astryxdesign/core/Text";
+import { TextInput } from "@astryxdesign/core/TextInput";
+import { Token } from "@astryxdesign/core/Token";
+import { VStack } from "@astryxdesign/core/VStack";
+import { MonitorIcon, PencilIcon, ShieldOffIcon } from "lucide-react";
 import { Empty, PageHeader, relativeTime } from "./requests";
 import { AdminApiError } from "../api/client";
 
@@ -20,24 +28,31 @@ export function Devices({ devices, roots, onUpdate, onRevoke }: {
   onRevoke(device: ControlDeviceDto): void;
 }) {
   const [editing, setEditing] = useState<ControlDeviceDto | null>(null);
-  return <section className="flex flex-col gap-5"><PageHeader context="Televisions" title="Devices" description="Control folder access and playback defaults for every approved television." />
-    {!devices.length ? <Empty title="No approved devices" body="Approve a request to add your first television." icon={<MonitorIcon />} /> : <div className="device-ledger">{devices.map(device => {
-      const assignedRoots = device.assignedRootIds.map(id => roots.find(root => root.id === id)).filter((root): root is ControlRootDto => Boolean(root));
-      const activeRoots = assignedRoots.filter(root => root.enabled);
-      const inactiveRoots = assignedRoots.filter(root => !root.enabled);
-      const access = !device.enabled ? "Paused" : activeRoots.length ? "Active" : "No active folders";
-      return <Card className={`device-entry ${device.enabled ? "" : "is-paused"}`} key={device.id}>
-      <CardHeader><div className="flex items-center gap-3"><span className="device-cue flex size-10 items-center justify-center text-muted-foreground"><MonitorIcon /></span><div><CardTitle><h2 className="text-base font-medium">{device.name}</h2></CardTitle><CardDescription className="mt-1">Approved {relativeTime(device.approvedAt)}</CardDescription></div></div><CardAction><Badge variant={device.enabled && activeRoots.length ? "secondary" : "outline"}>{!device.enabled ? "Paused" : activeRoots.length ? "On program" : "No active folders"}</Badge></CardAction></CardHeader>
-      <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-4"><Stat label="Active folders" value={activeRoots.length.toString()} /><Stat label="Order" value={orderLabel(device.mediaOrder)} /><Stat label="Slideshow" value={device.slideshowSeconds ? `${device.slideshowSeconds}s` : "Default"} /><Stat label="Access" value={access} /></CardContent>
-      <CardContent className="flex flex-wrap gap-2">{activeRoots.map(root => <Badge variant="outline" key={root.id}><FolderOpenIcon data-icon="inline-start" />{root.displayName}</Badge>)}{inactiveRoots.map(root => <Badge variant="outline" className="inactive-root-badge" key={root.id}><FolderOpenIcon data-icon="inline-start" />Inactive · {root.displayName}</Badge>)}{inactiveRoots.length > 0 && <span className="text-xs text-muted-foreground">Grants no access</span>}</CardContent>
-      <CardFooter className="justify-between"><Button variant="outline" aria-label={`Edit ${device.name}`} onClick={() => setEditing(device)}><PencilIcon data-icon="inline-start" />Edit access</Button><Button variant="destructive" aria-label={`Revoke ${device.name}`} onClick={() => onRevoke(device)}><ShieldOffIcon data-icon="inline-start" />Revoke</Button></CardFooter>
-    </Card>;
-    })}</div>}
-    {editing && <DeviceEditor device={editing} roots={roots} onClose={() => setEditing(null)} onSave={async body => { await onUpdate(editing.id, body); setEditing(null); }} />}
-  </section>;
-}
 
-function Stat({ label, value }: { label: string; value: string }) { return <div className="ledger-stat"><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 truncate text-sm font-medium">{value}</p></div>; }
+  return <VStack as="section" gap={5}>
+    <PageHeader context="Televisions" title="Devices" description="Control folder access and playback defaults for every approved television." />
+    {!devices.length ? <Empty title="No approved devices" body="Approve a request to add your first television." icon={<Icon icon={MonitorIcon} />} /> : <List density="balanced" hasDividers>
+      {devices.map(device => {
+        const assignedRoots = device.assignedRootIds.map(id => roots.find(root => root.id === id)).filter((root): root is ControlRootDto => Boolean(root));
+        const activeRoots = assignedRoots.filter(root => root.enabled);
+        const inactiveRoots = assignedRoots.filter(root => !root.enabled);
+        const access = !device.enabled ? { label: "Paused", variant: "neutral" as const } : activeRoots.length ? { label: "Active", variant: "success" as const } : { label: "No active folders", variant: "warning" as const };
+        return <ListItem
+          key={device.id}
+          data-testid="device-row"
+          startContent={<Icon icon={MonitorIcon} color="secondary" />}
+          label={<HStack gap={2} align="center"><Text weight="semibold">{device.name}</Text><StatusDot variant={access.variant} label={access.label} /><Text type="supporting">{access.label}</Text></HStack>}
+          description={<VStack gap={2}>
+            <Text type="supporting">Approved {relativeTime(device.approvedAt)} · {activeRoots.length} active folders · {orderLabel(device.mediaOrder)} · {device.slideshowSeconds ? `${device.slideshowSeconds} seconds` : "Default slideshow"}</Text>
+            {(activeRoots.length > 0 || inactiveRoots.length > 0) && <HStack gap={2} wrap="wrap">{activeRoots.map(root => <Token key={root.id} label={root.displayName} size="sm" color="blue" />)}{inactiveRoots.map(root => <Token key={root.id} label={`Inactive · ${root.displayName}`} size="sm" color="gray" />)}{inactiveRoots.length > 0 && <Text type="supporting">Grants no access</Text>}</HStack>}
+          </VStack>}
+          endContent={<HStack gap={2} wrap="wrap"><Button label={`Edit ${device.name}`} variant="secondary" icon={<Icon icon={PencilIcon} />} onClick={() => setEditing(device)}>Edit access</Button><Button label={`Revoke ${device.name}`} variant="destructive" icon={<Icon icon={ShieldOffIcon} />} onClick={() => onRevoke(device)}>Revoke</Button></HStack>}
+        />;
+      })}
+    </List>}
+    {editing && <DeviceEditor device={editing} roots={roots} onClose={() => setEditing(null)} onSave={body => onUpdate(editing.id, body)} />}
+  </VStack>;
+}
 
 function DeviceEditor({ device, roots, onClose, onSave }: { device: ControlDeviceDto; roots: ControlRootDto[]; onClose(): void; onSave(body: UpdateDeviceBody): Promise<void> }) {
   const [name, setName] = useState(device.name);
@@ -45,18 +60,87 @@ function DeviceEditor({ device, roots, onClose, onSave }: { device: ControlDevic
   const activeRootIds = new Set(roots.filter(root => root.enabled).map(root => root.id));
   const inactiveAssignedRoots = roots.filter(root => !root.enabled && device.assignedRootIds.includes(root.id));
   const [assignedRootIds, setAssigned] = useState(device.assignedRootIds.filter(id => activeRootIds.has(id)));
-  const [mediaOrder, setOrder] = useState<MediaOrder | "">(device.mediaOrder ?? "");
-  const [slideshow, setSlideshow] = useState(device.slideshowSeconds?.toString() ?? "");
+  const [mediaOrder, setOrder] = useState<MediaOrder | "default">(device.mediaOrder ?? "default");
+  const [slideshow, setSlideshow] = useState<number | null>(device.slideshowSeconds ?? null);
+  const slideshowRef = useRef<HTMLInputElement | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
-  const submit = async (event: FormEvent) => { event.preventDefault(); if (!name.trim()) { setError("Enter a device name."); return; } setPending(true); setError(""); try { await onSave({ name: name.trim(), enabled, assignedRootIds, mediaOrder: mediaOrder || null, slideshowSeconds: slideshow ? Number(slideshow) : null }); } catch (cause) { setError(cause instanceof AdminApiError ? cause.message : "Device update failed."); } finally { setPending(false); } };
-  return <Dialog open onOpenChange={open => { if (!open) onClose(); }}><DialogContent aria-label="Edit device" className="max-h-[92vh] overflow-y-auto sm:max-w-xl"><form onSubmit={submit} className="contents"><DialogHeader><DialogTitle>Edit device</DialogTitle><DialogDescription>Change its name, folder access, and playback defaults.</DialogDescription></DialogHeader><FieldGroup>
-    <Field data-invalid={Boolean(error && !name.trim())}><FieldLabel htmlFor="edit-device-name">Device name</FieldLabel><Input id="edit-device-name" data-autofocus autoFocus value={name} onChange={event => setName(event.target.value)} /></Field>
-    <Field orientation="horizontal"><FieldLabel htmlFor="device-enabled" className="w-full"><Field orientation="horizontal"><FieldGroup><span className="font-medium">Device enabled</span><FieldDescription>Disabling takes effect on its next request.</FieldDescription></FieldGroup><Switch id="device-enabled" aria-label="Device enabled" checked={enabled} onCheckedChange={setEnabled} /></Field></FieldLabel></Field>
-    <FieldSet><FieldLegend>Assigned folders</FieldLegend>{inactiveAssignedRoots.length > 0 && <div className="ledger-warning p-3 text-sm">{inactiveAssignedRoots.map(root => <p key={root.id}>{root.displayName} is inactive and grants no access. Saving removes this legacy assignment.</p>)}</div>}<div className="grid gap-2">{roots.filter(root => root.enabled).map(root => <FieldLabel key={root.id} htmlFor={`device-root-${root.id}`} className="w-full"><Field orientation="horizontal"><Checkbox id={`device-root-${root.id}`} aria-label={root.displayName} checked={assignedRootIds.includes(root.id)} onCheckedChange={() => setAssigned(value => value.includes(root.id) ? value.filter(id => id !== root.id) : [...value, root.id])} /><span>{root.displayName}</span></Field></FieldLabel>)}</div></FieldSet>
-    <Field><FieldLabel htmlFor="device-order">Media ordering</FieldLabel><select id="device-order" className="h-9 rounded-lg border bg-background px-3 text-sm" value={mediaOrder} onChange={event => setOrder(event.target.value as MediaOrder | "")}><option value="">Household default</option><option value="captured-desc">Newest captured first</option><option value="captured-asc">Oldest captured first</option><option value="name-asc">Name A–Z</option></select></Field>
-    <Field><FieldLabel htmlFor="device-slideshow">Slideshow seconds</FieldLabel><Input id="device-slideshow" type="number" min="2" max="300" value={slideshow} placeholder="Household default" onChange={event => setSlideshow(event.target.value)} /></Field>
-    {error && <FieldError>{error}</FieldError>}
-  </FieldGroup><DialogFooter><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button>{pending && <Spinner data-icon="inline-start" />}{pending ? "Saving…" : "Save device"}</Button></DialogFooter></form></DialogContent></Dialog>;
+  const [isOpen, setIsOpen] = useState(true);
+  const submitting = useRef(false);
+  const returnFocus = useRef<HTMLElement | null>(document.activeElement instanceof HTMLElement ? document.activeElement : null);
+
+  useEffect(() => {
+    if (isOpen) return;
+    const timer = window.setTimeout(() => {
+      onClose();
+      window.setTimeout(() => {
+        if (returnFocus.current?.isConnected) returnFocus.current.focus();
+        else document.getElementById("astryx-app-shell-main")?.focus();
+      }, 0);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [isOpen, onClose]);
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (submitting.current) return;
+    if (!name.trim()) {
+      setError("Enter a device name.");
+      return;
+    }
+    submitting.current = true;
+    setPending(true);
+    setError("");
+    try {
+      const slideshowDraft = slideshowRef.current?.value.trim() ?? "";
+      const parsedSlideshow = slideshowDraft === "" ? null : Number(slideshowDraft);
+      const slideshowSeconds = parsedSlideshow === null
+        ? null
+        : Number.isInteger(parsedSlideshow) && parsedSlideshow >= 2 && parsedSlideshow <= 300
+          ? parsedSlideshow
+          : slideshow;
+      await onSave({ name: name.trim(), enabled, assignedRootIds, mediaOrder: mediaOrder === "default" ? null : mediaOrder, slideshowSeconds });
+      setIsOpen(false);
+    } catch (cause) {
+      setError(cause instanceof AdminApiError ? cause.message : "Device update failed.");
+    } finally {
+      submitting.current = false;
+      setPending(false);
+    }
+  };
+
+  const close = () => {
+    if (!pending) setIsOpen(false);
+  };
+
+  return <Dialog isOpen={isOpen} onOpenChange={open => { if (!open) close(); }} width="42rem" maxHeight="92dvh" purpose="form" aria-label="Edit device">
+    <form onSubmit={submit}>
+      <Layout
+        height="fill"
+        defaultHasDividers
+        header={<DialogHeader title="Edit device" subtitle="Change its name, folder access, and playback defaults." onOpenChange={open => { if (!open) close(); }} />}
+        content={<LayoutContent padding={4} isScrollable><FormLayout>
+          <TextInput label="Device name" value={name} onChange={setName} hasAutoFocus isDisabled={pending} status={!name.trim() && error ? { type: "error", message: error } : undefined} width="100%" />
+          <Switch label="Device enabled" description="Disabling takes effect on its next request." value={enabled} onChange={setEnabled} isDisabled={pending} labelPosition="start" labelSpacing="spread" width="100%" />
+          {inactiveAssignedRoots.length > 0 && <Banner status="warning" title="Inactive legacy assignments will be removed" description={inactiveAssignedRoots.map(root => `${root.displayName} is inactive and grants no access. Saving removes this legacy assignment.`).join(" ")} container="section" />}
+          <CheckboxList label="Assigned folders" value={assignedRootIds} onChange={setAssigned} isDisabled={pending} hasDividers>
+            {roots.filter(root => root.enabled).map(root => <CheckboxListItem key={root.id} value={root.id} label={root.displayName} />)}
+          </CheckboxList>
+          <RadioList label="Media ordering" value={mediaOrder} onChange={value => setOrder(value as MediaOrder | "default")} isDisabled={pending}>
+            <RadioListItem value="default" label="Household default" />
+            <RadioListItem value="captured-desc" label="Newest captured first" />
+            <RadioListItem value="captured-asc" label="Oldest captured first" />
+            <RadioListItem value="name-asc" label="Name A–Z" />
+          </RadioList>
+          <NumberInput ref={slideshowRef} label="Slideshow seconds" description="Leave empty to use the household default." value={slideshow} onChange={setSlideshow} hasClear min={2} max={300} isIntegerOnly isWheelEnabled={false} units="seconds" isDisabled={pending} width="100%" />
+          {name.trim() && error && <Banner status="error" title="Device update failed" description={error} container="section" />}
+        </FormLayout></LayoutContent>}
+        footer={<LayoutFooter padding={4}><HStack gap={2} justify="end" wrap="wrap"><Button type="button" label="Cancel" variant="secondary" isDisabled={pending} onClick={close} /><Button type="submit" label={pending ? "Saving…" : "Save device"} variant="primary" isDisabled={pending} isLoading={pending} /></HStack></LayoutFooter>}
+      />
+    </form>
+  </Dialog>;
 }
-function orderLabel(value: MediaOrder | null) { return value === "name-asc" ? "Name A–Z" : value === "captured-asc" ? "Oldest first" : value === "captured-desc" ? "Newest first" : "Default"; }
+
+function orderLabel(value: MediaOrder | null) {
+  return value === "name-asc" ? "Name A–Z" : value === "captured-asc" ? "Oldest first" : value === "captured-desc" ? "Newest first" : "Default order";
+}

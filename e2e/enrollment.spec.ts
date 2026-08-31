@@ -30,7 +30,7 @@ test("admin approves, edits, and revokes a TV without mutating TV cookies", asyn
   await page.getByLabel(/device name/i).fill("Den TV");
   await page.getByRole("button", { name: /save device/i }).click();
   await expect(page.getByRole("dialog", { name: /edit device/i })).toBeHidden();
-  await expect(page.getByRole("heading", { name: "Den TV" })).toBeVisible();
+  await expect(page.getByTestId("device-row")).toContainText("Den TV");
   await page.getByRole("button", { name: /revoke den tv/i }).click();
   await page.getByRole("button", { name: /revoke permanently/i }).click();
   await expect(page.getByText(/was revoked/i)).toBeVisible();

@@ -63,7 +63,7 @@ export const cloudframeNightTheme = defineTheme({
   },
   components: {
     button: {
-      base: { fontWeight: "600" }
+      base: { fontWeight: "600", minHeight: "var(--spacing-11)" }
     },
     card: {
       base: { borderColor: "var(--color-border)" }

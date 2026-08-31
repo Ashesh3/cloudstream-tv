@@ -297,7 +297,8 @@ export const cloudframeNightTheme = {
         "color": "var(--color-error)"
       },
       "base": {
-        "fontWeight": "600"
+        "fontWeight": "600",
+        "minHeight": "var(--spacing-11)"
       }
     },
     "badge": {

@@ -7,6 +7,9 @@ const migrated = [
   "apps/admin/src/components/first-run.tsx",
   "apps/admin/src/components/shell.tsx",
   "apps/admin/src/components/admin-overview.tsx",
+  "apps/admin/src/components/requests.tsx",
+  "apps/admin/src/components/approval-sheet.tsx",
+  "apps/admin/src/components/devices.tsx",
 ] as const;
 
 describe("Admin Astryx structure", () => {
@@ -20,6 +23,14 @@ describe("Admin Astryx structure", () => {
       expect(source, path).not.toMatch(/#[\da-f]{3,8}\b/i);
       expect(source, path).not.toMatch(/\b\d+(?:\.\d+)?px\b/);
       expect(source, path).not.toMatch(/Screening Room|screening ledger|booth|program-stock|DIRECTION_SEED/i);
+    }
+  });
+
+  it("keeps request and device records in rows instead of Cards", async () => {
+    for (const path of ["apps/admin/src/components/requests.tsx", "apps/admin/src/components/devices.tsx"]) {
+      const source = await readFile(path, "utf8");
+      expect(source, path).toContain("ListItem");
+      expect(source, path).not.toContain("<Card");
     }
   });
 

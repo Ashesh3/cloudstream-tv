@@ -2345,6 +2345,7 @@
 
   [data-astryx-theme="cloudframe-night"] .astryx-button {
     font-weight: 600;
+    min-height: var(--spacing-11);
   }
 
   [data-astryx-theme="cloudframe-night"] .astryx-badge.info {

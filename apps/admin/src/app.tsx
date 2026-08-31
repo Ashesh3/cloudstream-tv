@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Banner } from "@astryxdesign/core/Banner";
+import { AlertDialog as AstryxAlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button as AstryxButton } from "@astryxdesign/core/Button";
 import { Card } from "@astryxdesign/core/Card";
 import { Center } from "@astryxdesign/core/Center";
@@ -19,8 +20,7 @@ import { Requests } from "./components/requests";
 import { Settings } from "./components/settings";
 import { Shell, type AdminSection } from "./components/shell";
 import { Sources } from "./components/sources";
-import { RefreshCwIcon, Trash2Icon } from "lucide-react";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { RefreshCwIcon } from "lucide-react";
 
 export function AdminApp({ api, navigate = url => window.location.assign(url), checkSession = true }: { api: AdminApi; navigate?(url: string): void; checkSession?: boolean }) {
   const initial = initialNavigation();
@@ -35,11 +35,18 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
   const [notice, setNotice] = useState(initial.oauthMessage);
   const [approval, setApproval] = useState<ControlRequestDto | null>(null);
   const [denying, setDenying] = useState<string | null>(null);
+  const [deny, setDeny] = useState<ControlRequestDto | null>(null);
+  const [denyOpen, setDenyOpen] = useState(false);
   const [revoke, setRevoke] = useState<ControlDeviceDto | null>(null);
+  const [revokeOpen, setRevokeOpen] = useState(false);
   const [revokePending, setRevokePending] = useState(false);
   const bootstrapped = useRef(false);
   const mounted = useRef(true);
   const refreshGeneration = useRef(0);
+  const denialOpener = useRef<HTMLElement | null>(null);
+  const revokeOpener = useRef<HTMLElement | null>(null);
+  const denialFocusPending = useRef(false);
+  const revokeFocusPending = useRef(false);
 
   useEffect(() => {
     mounted.current = true;
@@ -50,7 +57,7 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
   const unauthenticate = (clearNotice = true) => {
     refreshGeneration.current += 1;
     if (!mounted.current) return;
-    setAuthenticated(false); setSnapshot(null); setApproval(null); setRevoke(null); setError("");
+    setAuthenticated(false); setSnapshot(null); setApproval(null); setDeny(null); setDenyOpen(false); setRevoke(null); setRevokeOpen(false); setError("");
     if (clearNotice) setNotice("");
   };
   const guard = async <T,>(operation: () => Promise<T>): Promise<T> => {
@@ -112,6 +119,54 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
     await refresh();
     navigate(result.authorizationUrl);
   };
+  useEffect(() => {
+    if (denyOpen || !deny || denying !== null) return;
+    const timer = window.setTimeout(() => {
+      denialFocusPending.current = true;
+      setDeny(null);
+      window.setTimeout(() => {
+        if (!denialFocusPending.current) return;
+        denialFocusPending.current = false;
+        if (denialOpener.current?.isConnected) denialOpener.current.focus();
+        else document.getElementById("astryx-app-shell-main")?.focus();
+      }, 0);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [denyOpen, deny, denying]);
+
+  useEffect(() => {
+    if (revokeOpen || !revoke || revokePending) return;
+    const timer = window.setTimeout(() => {
+      revokeFocusPending.current = true;
+      setRevoke(null);
+      window.setTimeout(() => {
+        if (!revokeFocusPending.current) return;
+        revokeFocusPending.current = false;
+        if (revokeOpener.current?.isConnected) revokeOpener.current.focus();
+        else document.getElementById("astryx-app-shell-main")?.focus();
+      }, 0);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [revokeOpen, revoke, revokePending]);
+
+  useEffect(() => {
+    if (deny !== null || !denialFocusPending.current) return;
+    denialFocusPending.current = false;
+    if (denialOpener.current?.isConnected) denialOpener.current.focus();
+    else document.getElementById("astryx-app-shell-main")?.focus();
+  }, [deny]);
+
+  useEffect(() => {
+    if (revoke !== null || !revokeFocusPending.current) return;
+    revokeFocusPending.current = false;
+    if (revokeOpener.current?.isConnected) revokeOpener.current.focus();
+    else document.getElementById("astryx-app-shell-main")?.focus();
+  }, [revoke]);
+
+  useEffect(() => {
+    if (revokeOpen || revoke !== null || revokePending) return;
+    document.getElementById("astryx-app-shell-main")?.focus();
+  }, [revokeOpen, revoke, revokePending, snapshot?.devices.length]);
 
   useEffect(() => {
     if (!checkSession || bootstrapped.current) return;
@@ -139,13 +194,47 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
         {notice && <Banner status="success" title="Completed" description={notice} container="section" />}
         {recoveryWarning && <Banner status="warning" title="Household refresh needed" description={recoveryWarning} container="section" />}
         {error && <Banner status="error" title="Action could not be completed" description={error} container="section" endContent={<AstryxButton label="Try again" variant="secondary" icon={<Icon icon={RefreshCwIcon} />} onClick={() => void refresh().catch(() => undefined)} />} />}
-        {section === "requests" && <Requests requests={snapshot.pendingRequests} roots={snapshot.roots} sources={snapshot.sources} disabled={!snapshot.household.allowNewDeviceRequests} pendingId={denying} onApprove={setApproval} onDeny={request => { setDenying(request.id); setError(""); void mutate(() => api.denyRequest(request.id), `${request.requestedName} was denied.`, () => setSnapshot(current => current ? { ...current, pendingRequests: current.pendingRequests.filter(item => item.id !== request.id) } : current)).catch(cause => setError(messageFor(cause))).finally(() => { if (mounted.current) setDenying(null); }); }} />}
-        {section === "devices" && <Devices devices={snapshot.devices.filter(device => !device.revokedAt)} roots={snapshot.roots} onUpdate={(id, body: UpdateDeviceBody) => mutate(() => api.updateDevice(id, body), "Device updated.", result => setSnapshot(current => current ? { ...current, devices: current.devices.map(item => item.id === id ? result.device : item) } : current)).then(() => undefined)} onRevoke={setRevoke} />}
+        {section === "requests" && <Requests requests={snapshot.pendingRequests} roots={snapshot.roots} sources={snapshot.sources} disabled={!snapshot.household.allowNewDeviceRequests} pendingId={denying} onApprove={setApproval} onDeny={request => { denialOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setDeny(request); setDenyOpen(true); }} />}
+        {section === "devices" && <Devices devices={snapshot.devices.filter(device => !device.revokedAt)} roots={snapshot.roots} onUpdate={(id, body: UpdateDeviceBody) => mutate(() => api.updateDevice(id, body), "Device updated.", result => setSnapshot(current => current ? { ...current, devices: current.devices.map(item => item.id === id ? result.device : item) } : current)).then(() => undefined)} onRevoke={device => { revokeOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setRevoke(device); setRevokeOpen(true); }} />}
         {section === "sources" && <Sources sources={snapshot.sources} roots={snapshot.roots} devices={snapshot.devices} api={api} onRootAdded={async root => { setSnapshot(current => current ? { ...current, roots: [...current.roots.filter(item => item.id !== root.id), root] } : current); setRecoveryWarning(""); startCommittedRefresh(); return true; }} onRootRemoved={async rootId => { setSnapshot(current => current ? { ...current, roots: current.roots.filter(item => item.id !== rootId), devices: current.devices.map(device => ({ ...device, assignedRootIds: device.assignedRootIds.filter(id => id !== rootId) })) } : current); setRecoveryWarning(""); startCommittedRefresh(); return true; }} onRemoveSource={sourceId => mutate(() => api.removeSource(sourceId), "Source removed. Television access was removed immediately.", result => { const removedRootIds = new Set(result.roots.map(root => root.id)); setSnapshot(current => current ? { ...current, sources: current.sources.filter(item => item.id !== sourceId), roots: current.roots.filter(root => root.sourceId !== sourceId), devices: current.devices.map(device => ({ ...device, assignedRootIds: device.assignedRootIds.filter(id => !removedRootIds.has(id)) })) } : current); }).then(() => undefined)} onAuthorize={authorize} />}
         {section === "settings" && <Settings api={api} household={snapshot.household} snapshot={snapshot} onUnauthorized={unauthenticate} onSave={value => mutate(() => api.updateSettings(value), "Household defaults saved.", () => setSnapshot(current => current ? { ...current, household: { ...current.household, ...value } } : current)).then(() => undefined)} onRotate={async (current, next) => { await guard(() => api.rotatePassphrase(current, next)); unauthenticate(); }} onLogout={async () => { await guard(() => api.logout()); unauthenticate(); }} />}
       </VStack>
-      {approval && <ApprovalSheet request={approval} roots={snapshot.roots} sources={snapshot.sources} onClose={() => setApproval(null)} onApprove={async body => { const requestId = approval.id; await mutate(() => api.approveRequest(requestId, body), `${body.name} was approved.`, result => setSnapshot(current => current ? { ...current, pendingRequests: current.pendingRequests.filter(item => item.id !== requestId), devices: [...current.devices.filter(item => item.id !== result.device.id), result.device] } : current)); if (mounted.current) setApproval(null); }} />}
-      {revoke && <AlertDialog open onOpenChange={open => { if (!open && !revokePending) setRevoke(null); }}><AlertDialogContent aria-label="Revoke device"><AlertDialogHeader><div className="flex items-center gap-2"><Trash2Icon className="size-5 text-destructive" /><AlertDialogTitle>Revoke device</AlertDialogTitle></div><AlertDialogDescription><strong className="text-foreground">{revoke.name}</strong> will be signed out and lose access on its next request. This cannot be undone; the television must request access again.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={revokePending}>Cancel</AlertDialogCancel><AlertDialogAction disabled={revokePending} onClick={event => { event.preventDefault(); const revoked = revoke; setRevokePending(true); void mutate(() => api.revokeDevice(revoked.id), `${revoked.name} was revoked.`, () => setSnapshot(current => current ? { ...current, devices: current.devices.filter(item => item.id !== revoked.id) } : current)).then(() => setRevoke(null)).catch(cause => setError(messageFor(cause))).finally(() => { if (mounted.current) setRevokePending(false); }); }}>{revokePending ? "Revoking…" : "Revoke permanently"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
+      {approval && <ApprovalSheet request={approval} roots={snapshot.roots} sources={snapshot.sources} onClose={() => setApproval(null)} onApprove={async body => { const requestId = approval.id; await mutate(() => api.approveRequest(requestId, body), `${body.name} was approved.`, result => setSnapshot(current => current ? { ...current, pendingRequests: current.pendingRequests.filter(item => item.id !== requestId), devices: [...current.devices.filter(item => item.id !== result.device.id), result.device] } : current)); }} />}
+      {deny && <AstryxAlertDialog
+        isOpen={denyOpen}
+        onOpenChange={open => { if (!open && denying === null) setDenyOpen(false); }}
+        title="Deny device request"
+        description={`${deny.requestedName} will need to request household access again.`}
+        actionLabel={`Deny ${deny.requestedName}`}
+        isActionLoading={denying === deny.id}
+        onAction={() => {
+          if (denying !== null) return;
+          const request = deny;
+          setDenying(request.id);
+          setError("");
+          void mutate(() => api.denyRequest(request.id), `${request.requestedName} was denied.`, () => setSnapshot(current => current ? { ...current, pendingRequests: current.pendingRequests.filter(item => item.id !== request.id) } : current))
+            .then(() => setDenyOpen(false))
+            .catch(cause => setError(messageFor(cause)))
+            .finally(() => { if (mounted.current) setDenying(null); });
+        }}
+      />}
+      {revoke && <AstryxAlertDialog
+        isOpen={revokeOpen}
+        onOpenChange={open => { if (!open && !revokePending) setRevokeOpen(false); }}
+        title="Revoke device"
+        description={`${revoke.name} will be signed out and lose access on its next request. This cannot be undone; the television must request access again.`}
+        actionLabel="Revoke permanently"
+        isActionLoading={revokePending}
+        onAction={() => {
+          if (revokePending) return;
+          const revoked = revoke;
+          setRevokePending(true);
+          void mutate(() => api.revokeDevice(revoked.id), `${revoked.name} was revoked.`, () => setSnapshot(current => current ? { ...current, devices: current.devices.filter(item => item.id !== revoked.id) } : current))
+            .then(() => setRevokeOpen(false))
+            .catch(cause => setError(messageFor(cause)))
+            .finally(() => { if (mounted.current) setRevokePending(false); });
+        }}
+      />}
     </Shell>;
 }
 function initialNavigation() {
@@ -157,6 +246,6 @@ function initialNavigation() {
   return { section, oauthMessage: oauth ? messages[oauth] ?? "" : "", hadTransientQuery: url.search.length > 0 };
 }
 function isStatus(value: unknown, status: number): value is { status: number } { return Boolean(value && typeof value === "object" && "status" in value && (value as { status: unknown }).status === status); }
-function isStale(value: unknown) { return Boolean(value && typeof value === "object" && "code" in value && ["DEVICE_STALE", "DEVICE_NOT_FOUND", "DEVICE_REQUEST_RESOLVED", "SOURCE_NOT_FOUND", "ROOT_NOT_FOUND"].includes(String((value as { code: unknown }).code))); }
+function isStale(value: unknown) { return Boolean(value && typeof value === "object" && "code" in value && ["DEVICE_STALE", "DEVICE_NOT_FOUND", "DEVICE_REQUEST_NOT_FOUND", "DEVICE_REQUEST_EXPIRED", "DEVICE_REQUEST_RESOLVED", "INVALID_ROOT_ASSIGNMENT", "SOURCE_NOT_FOUND", "ROOT_NOT_FOUND"].includes(String((value as { code: unknown }).code))); }
 function messageFor(value: unknown) { return value instanceof AdminApiError ? value.message : "The request could not be completed."; }
 const COMMITTED_REFRESH_WARNING = "Change saved, but household data could not be refreshed. Refresh to confirm the latest state.";

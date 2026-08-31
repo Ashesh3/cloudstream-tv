@@ -438,6 +438,7 @@
 
   .astryx-button {
     font-weight: 600;
+    min-height: var(--spacing-11);
   }
 
   .astryx-badge.info {
