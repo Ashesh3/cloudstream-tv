@@ -89,6 +89,10 @@ describe("Chromium 108 Astryx CSS compatibility", () => {
     expect(css).not.toContain("light-dark(");
     expect(css).not.toContain("color-mix(");
     expect(css).not.toContain("@scope");
+    expect(css).not.toContain(":popover-open");
+    expect(css).not.toContain("anchor-name:");
+    expect(css).not.toContain("position-anchor:");
+    expect(css).not.toMatch(/\banchor(?:-size)?\s*\(/);
 
     const vite = await readFile("apps/tv/vite.config.ts", "utf8");
     expect(vite).toContain('"@astryxdesign/core/astryx.css"');

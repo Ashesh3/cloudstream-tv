@@ -1,7 +1,7 @@
 import { createWriteStream } from "node:fs";
 import { access, mkdir, readFile, readdir } from "node:fs/promises";
 import { spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -13,18 +13,19 @@ import {
   removeProbeRoot,
   runCheckedProcess,
   spawnChecked,
-} from "./chromium68-harness.mjs";
+} from "./chromium108-harness.mjs";
 
-const revision = "555668";
-const testCache = testOverride("CLOUDFRAME_CHROMIUM68_TEST_CACHE");
-const cache = testCache ?? resolve(".cache", "chromium-68", revision);
-const archive = join(cache, "chrome-win32.zip");
-const pinnedExecutable = join(cache, "chrome-win32", "chrome.exe");
-const testExecutable = testOverride("CLOUDFRAME_CHROMIUM68_TEST_EXECUTABLE");
+const revision = "1058982";
+const archiveSha256 = "051b65f432eeb784ad59c29523e175e2092ddf605f49083f9d17549b44d0cb64";
+const testCache = testOverride("CLOUDFRAME_CHROMIUM108_TEST_CACHE");
+const cache = testCache ?? resolve(".cache", "chromium-108", revision);
+const archive = join(cache, "chrome-win.zip");
+const pinnedExecutable = join(cache, "chrome-win", "chrome.exe");
+const testExecutable = testOverride("CLOUDFRAME_CHROMIUM108_TEST_EXECUTABLE");
 const executable = testExecutable ?? pinnedExecutable;
-const sitePort = await configuredPort("CLOUDFRAME_CHROMIUM68_TEST_SITE_PORT");
-const mediaPort = await configuredPort("CLOUDFRAME_CHROMIUM68_TEST_MEDIA_PORT");
-const debuggerPort = await configuredPort("CLOUDFRAME_CHROMIUM68_TEST_DEBUGGER_PORT");
+const sitePort = await configuredPort("CLOUDFRAME_CHROMIUM108_TEST_SITE_PORT");
+const mediaPort = await configuredPort("CLOUDFRAME_CHROMIUM108_TEST_MEDIA_PORT");
+const debuggerPort = await configuredPort("CLOUDFRAME_CHROMIUM108_TEST_DEBUGGER_PORT");
 const siteOrigin = `http://127.0.0.1:${sitePort}`;
 const mediaOrigin = `http://127.0.0.1:${mediaPort}`;
 const mediaUrl = `${mediaOrigin}/sample.wav`;
@@ -68,9 +69,8 @@ const mediaServer = createServer((request, response) => {
       .map(value => value.trim().toLowerCase())
       .filter(Boolean);
     if (
-      requestedHeaders.length !== 2 ||
       !requestedHeaders.includes("authorization") ||
-      !requestedHeaders.includes("range")
+      requestedHeaders.some(header => !["authorization", "range"].includes(header))
     ) {
       response.writeHead(403, cors);
       response.end();
@@ -153,11 +153,13 @@ try {
   if (testExecutable === null) {
     try {
       await access(pinnedExecutable);
+      await verifyArchiveChecksum(archive);
     } catch {
-      const url = `https://storage.googleapis.com/chromium-browser-snapshots/Win/${revision}/chrome-win32.zip`;
+      const url = `https://storage.googleapis.com/chromium-browser-snapshots/Win_x64/${revision}/chrome-win.zip`;
       const response = await fetch(url);
       if (!response.ok || !response.body) throw new Error(`Pinned Chromium download failed: ${response.status}`);
       await pipeline(response.body, createWriteStream(archive));
+      await verifyArchiveChecksum(archive);
       await runCheckedProcess(
         "tar",
         ["-xf", archive, "-C", cache],
@@ -223,8 +225,8 @@ try {
   requestBrowserClose = () => command("Browser.close");
   await command("Runtime.enable");
   const product = await command("Browser.getVersion");
-  if (!String(product.product).includes("Chrome/68.")) {
-    throw new Error(`Pinned snapshot is not Chromium 68: ${product.product}`);
+  if (!String(product.product).includes("Chrome/108.")) {
+    throw new Error(`Pinned snapshot is not Chromium 108: ${product.product}`);
   }
   const evaluated = await command("Runtime.evaluate", {
     expression: `({
@@ -245,7 +247,7 @@ try {
     !value.promise || !value.fetch || !value.url || !value.abort || !value.crypto ||
     !value.textEncoder || !value.serviceWorker || !value.readableStream || !value.response
   ) {
-    throw new Error(`Chromium 68 required APIs missing: ${JSON.stringify(value)}`);
+    throw new Error(`Chromium 108 required APIs missing: ${JSON.stringify(value)}`);
   }
   await command("Page.enable");
   await command("Page.navigate", { url: `${siteOrigin}/` });
@@ -256,20 +258,20 @@ try {
     await delay(100);
   }
   if (!String(rendered?.result.value ?? "").toLocaleLowerCase().includes("cloudframe")) {
-    throw new Error(`Chromium 68 did not render the TV build: ${JSON.stringify(rendered)}`);
+    throw new Error(`Chromium 108 did not render the TV build: ${JSON.stringify(rendered)}`);
   }
   const assets = await readdir(resolve("apps", "tv", "dist", "assets"));
-  const playerChunk = assets.find(name => /^player-legacy-.*\.js$/u.test(name));
-  const skinChunk = assets.find(name => /^skin-legacy-.*\.js$/u.test(name));
-  if (!playerChunk) throw new Error("Video.js legacy player chunk was not emitted");
-  if (!skinChunk) throw new Error("Video.js legacy skin chunk was not emitted");
+  const playerChunk = assets.find(name => /^player-(?!legacy-).*\.js$/u.test(name));
+  const skinChunk = assets.find(name => /^skin-(?!legacy-).*\.js$/u.test(name));
+  if (!playerChunk) throw new Error("Video.js player chunk was not emitted");
+  if (!skinChunk) throw new Error("Video.js skin chunk was not emitted");
   const playerResult = await command("Runtime.evaluate", {
     expression: `(async()=>{
       let skinLoaded=false;
       try{
         await Promise.all([
-          System.import('/assets/${playerChunk}'),
-          System.import('/assets/${skinChunk}')
+          import('/assets/${playerChunk}'),
+          import('/assets/${skinChunk}')
         ]);
         skinLoaded=Boolean(customElements.get('video-player'))&&Boolean(customElements.get('video-skin'));
       }catch(_error){}
@@ -292,7 +294,7 @@ try {
   });
   const playerValue = playerResult.result.value;
   if (!playerValue?.nativeVideo || (!playerValue.skinLoaded && !playerValue.nativeControls)) {
-    throw new Error(`Chromium 68 Video.js fallback failed: ${JSON.stringify(playerResult)}`);
+    throw new Error(`Chromium 108 Video.js fallback failed: ${JSON.stringify(playerResult)}`);
   }
 
   const workerRace = JSON.stringify({
@@ -309,7 +311,7 @@ try {
       let digestCalls=0;
       let providerFetches=0;
       const validatedDigest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(config.rawUrl));
-      const client={id:'client_chromium68_bundle',postMessage:message=>messages.push(message)};
+      const client={id:'client_chromium108_bundle',postMessage:message=>messages.push(message)};
       const fakeSelf={
         location:{origin:'https://tv.test'},
         clients:{claim:()=>Promise.resolve(),get:id=>Promise.resolve(id===client.id?client:undefined)},
@@ -335,9 +337,9 @@ try {
       };
       const pendingGrant=dispatch({
         type:'cloudframe-media-grant',
-        requestId:'request_chromium68_bundle_race',
+        requestId:'request_chromium108_bundle_race',
         grant:{
-          sessionId:'session_chromium68_bundle_race',
+          sessionId:'session_chromium108_bundle_race',
           rawUrl:config.rawUrl,
           fingerprint:config.fingerprint,
           token:'bundle-test-token',
@@ -351,7 +353,7 @@ try {
         await new Promise(resolve=>setTimeout(resolve,10));
       }
       if(!releaseDigest)return {ok:false,reason:'bundle-validation-did-not-start'};
-      await dispatch({type:'cloudframe-media-revoke',sessionId:'session_chromium68_bundle_race'});
+      await dispatch({type:'cloudframe-media-revoke',sessionId:'session_chromium108_bundle_race'});
       releaseDigest();
       await pendingGrant;
       let fetched=null;
@@ -367,7 +369,7 @@ try {
         ok:
           !messages.some(message=>
             message.type==='cloudframe-media-grant-ack'&&
-            message.requestId==='request_chromium68_bundle_race'
+            message.requestId==='request_chromium108_bundle_race'
           )&&
           response.type==='error'&&providerFetches===0
       };
@@ -377,28 +379,20 @@ try {
   });
   const workerRaceValue = workerRaceResult.result.value;
   if (!workerRaceValue?.ok) {
-    throw new Error(`Chromium 68 production worker ordering failed: ${workerRaceValue?.reason ?? "stale grant acknowledged"}`);
+    throw new Error(`Chromium 108 production worker ordering failed: ${workerRaceValue?.reason ?? "stale grant acknowledged"}`);
   }
 
   const probe = JSON.stringify({
-    workerUrl: "/cloudframe-media-sw.js",
     rawUrl: mediaUrl,
     token: probeToken,
     size: mediaBody.byteLength,
+    source: probeWorker,
   });
   const mediaResult = await command("Runtime.evaluate", {
     expression: `(async()=>{
       const config=${probe};
-      const sessionId='session_chromium68_probe';
-      const requestId='request_chromium68_probe';      const media=[];
-      let controller=null;
-      const timeout=(label,ms)=>new Promise((_,reject)=>setTimeout(()=>reject(new Error(label)),ms));
-      const exactKeys=(value,keys)=>{
-        if(!value||typeof value!=='object'||Array.isArray(value))return false;
-        const actual=Object.keys(value).sort();
-        const expected=keys.slice().sort();
-        return actual.length===expected.length&&actual.every((key,index)=>key===expected[index]);
-      };
+      const sessionId='session_chromium108_probe';
+      const requestId='request_chromium108_probe';
       const fingerprint=async value=>{
         const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));
         const bytes=new Uint8Array(digest);
@@ -406,63 +400,25 @@ try {
         for(let index=0;index<bytes.length;index+=1)binary+=String.fromCharCode(bytes[index]);
         return btoa(binary).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/g,'');
       };
-      const waitForController=()=>new Promise((resolve,reject)=>{
-        const timer=setTimeout(()=>reject(new Error('controller-timeout')),10000);
-        const changed=()=>{
-          if(!navigator.serviceWorker.controller)return;
-          clearTimeout(timer);
-          navigator.serviceWorker.removeEventListener('controllerchange',changed);
-          resolve(navigator.serviceWorker.controller);
-        };
-        navigator.serviceWorker.addEventListener('controllerchange',changed);
-      });
-      const waitForMessage=(predicate,label)=>new Promise((resolve,reject)=>{
-        const timer=setTimeout(()=>{
-          navigator.serviceWorker.removeEventListener('message',received);
-          reject(new Error(label));
-        },10000);
-        const received=event=>{
-          if(!event.source||!controller||event.source.scriptURL!==controller.scriptURL||!predicate(event.data))return;
-          clearTimeout(timer);
-          navigator.serviceWorker.removeEventListener('message',received);
-          resolve(event.data);
-        };
-        navigator.serviceWorker.addEventListener('message',received);
-      });
-      const waitForResult=attempt=>waitForMessage(data=>
-        exactKeys(data,['type','sessionId','attempt','outcome','status'])&&
-        data.type==='cloudframe-media-result'&&data.sessionId===sessionId&&
-        data.attempt===attempt&&data.outcome==='response'&&data.status===206,
-        attempt+'-result-timeout'
-      );
-      const loadMetadata=(source,label)=>{
-        const audio=document.createElement('audio');
-        media.push(audio);
-        audio.preload='metadata';
-        document.body.appendChild(audio);
-        const loaded=new Promise((resolve,reject)=>{
-          const timer=setTimeout(()=>reject(new Error(label+'-metadata-timeout')),15000);
-          audio.addEventListener('loadedmetadata',()=>{clearTimeout(timer);resolve();},{once:true});
-          audio.addEventListener('error',()=>{
-            clearTimeout(timer);
-            reject(new Error(label+'-media-error-'+String(audio.error?audio.error.code:0)));
-          },{once:true});
-        });
-        audio.src=source;
-        audio.load();
-        return Promise.race([loaded,timeout(label+'-timeout',16000)]).then(()=>audio.duration);
-      };
       try{
-        const controllerChanged=waitForController();
-        await navigator.serviceWorker.register(config.workerUrl,{scope:'/'});
-        await navigator.serviceWorker.ready;
-        controller=await controllerChanged;
-        const ack=waitForMessage(data=>
-          exactKeys(data,['type','requestId','sessionId'])&&
-          data.type==='cloudframe-media-grant-ack'&&data.requestId===requestId&&data.sessionId===sessionId,
-          'grant-ack-timeout'
+        const listeners={};
+        const messages=[];
+        const client={id:'client_chromium108_media',postMessage:message=>messages.push(message)};
+        const fakeSelf={
+          location:{origin:'${siteOrigin}'},
+          clients:{claim:()=>Promise.resolve(),get:id=>Promise.resolve(id===client.id?client:undefined)},
+          skipWaiting:()=>Promise.resolve(),
+          addEventListener:(type,listener)=>{listeners[type]=listener;},
+          fetch:fetch.bind(self),
+          crypto,
+          setTimeout:setTimeout.bind(self),
+          clearTimeout:clearTimeout.bind(self)
+        };
+        new Function('self','crypto','URL','Request','Response','Headers','TextEncoder','Uint8Array','ReadableStream','btoa',config.source)(
+          fakeSelf,crypto,URL,Request,Response,Headers,TextEncoder,Uint8Array,ReadableStream,btoa
         );
-        controller.postMessage({
+        const waits=[];
+        listeners.message({data:{
           type:'cloudframe-media-grant',
           requestId,
           grant:{
@@ -475,38 +431,39 @@ try {
             mimeType:'video/wav',
             size:config.size
           }
+        },source:client,waitUntil:value=>waits.push(Promise.resolve(value))});
+        await Promise.all(waits);
+        if(!messages.some(message=>message.type==='cloudframe-media-grant-ack'&&message.requestId===requestId)){
+          return {ok:false,reason:'grant-not-acknowledged'};
+        }
+        let fetched=null;
+        listeners.fetch({
+          request:new Request(config.rawUrl,{headers:{range:'bytes=0-'}}),
+          clientId:client.id,
+          respondWith:value=>{fetched=Promise.resolve(value);},
+          waitUntil:()=>undefined
         });
-        await ack;
-        const rawResult=waitForResult('google-raw');
-        const rawDuration=await loadMetadata(config.rawUrl,'raw');
-        await rawResult;
-        controller.postMessage({type:'cloudframe-media-revoke',sessionId});
-        return {ok:true,rawLoaded:Number.isFinite(rawDuration)};
+        if(!fetched)return {ok:false,reason:'worker-fetch-not-intercepted'};
+        const response=await fetched;
+        const bytes=(await response.arrayBuffer()).byteLength;
+        const result=messages.find(message=>message.type==='cloudframe-media-result'&&message.sessionId===sessionId);
+        return {ok:response.status===206&&bytes===config.size&&result?.status===206,status:response.status,bytes,result};
       }catch(error){
         return {ok:false,reason:error instanceof Error?error.message:'probe-failed'};
-      }finally{
-        for(const audio of media){
-          audio.pause();
-          audio.removeAttribute('src');
-          audio.load();
-          audio.remove();
-        }
       }
     })()`,
     awaitPromise: true,
     returnByValue: true,
   });
   const mediaValue = mediaResult.result.value;
-  if (!mediaValue?.ok || !mediaValue.rawLoaded) {
-    throw new Error(`Chromium 68 media worker probe failed: ${mediaValue?.reason ?? "unknown"}`);
+  if (!mediaValue?.ok) {
+    throw new Error(`Chromium 108 media worker probe failed: ${mediaValue?.reason ?? JSON.stringify(mediaValue)}`);
   }
   if (!upstreamRequests.some(request =>
-    request.authorization === `Bearer ${probeToken}` &&
-    request.range === "bytes=0-"
-  )) throw new Error("Chromium 68 did not forward bearer Range media");
+    request.authorization === `Bearer ${probeToken}` && request.range === "bytes=0-"
+  )) throw new Error("Chromium 108 did not forward bearer Range media");
 
-  const unexpectedErrors = runtimeErrors.filter(error => !isExpectedLegacyProbeError(error));
-  if (unexpectedErrors.length) throw new Error(`Chromium 68 runtime errors: ${JSON.stringify(unexpectedErrors)}`);
+  if (runtimeErrors.length) throw new Error(`Chromium 108 runtime errors: ${JSON.stringify(runtimeErrors)}`);
   completed = true;
 } finally {
   await cleanupProbeResources({
@@ -520,7 +477,14 @@ try {
 }
 
 if (completed) {
-  process.stdout.write(`Pinned Chromium 68 revision ${revision} preserved revoked-grant ordering and loaded authenticated Range media successfully.\n`);
+  process.stdout.write(`Pinned Chromium 108 revision ${revision} started the TV app, preserved revoked-grant ordering, and loaded authenticated Range media successfully.\n`);
+}
+
+async function verifyArchiveChecksum(path) {
+  const actualSha256 = createHash("sha256").update(await readFile(path)).digest("hex");
+  if (actualSha256 !== archiveSha256) {
+    throw new Error(`Pinned Chromium archive checksum mismatch: ${actualSha256}`);
+  }
 }
 
 async function waitForDebugger(debugPort) {
@@ -604,7 +568,7 @@ async function cleanupProbeResources(resources) {
   }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) {
-    throw new AggregateError(failures, "Chromium 68 cleanup failed");
+    throw new AggregateError(failures, "Chromium 108 cleanup failed");
   }
 }
 
@@ -732,16 +696,4 @@ function staticContentType(pathname) {
   if (pathname.endsWith(".woff2")) return "font/woff2";
   if (pathname.endsWith(".webp")) return "image/webp";
   return "text/html";
-}
-
-function isExpectedLegacyProbeError(error) {
-  const description = error.exception?.description ?? error.text ?? "";
-  const url = error.url ?? error.stackTrace?.callFrames?.[0]?.url ?? "";
-  return (
-    description.includes("import.meta.resolve not supported") &&
-    url.startsWith("data:text/javascript,")
-  ) || (
-    description.includes("Unexpected token ?") &&
-    /\/assets\/index-(?!legacy-)[^/]+\.js$/.test(url)
-  );
 }

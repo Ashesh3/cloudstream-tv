@@ -1,11 +1,11 @@
-# LG webOS acceptance
+# LG webOS TV 24 acceptance
 
-Automated tests, the pinned Chromium 68 probe, and desktop Playwright are not real-TV proof. Mark acceptance complete only after a user performs this checklist on a supported LG webOS 5+ television with the exact candidate image.
+Automated tests, the pinned Chromium 108 probe, and desktop Playwright are not real-TV proof. Mark acceptance complete only after a user performs this checklist on the configured household webOS TV 24 television with the exact candidate image.
 
 ## Record the candidate
 
 - Image digest/tag, commit, TV model, webOS/browser version, network, public URL, and UTC start time.
-- Passing `npm test`, `npm run typecheck`, `node scripts/check-tv-bundle.mjs`, `npm run check:chromium68`, and container smoke evidence.
+- Passing `npm test`, `npm run typecheck`, `node scripts/check-tv-bundle.mjs`, `npm run check:chromium108`, and container smoke evidence.
 
 ## Fresh installation
 

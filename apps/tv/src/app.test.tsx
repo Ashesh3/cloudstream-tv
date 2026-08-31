@@ -85,7 +85,7 @@ describe("TV enrollment and browse states", () => {
   });
 
   it.each([
-    [false, "This TV browser is not supported", "Use a webOS 5 or newer TV."],
+    [false, "This TV browser is not supported", "Use the configured household television."],
     [true, "Device requests are turned off", "Try again"],
   ] as const)("renders safe unsupported and request-disabled screens", async (supported, heading, action) => {
     const client = api();
@@ -93,6 +93,10 @@ describe("TV enrollment and browse states", () => {
     render(<TvApp api={client} browserSupported={supported} />);
     expect(await screen.findByRole("heading", { name: heading })).toBeVisible();
     expect(screen.getByText(action)).toBeVisible();
+    if (!supported) {
+      expect(screen.getByText("Cloudframe is configured for webOS TV 24 with Chromium 108."))
+        .toBeVisible();
+    }
   });
 
   it.each(["denied", "expired", "revoked"] as const)("shows a safe %s terminal state", async state => {

@@ -16,29 +16,33 @@ afterEach(async () => {
 });
 
 describe("TV compatibility scripts", () => {
-  it("TV bundle checker enforces legacy syntax and compressed budgets", async () => {
+  it("TV bundle checker enforces Chromium 108 syntax and compressed budgets", async () => {
     const source = await readFile("scripts/check-tv-bundle.mjs", "utf8");
     expect(source).toContain("180 * 1024");
     expect(source).toContain("45 * 1024");
-    expect(source).toContain("polyfills-legacy");
-    expect(source).toContain("index-legacy");
-    expect(source).toContain("files.filter(name => /-legacy-.*\\.js$/.test(name))");
-    const { access } = await import("node:fs/promises");
-    try {
-      await access("apps/tv/dist/assets");
-    } catch {
-      const build = await runCommand("npm", ["run", "build", "-w", "@cloudframe/tv"], {});
-      expect(build.code, build.stderr).toBe(0);
-    }
+    expect(source).toContain('const target = "chrome108"');
+    expect(source).toContain("index-");
+    expect(source).not.toContain("polyfills-legacy");
+    expect(source).not.toContain("index-legacy");
+    expect(source).toContain("@scope");
+    expect(source).toContain("light-dark");
+    expect(source).toContain("anchor-name");
+    expect(source).toContain("position-anchor");
+    expect(source).toContain(":popover-open");
+    expect(source).not.toContain("const unsupportedCss");
+    expect(source).toContain("cloudframe-media-sw.js contains syntax newer than Chromium 68");
+    const build = await runCommand("npm", ["run", "build", "-w", "@cloudframe/tv"], {});
+    expect(build.code, build.stderr).toBe(0);
     const result = await runNode("scripts/check-tv-bundle.mjs", [], {});
     expect(result.code, result.stderr).toBe(0);
     expect(result.stdout).toContain("TV bundle compatibility and budget check passed");
   }, 120_000);
 
-  it("defines a pinned Chromium 68 execution lane and required API check", async () => {
-    const source = await readFile("scripts/check-chromium68.mjs", "utf8");
-    expect(source).toContain("555668");
-    expect(source).toContain("Chrome/68.");
+  it("defines a pinned Chromium 108 execution lane and required API check", async () => {
+    const source = await readFile("scripts/check-chromium108.mjs", "utf8");
+    expect(source).toContain("Chrome/108.");
+    expect(source).toMatch(/const revision = "\d+"/);
+    expect(source).toMatch(/const archiveSha256 = "[a-f0-9]{64}"/);
     expect(source).toContain("AbortController");
     expect(source).toContain("remote-debugging-port");
     expect(source).toContain('toLocaleLowerCase().includes("cloudframe")');
@@ -46,13 +50,13 @@ describe("TV compatibility scripts", () => {
   });
 
   it("keeps the Chromium probe profile in its temporary root and rejects every production probe marker", async () => {
-    const harnessUrl = new URL("../scripts/chromium68-harness.mjs", import.meta.url);
+    const harnessUrl = new URL("../scripts/chromium108-harness.mjs", import.meta.url);
     const { assertProductionWorker, createProbePaths, removeProbeRoot } = await import(harnessUrl.href);
     const root = await createProbePaths();
 
     expect(root.profile.startsWith(root.root)).toBe(true);
     expect(root.worker.startsWith(root.root)).toBe(true);
-    expect(root.profile).not.toContain(join(".cache", "chromium-68"));
+    expect(root.profile).not.toContain(join(".cache", "chromium-108"));
     await mkdir(root.profile, { recursive: true });
     await writeFile(join(root.profile, "worker-origin.txt"), "http://127.0.0.1:4173/sample.wav");
     await removeProbeRoot(root.root);
@@ -71,7 +75,7 @@ describe("TV compatibility scripts", () => {
     expect(failure?.message).toBe("simulated Chromium failure");
     await expect(access(failed.root)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(removeProbeRoot(tmpdir()))
-      .rejects.toThrow("Refusing to remove an invalid Chromium 68 temporary root");
+      .rejects.toThrow("Refusing to remove an invalid Chromium 108 temporary root");
 
     expect(() => assertProductionWorker("self.addEventListener('fetch',()=>{});"))
       .not.toThrow();
@@ -87,7 +91,7 @@ describe("TV compatibility scripts", () => {
   });
 
   it("rejects child-process spawn errors without an unhandled EventEmitter crash", async () => {
-    const harnessUrl = new URL("../scripts/chromium68-harness.mjs", import.meta.url);
+    const harnessUrl = new URL("../scripts/chromium108-harness.mjs", import.meta.url);
     const { runCheckedProcess } = await import(harnessUrl.href);
 
     await expect(runCheckedProcess("cloudframe-command-that-does-not-exist", [], {
@@ -97,7 +101,7 @@ describe("TV compatibility scripts", () => {
   });
 
   it("settles a checked child process once when error and close both fire", async () => {
-    const harnessUrl = new URL("../scripts/chromium68-harness.mjs", import.meta.url);
+    const harnessUrl = new URL("../scripts/chromium108-harness.mjs", import.meta.url);
     const { observeCheckedChild } = await import(harnessUrl.href);
     const child = new EventTargetChild();
     const checked = observeCheckedChild(child, "synthetic-process");
@@ -113,12 +117,12 @@ describe("TV compatibility scripts", () => {
   it("cleans the actual Chromium harness after a controlled launch failure", async () => {
     const isolatedTemp = await temp();
     const [sitePort, mediaPort, debuggerPort] = await reservePorts(3);
-    const result = await runNode("scripts/check-chromium68.mjs", [], {
-      CLOUDFRAME_CHROMIUM68_TEST_EXECUTABLE: join(isolatedTemp, "missing-chrome.exe"),
-      CLOUDFRAME_CHROMIUM68_TEST_CACHE: join(isolatedTemp, "cache"),
-      CLOUDFRAME_CHROMIUM68_TEST_SITE_PORT: String(sitePort),
-      CLOUDFRAME_CHROMIUM68_TEST_MEDIA_PORT: String(mediaPort),
-      CLOUDFRAME_CHROMIUM68_TEST_DEBUGGER_PORT: String(debuggerPort),
+    const result = await runNode("scripts/check-chromium108.mjs", [], {
+      CLOUDFRAME_CHROMIUM108_TEST_EXECUTABLE: join(isolatedTemp, "missing-chrome.exe"),
+      CLOUDFRAME_CHROMIUM108_TEST_CACHE: join(isolatedTemp, "cache"),
+      CLOUDFRAME_CHROMIUM108_TEST_SITE_PORT: String(sitePort),
+      CLOUDFRAME_CHROMIUM108_TEST_MEDIA_PORT: String(mediaPort),
+      CLOUDFRAME_CHROMIUM108_TEST_DEBUGGER_PORT: String(debuggerPort),
       NODE_ENV: "test",
       TEMP: isolatedTemp,
       TMP: isolatedTemp,
@@ -128,8 +132,8 @@ describe("TV compatibility scripts", () => {
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("ENOENT");
     expect(result.stderr).not.toContain("Unhandled 'error' event");
-    expect(result.stdout).not.toContain("loaded authenticated Range media");
-    expect((await readdir(isolatedTemp)).filter(name => name.startsWith("cloudframe-chromium68-")))
+    expect(result.stdout).not.toContain("started the TV app");
+    expect((await readdir(isolatedTemp)).filter(name => name.startsWith("cloudframe-chromium108-")))
       .toEqual([]);
     for (const port of [sitePort, mediaPort, debuggerPort]) {
       await expect(canListen(port)).resolves.toBeUndefined();

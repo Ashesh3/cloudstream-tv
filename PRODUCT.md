@@ -36,7 +36,7 @@ Cloudframe is a private, single-household cloud-media browser. It provides read-
 ## Capabilities and constraints
 
 - One household; multiple approved devices, sources, and roots.
-- LG webOS 5+ / Chromium 68 compatibility with native controls when the packaged Video.js skin cannot initialize.
+- Configured household target: webOS TV 24 / Chromium 108, with native controls when the packaged Video.js skin cannot initialize.
 - Real Video.js 10 skin on supported browsers, native HLS where available, and hls.js otherwise.
 - Mobile-first, keyboard/screen-reader-operable administration.
 - Graceful container shutdown, transactional SQLite upgrades, bounded transcode jobs, and cache free-space protection.

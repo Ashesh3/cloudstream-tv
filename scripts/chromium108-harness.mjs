@@ -3,7 +3,7 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
-const PROBE_DIRECTORY_PREFIX = "cloudframe-chromium68-";
+const PROBE_DIRECTORY_PREFIX = "cloudframe-chromium108-";
 const PROBE_SYMBOL = "__CLOUDFRAME_MEDIA_PROBE_ORIGIN__";
 
 export async function createProbePaths() {
@@ -32,7 +32,7 @@ export async function removeProbeRoot(root) {
     dirname(resolvedRoot) !== resolvedTemp ||
     !basename(resolvedRoot).startsWith(PROBE_DIRECTORY_PREFIX)
   ) {
-    throw new Error("Refusing to remove an invalid Chromium 68 temporary root");
+    throw new Error("Refusing to remove an invalid Chromium 108 temporary root");
   }
   await rm(resolvedRoot, { recursive: true, force: true });
   try {
@@ -41,7 +41,7 @@ export async function removeProbeRoot(root) {
     if (error?.code === "ENOENT") return;
     throw error;
   }
-  throw new Error("Chromium 68 temporary root cleanup failed");
+  throw new Error("Chromium 108 temporary root cleanup failed");
 }
 
 export function spawnChecked(command, args, options) {

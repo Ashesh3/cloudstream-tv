@@ -658,7 +658,7 @@ function TerminalState({ state, title, body, onRetry }: { state: string; title: 
 }
 
 function Unsupported() {
-  return <StatePanel title="This TV browser is not supported" body="Cloudframe needs the browser engine included with LG webOS 5 or newer."><p className="state-detail">Use a webOS 5 or newer TV.</p></StatePanel>;
+  return <StatePanel title="This TV browser is not supported" body="Cloudframe is configured for webOS TV 24 with Chromium 108."><p className="state-detail">Use the configured household television.</p></StatePanel>;
 }
 
 function BrowseSkeleton() {

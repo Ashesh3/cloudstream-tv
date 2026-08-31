@@ -58,4 +58,11 @@ describe("Astryx foundation", () => {
       expect(entry, path).toContain('import "@astryxdesign/core/astryx.css";');
     }
   });
+
+  it("mounts the TV under the built Cloudframe Night dark theme", async () => {
+    const entry = await readFile("apps/tv/src/main.tsx", "utf8");
+    expect(entry).toContain('import { Theme } from "@astryxdesign/core/theme"');
+    expect(entry).toContain('import { cloudframeNightTheme } from "@cloudframe/theme"');
+    expect(entry).toContain('<Theme theme={cloudframeNightTheme} mode="dark">');
+  });
 });

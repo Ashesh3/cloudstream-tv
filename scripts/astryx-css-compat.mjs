@@ -56,6 +56,7 @@ export function transformTvAstryxCss({ coreCss, themeCss }) {
   combined.walkDecls(declaration => {
     declaration.value = resolveColorMixFunctions(declaration.value, tokens);
   });
+  removeUnsupportedChromium108Rules(combined);
 
   const output = `${combined.toString().trimEnd()}\n`;
   const residueRoot = postcss.parse(output);
@@ -70,6 +71,26 @@ export function transformTvAstryxCss({ coreCss, themeCss }) {
     throw new Error(`Unsupported CSS remains after TV transform: ${residue}`);
   }
   return output;
+}
+
+function removeUnsupportedChromium108Rules(root) {
+  root.walkRules(rule => {
+    if (/:popover-open\b|\[popover\]/iu.test(rule.selector)) rule.remove();
+  });
+  root.walkDecls(declaration => {
+    const property = declaration.prop.toLowerCase();
+    const value = declaration.value.toLowerCase();
+    if (
+      property === "anchor-name" ||
+      property === "position-anchor" ||
+      /\banchor(?:-size)?\s*\(/iu.test(value)
+    ) {
+      declaration.remove();
+    }
+  });
+  root.walkRules(rule => {
+    if (!rule.nodes?.some(node => node.type === "decl" || node.type === "atrule")) rule.remove();
+  });
 }
 
 function collectRootTokens(coreRoot, themeRoot, themeSelector) {

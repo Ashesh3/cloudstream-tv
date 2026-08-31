@@ -37,7 +37,7 @@ npm run typecheck
 npm run lint
 npm run build:server
 node scripts/check-tv-bundle.mjs
-npm run check:chromium68
+npm run check:chromium108
 npx playwright test
 npm run docker:build
 npm run test:container
@@ -50,7 +50,7 @@ The real container smoke build is compile-time gated. Ordinary production builds
 ## Repository
 
 ```text
-apps/tv/        Preact TV app and Chromium 68 legacy build
+apps/tv/        React TV app for webOS TV 24 / Chromium 108
 apps/admin/     React household admin app
 packages/       Shared contracts, server runtime, providers, and TV core
 deploy/         Self-hosted Node server entry

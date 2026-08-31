@@ -1,4 +1,6 @@
 import { createRoot } from "react-dom/client";
+import { Theme } from "@astryxdesign/core/theme";
+import { cloudframeNightTheme } from "@cloudframe/theme";
 import "@astryxdesign/core/reset.css";
 import "@astryxdesign/core/astryx.css";
 import { TvApp } from "./app";
@@ -12,5 +14,7 @@ const injectedApi = __CLOUDFRAME_E2E__
   : undefined;
 const googleMedia = createGoogleMediaBridge();
 createRoot(document.getElementById("app")!).render(
-  <TvApp api={injectedApi} googleMedia={googleMedia} />
+  <Theme theme={cloudframeNightTheme} mode="dark">
+    <TvApp api={injectedApi} googleMedia={googleMedia} />
+  </Theme>
 );
