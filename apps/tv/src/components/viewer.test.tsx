@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DirectMediaUrlResponse, GoogleBearerMediaUrlResponse, TvBrowseItemDto } from "@cloudframe/shared";
@@ -148,6 +148,7 @@ describe("unified TV viewer", () => {
     });
     render(<TestViewer history={viewerHistory()} api={api} items={[items[1]!]} selectedItemId="item_video_1" slideshowSeconds={8} previews={{}} onClose={() => undefined} />);
     const video = await screen.findByLabelText("Playing Clip.mp4");
+    await waitFor(() => expect(api.heartbeatTranscode).toHaveBeenCalledWith(sessionId));
     fireEvent.error(video);
 
     expect(await screen.findByRole("heading", { name: title })).toBeVisible();
@@ -167,13 +168,17 @@ describe("unified TV viewer", () => {
       previews={{}} onClose={() => undefined} />);
 
     expect(await screen.findByRole("img", { name: "First.jpg" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Direct Google playback is unavailable on this browser" })).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(bridge.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ itemId: "item_video_1" }),
+      expect.objectContaining({ kind: "video" }),
+      expect.any(AbortSignal),
+    ));
     await act(async () => {
       adjacentPreparation.reject(new GoogleMediaBridgeError("GOOGLE_MEDIA_BRIDGE_UNAVAILABLE"));
       await Promise.resolve();
     });
-    expect(screen.queryByRole("heading", { name: "Direct Google playback is unavailable on this browser" })).not.toBeInTheDocument();
-
-    fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(await screen.findByRole("heading", { name: "Direct Google playback is unavailable on this browser" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Try fresh URL" })).not.toBeInTheDocument();
     expect(screen.queryByText("Preparing video…")).not.toBeInTheDocument();

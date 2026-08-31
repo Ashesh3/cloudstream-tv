@@ -11,7 +11,7 @@ import {
   viewerReducer,
   type ViewerMediaItem
 } from "@cloudframe/tv-core";
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 
 import type { TvApi } from "../api/client";
 import { GoogleMediaBridgeError, type GoogleMediaBridge, type PreparedGoogleMediaSource } from "../media/google-media-bridge";
@@ -358,7 +358,7 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
     const element = videoElementFor(active.id);
     if (!element || active.kind !== "video") return;
     if (activeUrl?.status === "ready" && activeUrl.sourceKind === "hls") return;
-    if (state.playbackIntent === "play") void element.play().catch(error => {
+    if (state.playbackIntent === "play") attemptPlayback(element, error => {
       if (isAutoplayRejection(error)) dispatch({ type: "autoplay-rejected", nodeId: active.id });
       else dispatch({ type: "media-error", nodeId: active.id, kind: "generic" });
     });
@@ -580,7 +580,7 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
             onHlsAttached={() => {
               startHlsHeartbeat(active.id);
               const element = videoElementFor(active.id);
-              if (element && playbackIntentRef.current === "play") void element.play().catch(error => {
+              if (element && playbackIntentRef.current === "play") attemptPlayback(element, error => {
                 if (isAutoplayRejection(error)) dispatch({ type: "autoplay-rejected", nodeId: active.id });
               });
             }}
@@ -672,6 +672,15 @@ function isAutoplayRejection(error: unknown): boolean {
   return error instanceof DOMException
     ? error.name === "NotAllowedError"
     : typeof error === "object" && error !== null && "name" in error && String((error as { name: unknown }).name) === "NotAllowedError";
+}
+
+function attemptPlayback(element: HTMLMediaElement, onRejected: (error: unknown) => void): void {
+  try {
+    const playback = element.play();
+    if (playback && typeof playback.catch === "function") void playback.catch(onRejected);
+  } catch (error) {
+    onRejected(error);
+  }
 }
 
 function isTranscodeSessionExpired(error: unknown): boolean {

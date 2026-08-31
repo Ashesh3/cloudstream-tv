@@ -1,13 +1,13 @@
 /// <reference types="vite/client" />
-import type { JSX } from "preact";
+import type { DetailedHTMLProps, HTMLAttributes } from "react";
 
 declare global {
   const __CLOUDFRAME_E2E__: boolean;
 
-  namespace preact.JSX {
+  namespace React.JSX {
     interface IntrinsicElements {
-      "video-player": JSX.HTMLAttributes<HTMLElement>;
-      "video-skin": JSX.HTMLAttributes<HTMLElement>;
+      "video-player": DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement>;
+      "video-skin": DetailedHTMLProps<HTMLAttributes<HTMLElement>, HTMLElement>;
     }
   }
 }

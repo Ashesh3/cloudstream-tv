@@ -1,6 +1,6 @@
 import type { TvRootDto } from "@cloudframe/shared";
 import { normalizeTvKey, shouldHandleTvKey } from "@cloudframe/tv-core";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "react";
 
 export function SourceDrawer({ open, roots, onClose, onHome, onSelect }: {
   open: boolean;

@@ -1,7 +1,7 @@
 import type { DirectThumbnailItem, MediaOrder, TvBrowseItemDto, TvRootDto } from "@cloudframe/shared";
 import { sortBrowseItems } from "@cloudframe/shared";
 import { normalizeTvKey, shouldHandleTvKey } from "@cloudframe/tv-core";
-import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { tvApi, type TvApi, type TvHomeResponse } from "./api/client";
 import { DeviceRequest, StatePanel } from "./components/device-request";
@@ -213,50 +213,49 @@ function BrowserShell({ api, googleMedia, history, mediaOrder, onUnauthorized, s
         return;
       }
       const incoming = response.children.map(node => ({ ...node, itemType: "node" as const }));
-      setBrowse(current => {
-        const pending = requestedFocus.current;
-        const previousFocusId = requestedFocusItemId.current;
-        const existingIds: Record<string, boolean> = {};
-        current.items.forEach(item => { existingIds[item.id] = true; });
-        const newIdCount = incoming.reduce((count, item) => count + (existingIds[item.id] ? 0 : 1), 0);
-        const pageTargetId = append && pending !== null && pending >= current.items.length
-          ? incoming[pending - current.items.length]?.id ?? null
-          : previousFocusId;
-        const items = append
-          ? mergeFolderItems(current.items, incoming, mediaOrder)
-          : sortFolderBrowseItems(dedupeLastById(incoming), mediaOrder);
-        const cursorCycle = append && response.nextCursor !== null && (
-          response.nextCursor === options.cursor || current.loadedPageCursors.indexOf(response.nextCursor) >= 0
-        );
-        const noProgress = append && newIdCount === 0;
-        const next: BrowseState = {
-          parent: response.parent,
-          breadcrumbs: options.breadcrumbs,
-          roots: current.roots,
-          items,
-          nextCursor: cursorCycle || noProgress ? null : response.nextCursor,
-          loadedPageCursors: append ? [...current.loadedPageCursors, options.cursor ?? null] : [null],
-          loading: false,
-          error: null,
-          paginationError: cursorCycle
-            ? "More items could not be loaded. Refresh this collection to try again."
-            : noProgress
-              ? "No additional items were returned. Refresh this collection to check again."
-              : null
-        };
-        browseRef.current = next;
-        if (append) {
-          if (pending !== null) {
-            const targetId = noProgress ? previousFocusId : pageTargetId;
-            const restored = targetId ? items.findIndex(item => item.id === targetId) : -1;
-            setFocusedIndex(restored >= 0 ? restored : Math.min(pending, Math.max(0, items.length - 1)));
-          } else if (previousFocusId) {
-            const restored = items.findIndex(item => item.id === previousFocusId);
-            if (restored >= 0) setFocusedIndex(restored);
-          }
+      const current = browseRef.current;
+      const pending = requestedFocus.current;
+      const previousFocusId = requestedFocusItemId.current;
+      const existingIds: Record<string, boolean> = {};
+      current.items.forEach(item => { existingIds[item.id] = true; });
+      const newIdCount = incoming.reduce((count, item) => count + (existingIds[item.id] ? 0 : 1), 0);
+      const pageTargetId = append && pending !== null && pending >= current.items.length
+        ? incoming[pending - current.items.length]?.id ?? null
+        : previousFocusId;
+      const items = append
+        ? mergeFolderItems(current.items, incoming, mediaOrder)
+        : sortFolderBrowseItems(dedupeLastById(incoming), mediaOrder);
+      const cursorCycle = append && response.nextCursor !== null && (
+        response.nextCursor === options.cursor || current.loadedPageCursors.indexOf(response.nextCursor) >= 0
+      );
+      const noProgress = append && newIdCount === 0;
+      const next: BrowseState = {
+        parent: response.parent,
+        breadcrumbs: options.breadcrumbs,
+        roots: current.roots,
+        items,
+        nextCursor: cursorCycle || noProgress ? null : response.nextCursor,
+        loadedPageCursors: append ? [...current.loadedPageCursors, options.cursor ?? null] : [null],
+        loading: false,
+        error: null,
+        paginationError: cursorCycle
+          ? "More items could not be loaded. Refresh this collection to try again."
+          : noProgress
+            ? "No additional items were returned. Refresh this collection to check again."
+            : null
+      };
+      browseRef.current = next;
+      setBrowse(next);
+      if (append) {
+        if (pending !== null) {
+          const targetId = noProgress ? previousFocusId : pageTargetId;
+          const restored = targetId ? items.findIndex(item => item.id === targetId) : -1;
+          setFocusedIndex(restored >= 0 ? restored : Math.min(pending, Math.max(0, items.length - 1)));
+        } else if (previousFocusId) {
+          const restored = items.findIndex(item => item.id === previousFocusId);
+          if (restored >= 0) setFocusedIndex(restored);
         }
-        return next;
-      });
+      }
       requestedFocus.current = null;
       requestedFocusItemId.current = null;
     } catch (error) {
@@ -320,27 +319,34 @@ function BrowserShell({ api, googleMedia, history, mediaOrder, onUnauthorized, s
         for (const requested of batches) {
           const response = await api.thumbnailUrls(requested.map(item => item.handle), controller.signal);
           if (controller.signal.aborted) return;
-          let retryExpired = false;
           const requestedIds: Record<string, boolean> = {};
           requested.forEach(item => { requestedIds[item.id] = true; });
+          const normalized = response.items.flatMap(item => {
+            if (!requestedIds[item.itemId]) return [];
+            const requestedItem = requested.find(candidate => candidate.id === item.itemId);
+            if (!requestedItem) return [];
+            return [{
+              item,
+              requestedItem,
+              expiresAtEpoch: item.status === "ready" ? futureExpiryEpoch(item.expiresAt) : null
+            }];
+          });
+          const expiredHandles: Record<string, boolean> = {};
+          normalized.forEach(({ item, requestedItem, expiresAtEpoch }) => {
+            if (item.status === "ready" && expiresAtEpoch === null) expiredHandles[requestedItem.handle] = true;
+          });
+          const retryExpired = Object.keys(expiredHandles).some(handle => !thumbnailInstallRetries.current[handle]);
+          Object.keys(expiredHandles).forEach(handle => { thumbnailInstallRetries.current[handle] = true; });
           setThumbnails(current => {
             const next = { ...current };
-            response.items.forEach(item => {
-              if (!requestedIds[item.itemId]) return;
-              const requestedItem = requested.find(candidate => candidate.id === item.itemId);
-              if (!requestedItem) return;
+            normalized.forEach(({ item, requestedItem, expiresAtEpoch }) => {
               if (item.status === "unavailable") {
                 delete thumbnailInstallRetries.current[requestedItem.handle];
                 next[item.itemId] = { ...item, requestedHandle: requestedItem.handle };
                 return;
               }
-              const expiresAtEpoch = futureExpiryEpoch(item.expiresAt);
               if (expiresAtEpoch === null) {
                 delete next[item.itemId];
-                if (!thumbnailInstallRetries.current[requestedItem.handle]) {
-                  thumbnailInstallRetries.current[requestedItem.handle] = true;
-                  retryExpired = true;
-                }
                 return;
               }
               delete thumbnailInstallRetries.current[requestedItem.handle];

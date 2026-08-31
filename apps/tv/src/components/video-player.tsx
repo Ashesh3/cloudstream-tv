@@ -1,6 +1,6 @@
-import type { Ref } from "preact";
+import type { Ref } from "react";
 import type { ViewerMediaItem, ViewerUrlState } from "@cloudframe/tv-core";
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { attachHlsSource, type HlsPlaybackErrorKind, type HlsPlaybackHandle } from "../media/hls-playback";
 import { loadVideoJs } from "../videojs";
@@ -35,7 +35,7 @@ export function VideoPlayer(props: VideoPlayerProps) {
   const hlsPlaylist = readyUrl?.sourceKind === "hls" ? readyUrl.url : undefined;
   const [videoJsReady, setVideoJsReady] = useState<boolean | null>(null);
   const video = useRef<HTMLVideoElement | null>(null);
-  const [videoGeneration, setVideoGeneration] = useState(0);
+  const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
   const hlsHandle = useRef<HlsPlaybackHandle | null>(null);
   const hlsOwnsElementErrors = useRef(false);
   const noReferrer = { referrerPolicy: "no-referrer" } as const;
@@ -52,7 +52,7 @@ export function VideoPlayer(props: VideoPlayerProps) {
     hlsHandle.current?.destroy();
     hlsHandle.current = null;
     hlsOwnsElementErrors.current = false;
-    const element = video.current;
+    const element = videoElement;
     if (!element || !hlsPlaylist) return;
     let active = true;
     let fatalReported = false;
@@ -81,20 +81,20 @@ export function VideoPlayer(props: VideoPlayerProps) {
       hlsHandle.current = null;
       hlsOwnsElementErrors.current = false;
     };
-  }, [hlsPlaylist, videoGeneration]);
+  }, [hlsPlaylist, videoElement]);
 
   const assignVideo = useCallback((element: HTMLVideoElement | null) => {
     if (video.current !== element) {
       video.current = element;
-      setVideoGeneration(current => current + 1);
+      setVideoElement(element);
     }
     assignRef(props.videoRef, element);
   }, [props.videoRef]);
 
   return (
     <div className="video-stage">
-      <video-player class="cloudframe-video-player">
-        <video-skin class="cloudframe-video-skin">
+      <video-player className="cloudframe-video-player">
+        <video-skin className="cloudframe-video-skin">
           {readyUrl ? (
             <video
               key={`${readyUrl.sourceKind}:${readyUrl.url}`}

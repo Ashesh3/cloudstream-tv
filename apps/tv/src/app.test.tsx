@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/preact";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TvApp } from "./app";
@@ -328,7 +328,7 @@ describe("TV enrollment and browse states", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
     const grid = await screen.findByRole("grid", { name: "Parent" });
     await requestNextPage(grid, client, 2);
-    expect(screen.getByRole("button", { name: /Node 6/ })).toHaveFocus();
+    await waitFor(() => expect(screen.getByRole("button", { name: /Node 6/ })).toHaveFocus());
     expect(screen.getByRole("status")).toHaveTextContent("More items could not be loaded. Refresh this collection to try again.");
 
     fireEvent.keyDown(grid, { key: "ArrowDown" });
@@ -1167,8 +1167,14 @@ async function findButtonWithFakeTimers(name: RegExp): Promise<HTMLButtonElement
 
 async function flushFakeTimersUntil(condition: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(condition() ? 0 : 1);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
     if (condition()) return;
-    await act(async () => { await Promise.resolve(); await Promise.resolve(); if (vi.isFakeTimers()) await vi.advanceTimersByTimeAsync(1); });
   }
   throw new Error("Condition did not settle.");
 }

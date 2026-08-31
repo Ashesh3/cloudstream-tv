@@ -1,5 +1,5 @@
-import type { ComponentChild } from "preact";
-import { useState } from "preact/hooks";
+import type { ReactNode } from "react";
+import { useState } from "react";
 
 interface DeviceRequestProps {
   busy?: boolean;
@@ -45,7 +45,7 @@ export function StatePanel(props: {
   body: string;
   state?: string;
   testId?: string;
-  children?: ComponentChild | ComponentChild[];
+  children?: ReactNode;
 }) {
   return (
     <main className="state-shell" data-testid={props.testId}>

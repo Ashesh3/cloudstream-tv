@@ -1,5 +1,5 @@
-import type { ComponentChild } from "preact";
-import { useEffect, useRef } from "preact/hooks";
+import type { ReactNode } from "react";
+import { useEffect, useRef } from "react";
 import { moveFocus, normalizeTvKey, shouldHandleTvKey } from "@cloudframe/tv-core";
 import { shouldPrefetchNextPage } from "../pagination";
 
@@ -39,7 +39,7 @@ interface VirtualGridProps<T extends VirtualGridItem> {
   onNearEnd?: (focusedIndex: number) => void;
   onSelect?: (item: T, index: number) => void;
   onBack?: () => boolean | void;
-  renderItem: (item: T, state: { focused: boolean; index: number }) => ComponentChild;
+  renderItem: (item: T, state: { focused: boolean; index: number }) => ReactNode;
 }
 
 export function calculateVirtualWindow(input: VirtualWindowInput): VirtualWindow {

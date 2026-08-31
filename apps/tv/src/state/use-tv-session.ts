@@ -1,5 +1,5 @@
 import type { ControlDeviceDto, ControlHouseholdDto, ControlRequestDto, TvBootstrapResponse } from "@cloudframe/shared";
-import { useCallback, useEffect, useRef, useState } from "preact/hooks";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import type { TvApi } from "../api/client";
 

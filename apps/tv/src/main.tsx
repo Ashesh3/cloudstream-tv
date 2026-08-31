@@ -1,4 +1,4 @@
-import { render } from "preact";
+import { createRoot } from "react-dom/client";
 import "@astryxdesign/core/reset.css";
 import "@astryxdesign/core/astryx.css";
 import { TvApp } from "./app";
@@ -11,4 +11,6 @@ const injectedApi = __CLOUDFRAME_E2E__
   ? (window as Window & { __CLOUDFRAME_TEST_TV_API__?: TvApi }).__CLOUDFRAME_TEST_TV_API__
   : undefined;
 const googleMedia = createGoogleMediaBridge();
-render(<TvApp api={injectedApi} googleMedia={googleMedia} />, document.getElementById("app")!);
+createRoot(document.getElementById("app")!).render(
+  <TvApp api={injectedApi} googleMedia={googleMedia} />
+);
