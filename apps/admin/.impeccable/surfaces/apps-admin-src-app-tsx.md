@@ -2,54 +2,42 @@
 version: 1
 slug: "apps-admin-src-app-tsx"
 primary_target: "apps/admin/src/app.tsx"
-related_targets: ["apps/admin/src/components/folder-picker.tsx","apps/admin/src/components/sources.tsx","apps/tv/src/app.tsx"]
+related_targets: ["apps/admin/src/components/source-workbench.tsx","apps/admin/src/components/sources.tsx","apps/tv/src/app.tsx"]
 ---
 
-# Cloudframe Admin and TV Replacement
+# Cloudframe Night Admin and TV
 
 ## Scope and mode
 
 - Mode: Operate.
-- Primary target: `apps/admin/src/app.tsx`.
-- Related targets: admin source/folder/access flows and the complete `apps/tv/` living-room surface.
-- This is a replacement visual world, not a refinement of the current dashboard.
+- One coherent Astryx design system across the household administrator and remote-first TV.
+- The shipped world is Cloudframe Night: quiet graphite surfaces, warm-white content, and cloud-blue focus/action.
 
-## Audience, job, and task
+## Product truth
 
-- A household administrator must connect cloud accounts, browse provider folders immediately, choose indexed roots, understand source/index health, approve TVs, and control folder access without interpreting infrastructure jargon.
-- Family members must browse approved photos and videos on a remote-first LG webOS TV with minimal chrome and predictable focus.
+- Cloudframe is a private, self-hosted, single-household cloud-media browser.
+- Google Drive and OneDrive folders are browsed live; there is no crawl, indexing, quota, or recovery-mirror workflow.
+- Only selected roots are exposed to approved televisions.
+- Encrypted SQLite and the transcode cache live under `/data`; operators protect them with explicit backups.
+- Compatible media uses browser-side authenticated direct delivery. Incompatible video may use one active FFmpeg demand-paged HLS transcode.
+- The configured TV target is webOS TV 24 / Chromium 108.
 
-## Product and functional constraints
+## Administrator
 
-- Folder selection browses Google Drive and OneDrive live; it must not depend on a completed metadata crawl.
-- Only selected roots and their descendants are indexed.
-- Provider-empty, index-not-started, indexing, quota-exhausted, provider-error, and healthy states are separate visible states with explicit recovery actions.
-- Current authorization, cookie, encrypted-token, ancestry, read-only TV, and Chromium 68 boundaries remain intact.
-- Firestore is currently free-tier and production has logged `RESOURCE_EXHAUSTED`; the UI must report that condition honestly, while implementation reduces write/read demand by indexing only selected roots.
+- AppShell, SideNav/MobileNav, and one Layout own the frame.
+- Requests, devices, sources, provider folders, and selected household folders use dense rows.
+- Settings is an ordered Astryx form and truth surface.
+- Committed changes update locally, close task UI, then refresh once; refresh failures show recovery warnings without rollback.
 
-## Chosen direction
+## Television
 
-**Screening Room Ledger** — a private screening program and projection-booth cue-sheet world.
+- State screens are remote-scale and keep enrollment, offline, unsupported, no-roots, source-error, and empty-folder states distinct.
+- Collection and media cards keep one native button as the remote focus authority.
+- The source drawer preserves explicit directional focus, Back dismissal, and exact restoration.
+- The viewer preserves the product reducer, direct-media bridge, HLS lifecycle, Video.js fallback, and capture-phase remote keys.
 
-- Matte projection black, warm program stock, one cue orange, and restrained metal/ash neutrals.
-- Editorial grotesk for reading; condensed display lettering for titles and section names; tabular figures only for timestamps, counts, and indexing measurements.
-- Admin composition: source/index truth at the top, live provider folder stage as the main work area, fixed television-access program alongside it, sync history and recovery beneath.
-- TV composition: oversized approved collections and media; chrome recedes, focus is unmistakable, controls appear only when needed.
-- Signature interaction: a folder moves from the live provider stage into the household program as a cue-marked selection; indexing status remains attached to that program entry.
-- Motion grammar: stage-to-program movement and one-axis status reveals; reduced-motion falls back to immediate state changes.
+## Success
 
-## Raises kept from challengers
-
-- Dark-first console: hairline state separation and isolated destructive actions.
-- Mesophotic dive profile: indexing always names its exact stage, depth, failure, and recovery path.
-- Cracktro queue: use depth and brightness before adding another container.
-
-## What success looks like
-
-- A first-time administrator can connect a source, see real provider folders, select a root, understand whether indexing is active or blocked, and approve TV access without guessing.
-- “My Drive has no folders” is never shown when the provider contains folders but Cloudframe indexing is incomplete or failed.
-- The admin and TV feel like one private household product rather than a generic SaaS dashboard plus a generic streaming clone.
-
-## Unresolved external constraint
-
-- Firestore billing remains disabled. The code can prevent unnecessary whole-drive indexing and expose quota recovery, but sustained indexing beyond free-tier limits still requires an approved billing account or reduced library size.
+- An administrator can connect a source, choose a folder, approve a television, and understand current household/storage/transcoder truth without infrastructure jargon.
+- A family member can identify focus at TV distance, browse collections, open media, and recover from explicit failures with a directional remote.
+- Admin and TV feel like one private household product.

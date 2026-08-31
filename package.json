@@ -7,6 +7,9 @@
     "apps/*",
     "packages/*"
   ],
+  "astryx": {
+    "theme": "@cloudframe/theme"
+  },
   "scripts": {
     "build": "npm run build:theme && npm run build -w @cloudframe/tv && npm run build -w @cloudframe/admin && node scripts/build-site.mjs",
     "build:theme": "astryx theme build packages/theme/src/cloudframe-night.ts --out packages/theme/dist/cloudframe-night.css && node scripts/build-tv-astryx-css.mjs",

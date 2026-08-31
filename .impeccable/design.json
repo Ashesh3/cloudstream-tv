@@ -1,132 +1,70 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-27T00:37:58.968Z",
-  "title": "Design System: Cloudframe Screening Room Ledger",
+  "generatedAt": "2026-08-31T22:40:00.000Z",
+  "title": "Design System: Cloudframe Night",
   "extensions": {
     "colorMeta": {
-      "admin-projection": { "role": "neutral", "displayName": "Admin Projection", "canonical": "#101112", "tonalRamp": ["oklch(15% 0.004 250)", "oklch(26% 0.004 250)", "oklch(37% 0.004 250)", "oklch(48% 0.004 250)", "oklch(59% 0.004 250)", "oklch(70% 0.004 250)", "oklch(81% 0.004 250)", "oklch(92% 0.004 250)"] },
-      "tv-projection": { "role": "neutral", "displayName": "TV Projection", "canonical": "#070705", "tonalRamp": ["oklch(15% 0.008 95)", "oklch(26% 0.008 95)", "oklch(37% 0.008 95)", "oklch(48% 0.008 95)", "oklch(59% 0.008 95)", "oklch(70% 0.008 95)", "oklch(81% 0.008 95)", "oklch(92% 0.008 95)"] },
-      "projection-deep": { "role": "neutral", "displayName": "Projection Deep", "canonical": "#030302", "tonalRamp": ["oklch(15% 0.006 95)", "oklch(26% 0.006 95)", "oklch(37% 0.006 95)", "oklch(48% 0.006 95)", "oklch(59% 0.006 95)", "oklch(70% 0.006 95)", "oklch(81% 0.006 95)", "oklch(92% 0.006 95)"] },
-      "program-stock": { "role": "secondary", "displayName": "Program Stock", "canonical": "#d9ccb2", "tonalRamp": ["oklch(15% 0.025 80)", "oklch(26% 0.025 80)", "oklch(37% 0.025 80)", "oklch(48% 0.025 80)", "oklch(59% 0.025 80)", "oklch(70% 0.025 80)", "oklch(81% 0.025 80)", "oklch(92% 0.025 80)"] },
-      "program-stock-bright": { "role": "secondary", "displayName": "Bright Stock", "canonical": "#f0e3c8", "tonalRamp": ["oklch(15% 0.025 80)", "oklch(26% 0.025 80)", "oklch(37% 0.025 80)", "oklch(48% 0.025 80)", "oklch(59% 0.025 80)", "oklch(70% 0.025 80)", "oklch(81% 0.025 80)", "oklch(95% 0.025 80)"] },
-      "program-stock-dim": { "role": "neutral", "displayName": "Dim Stock", "canonical": "#988d79", "tonalRamp": ["oklch(15% 0.02 80)", "oklch(26% 0.02 80)", "oklch(37% 0.02 80)", "oklch(48% 0.02 80)", "oklch(59% 0.02 80)", "oklch(70% 0.02 80)", "oklch(81% 0.02 80)", "oklch(92% 0.02 80)"] },
-      "cue": { "role": "primary", "displayName": "Cue Orange", "canonical": "#ed6b2c", "tonalRamp": ["oklch(15% 0.16 45)", "oklch(26% 0.16 45)", "oklch(37% 0.16 45)", "oklch(48% 0.16 45)", "oklch(59% 0.16 45)", "oklch(70% 0.16 45)", "oklch(81% 0.16 45)", "oklch(92% 0.16 45)"] },
-      "cue-bright": { "role": "primary", "displayName": "Bright Cue", "canonical": "#ff8a45", "tonalRamp": ["oklch(15% 0.14 50)", "oklch(26% 0.14 50)", "oklch(37% 0.14 50)", "oklch(48% 0.14 50)", "oklch(59% 0.14 50)", "oklch(70% 0.14 50)", "oklch(81% 0.14 50)", "oklch(92% 0.14 50)"] },
-      "metal": { "role": "tertiary", "displayName": "Booth Metal", "canonical": "#45423b", "tonalRamp": ["oklch(15% 0.01 80)", "oklch(26% 0.01 80)", "oklch(37% 0.01 80)", "oklch(48% 0.01 80)", "oklch(59% 0.01 80)", "oklch(70% 0.01 80)", "oklch(81% 0.01 80)", "oklch(92% 0.01 80)"] },
-      "metal-soft": { "role": "tertiary", "displayName": "Soft Metal", "canonical": "#292823", "tonalRamp": ["oklch(15% 0.008 80)", "oklch(26% 0.008 80)", "oklch(37% 0.008 80)", "oklch(48% 0.008 80)", "oklch(59% 0.008 80)", "oklch(70% 0.008 80)", "oklch(81% 0.008 80)", "oklch(92% 0.008 80)"] },
-      "hairline": { "role": "neutral", "displayName": "Registration Hairline", "canonical": "rgba(224, 211, 185, .22)", "tonalRamp": ["oklch(15% 0.012 80)", "oklch(26% 0.012 80)", "oklch(37% 0.012 80)", "oklch(48% 0.012 80)", "oklch(59% 0.012 80)", "oklch(70% 0.012 80)", "oklch(81% 0.012 80)", "oklch(92% 0.012 80)"] },
-      "danger": { "role": "tertiary", "displayName": "Blocked Coral", "canonical": "#f08b72", "tonalRamp": ["oklch(15% 0.09 30)", "oklch(26% 0.09 30)", "oklch(37% 0.09 30)", "oklch(48% 0.09 30)", "oklch(59% 0.09 30)", "oklch(70% 0.09 30)", "oklch(81% 0.09 30)", "oklch(92% 0.09 30)"] }
+      "body": { "role": "neutral", "displayName": "Graphite Body", "canonical": "#0F1217", "tonalRamp": ["#111217", "#23252C", "#3D404A", "#5A5E6B", "#7B808E", "#9EA4B1", "#C3C8D0", "#ECEEF1"] },
+      "surface": { "role": "neutral", "displayName": "Graphite Surface", "canonical": "#181C22", "tonalRamp": ["#11141A", "#282D35", "#424954", "#606875", "#818A97", "#A4ACB7", "#C8CDD3", "#EEF0F2"] },
+      "card": { "role": "neutral", "displayName": "Media Card", "canonical": "#171B21", "tonalRamp": ["#101318", "#272C33", "#414750", "#5F6671", "#808994", "#A3ABB5", "#C7CCD2", "#EDEFF1"] },
+      "accent": { "role": "primary", "displayName": "Cloud Blue", "canonical": "#62AFFF", "tonalRamp": ["#082849", "#0B477C", "#1268AE", "#258ADB", "#62AFFF", "#8CC5FF", "#B6DBFF", "#E1F0FF"] },
+      "accent-muted": { "role": "primary", "displayName": "Cloud Blue Muted", "canonical": "#17324F", "tonalRamp": ["#0C1B2B", "#17324F", "#254D76", "#3C6B9B", "#648EBB", "#8FB1D2", "#BDD4E8", "#E7F1FA"] },
+      "text-primary": { "role": "neutral", "displayName": "Warm White", "canonical": "#F4F1EA", "tonalRamp": ["#282722", "#47453F", "#68655D", "#8B877E", "#AFABA2", "#D2CEC6", "#E7E3DC", "#F4F1EA"] },
+      "text-secondary": { "role": "neutral", "displayName": "Cool Secondary", "canonical": "#AAB4C2", "tonalRamp": ["#20252C", "#39414C", "#56616F", "#748191", "#93A0B0", "#AAB4C2", "#CED5DE", "#EEF1F5"] },
+      "focus": { "role": "primary", "displayName": "Focus Blue", "canonical": "#8BC4FF", "tonalRamp": ["#0B2948", "#124A7B", "#246DAA", "#4292D7", "#6CB0F2", "#8BC4FF", "#B6DBFF", "#E2F1FF"] }
     },
     "typographyMeta": {
-      "display": { "displayName": "Program Display", "purpose": "Projection, ledger, state, and collection titles." },
-      "body": { "displayName": "Household Sans", "purpose": "Provider facts, guidance, recovery language, and forms." },
-      "label": { "displayName": "Ledger Label", "purpose": "Structural labels, compact annotations, and supporting measures." }
+      "body": { "displayName": "Instrument Sans", "purpose": "All household administration, guidance, media titles, and TV controls." },
+      "heading": { "displayName": "Instrument Sans Semibold", "purpose": "Page, section, collection, state, and viewer headings." }
     },
     "shadows": [
-      { "name": "cue-action-lift", "value": "0 12px 30px rgba(91, 37, 13, .22)", "purpose": "Primary TV enrollment and recovery actions." },
-      { "name": "tv-card-rest", "value": "0 10px 26px rgba(0, 0, 0, .28)", "purpose": "Resting media and program cards." },
-      { "name": "tv-card-focus", "value": "0 22px 54px rgba(0, 0, 0, .6), 0 0 0 4px rgba(237, 107, 44, .22)", "purpose": "Remote-focused card target." },
-      { "name": "overlay-lift", "value": "0 30px 90px rgba(0, 0, 0, .55)", "purpose": "Dialogs, state panels, and recovery overlays." }
+      { "name": "low", "value": "0 1px 1px rgba(0, 0, 0, 0.20), 0 2px 8px rgba(0, 0, 0, 0.20)", "purpose": "Resting widgets and media tiles." },
+      { "name": "high", "value": "0 2px 2px rgba(0, 0, 0, 0.20), 0 8px 24px rgba(0, 0, 0, 0.30)", "purpose": "Focused TV cards and temporary layers." }
     ],
     "motion": [
-      { "name": "cue-in", "value": "0.28s cubic-bezier(.16, 1, .3, 1)", "purpose": "Selected program entries move into the ledger." },
-      { "name": "remote-focus", "value": "120ms ease-out", "purpose": "TV card focus, opacity, border, and lift transition." },
-      { "name": "overlay-reveal", "value": "150ms ease-out", "purpose": "Video controls rise into view." },
-      { "name": "reduced-motion", "value": "0.01ms", "purpose": "Accessibility fallback for animation and transition." }
+      { "name": "fast", "value": "120ms", "purpose": "Focus and control feedback." },
+      { "name": "medium", "value": "260ms", "purpose": "Drawer and surface transitions." },
+      { "name": "reduced-motion", "value": "immediate", "purpose": "Accessibility fallback." }
     ],
     "breakpoints": [
-      { "name": "admin-stacked", "value": "900px" },
-      { "name": "admin-single-column", "value": "700px" },
+      { "name": "admin-mobile-nav", "value": "Astryx lg" },
+      { "name": "admin-workbench-stack", "value": "64rem" },
       { "name": "tv-short", "value": "760px height" },
       { "name": "tv-wide", "value": "1700px" }
     ]
   },
   "components": [
-    {
-      "name": "Primary Cue Action",
-      "kind": "button",
-      "refersTo": "button-primary",
-      "description": "A committed enrollment, recovery, or household-program action.",
-      "html": "<button class=\"ds-primary-action\">ADD TO PROGRAM</button>",
-      "css": ".ds-primary-action { min-height: 58px; padding: 0 30px; border: 1px solid transparent; border-radius: 0; background: #ed6b2c; color: #030302; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; font-size: 18px; font-weight: 750; box-shadow: 0 12px 30px rgba(91, 37, 13, .22); cursor: pointer; } .ds-primary-action:hover { background: #ff8a45; } .ds-primary-action:focus-visible { outline: 4px solid #ff8a45; outline-offset: 4px; } .ds-primary-action:active { transform: translateY(1px); }"
-    },
-    {
-      "name": "Secondary Sources Action",
-      "kind": "button",
-      "refersTo": "button-secondary",
-      "description": "A compact, quiet navigation action that keeps the cue reserved.",
-      "html": "<button class=\"ds-sources-action\">SOURCES <kbd>MENU</kbd></button>",
-      "css": ".ds-sources-action { min-height: 42px; padding: 0 14px; border: 1px solid rgba(224, 211, 185, .22); border-radius: 0; background: transparent; color: #d9ccb2; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; cursor: pointer; } .ds-sources-action kbd { margin-left: 7px; color: #ff8a45; font: inherit; font-size: 10px; } .ds-sources-action:hover { border-color: #ff8a45; } .ds-sources-action:focus-visible { outline: 4px solid #ff8a45; outline-offset: 4px; } .ds-sources-action:active { background: rgba(237, 107, 44, .22); }"
-    },
-    {
-      "name": "Program Name Field",
-      "kind": "input",
-      "refersTo": "input-program",
-      "description": "A warm-stock TV enrollment field with exterior cue focus.",
-      "html": "<label class=\"ds-field\">NAME THIS TV<input value=\"Living room\" aria-label=\"Name this TV\"></label>",
-      "css": ".ds-field { display: grid; gap: 8px; color: #211c15; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; font-size: 15px; font-weight: 750; } .ds-field input { min-height: 58px; padding: 0 18px; border: 1px solid rgba(33, 28, 21, .36); border-radius: 0; background: #f0e3c8; color: #211c15; font: inherit; font-size: 20px; caret-color: #ed6b2c; } .ds-field input:hover { border-color: #ed6b2c; } .ds-field input:focus-visible { outline: 4px solid #ff8a45; outline-offset: 4px; }"
-    },
-    {
-      "name": "Focused Program Card",
-      "kind": "card",
-      "refersTo": "card-tv",
-      "description": "A remote-scale collection target that makes focus unmistakable without shifting the grid.",
-      "html": "<button class=\"ds-program-card\"><span class=\"ds-card-art\">HOME FILMS</span><span class=\"ds-card-copy\"><strong>Family archive</strong><small>28 items · ready</small></span></button>",
-      "css": ".ds-program-card { width: 100%; height: 178px; display: grid; grid-template-columns: 44% 56%; padding: 0; border: 1px solid rgba(224, 211, 185, .22); border-radius: 13px; background: #292823; color: #d9ccb2; overflow: hidden; opacity: .64; box-shadow: 0 10px 26px rgba(0, 0, 0, .28); text-align: left; cursor: pointer; transition: transform 120ms ease-out, opacity 120ms ease-out, box-shadow 120ms ease-out, border-color 120ms ease-out; } .ds-card-art { display: flex; align-items: end; padding: 19px; background: #b9aa8e; color: #211c15; font-family: Cloudframe Condensed, Archivo Narrow Variable, Arial Narrow, sans-serif; font-size: 25px; font-weight: 650; line-height: .85; text-transform: uppercase; } .ds-card-copy { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: 15px 17px; } .ds-card-copy strong { overflow: hidden; color: #f0e3c8; font-family: Cloudframe Condensed, Archivo Narrow Variable, Arial Narrow, sans-serif; font-size: 21px; font-weight: 620; text-overflow: ellipsis; text-transform: uppercase; white-space: nowrap; } .ds-card-copy small { margin-top: 4px; color: #988d79; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; font-size: 11px; } .ds-program-card:hover, .ds-program-card:focus-visible { border-color: #ff8a45; opacity: 1; transform: scale(1.035); box-shadow: 0 22px 54px rgba(0, 0, 0, .6), 0 0 0 4px rgba(237, 107, 44, .22); outline: 0; } .ds-program-card:active { transform: scale(1.015); }"
-    },
-    {
-      "name": "Source Truth Reel",
-      "kind": "custom",
-      "refersTo": "source-truth-reel",
-      "description": "A compact provider-and-index ledger row that keeps state attached to its source.",
-      "html": "<div class=\"ds-truth-reel\"><span class=\"ds-provider\">G</span><span class=\"ds-source\"><strong>family@example.com</strong><small>Google Drive</small></span><span class=\"ds-status\">Program ready</span></div>",
-      "css": ".ds-truth-reel { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .7rem; align-items: center; padding: .75rem 1rem; border-left: 1px solid rgba(224, 211, 185, .22); background: #0d0e0f; color: #f2efe7; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; } .ds-provider { display: grid; place-items: center; width: 1.85rem; height: 1.85rem; border: 1px solid rgba(224, 211, 185, .22); color: #ed6b2c; font-family: Cloudframe Condensed, Archivo Narrow Variable, Arial Narrow, sans-serif; font-weight: 700; } .ds-source { min-width: 0; } .ds-source strong, .ds-source small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .ds-source strong { font-size: .85rem; } .ds-source small { margin-top: .12rem; color: #8b928f; font-size: .72rem; } .ds-status { color: #f2efe7; font-size: .78rem; text-transform: capitalize; } .ds-truth-reel:hover { background: #17191a; }"
-    },
-    {
-      "name": "Household Program Root",
-      "kind": "custom",
-      "refersTo": "household-program-root",
-      "description": "A selected folder entry that stays tied to its indexing condition and removal path.",
-      "html": "<article class=\"ds-program-root\"><span class=\"ds-root-cue\"></span><span><strong>Summer trips</strong><small>Indexed selected root · 124 items</small></span><button aria-label=\"Remove Summer trips\">REMOVE</button></article>",
-      "css": ".ds-program-root { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: .75rem; align-items: center; padding: 1rem; border: 1px solid rgba(49, 41, 31, .4); border-radius: 0; background: rgba(239, 226, 198, .72); color: #241e17; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; } .ds-root-cue { width: 12px; height: 12px; border: 1px solid #a74419; transform: rotate(45deg); } .ds-program-root strong, .ds-program-root small { display: block; } .ds-program-root strong { font-family: Cloudframe Condensed, Archivo Narrow Variable, Arial Narrow, sans-serif; font-size: 1.1rem; text-transform: uppercase; } .ds-program-root small { margin-top: .2rem; color: #554a3a; font-size: .75rem; } .ds-program-root button { min-height: 36px; border: 0; background: transparent; color: #8f2e19; font: inherit; font-size: .7rem; font-weight: 700; letter-spacing: .06em; } .ds-program-root button:hover { color: #ed6b2c; } .ds-program-root button:focus-visible { outline: 2px solid #ff8a45; outline-offset: 3px; }"
-    },
-    {
-      "name": "Program Readiness",
-      "kind": "chip",
-      "refersTo": "program-readiness",
-      "description": "A collection readiness marker that distinguishes preparing and blocked program states from empty content.",
-      "html": "<p class=\"ds-readiness\"><i></i>Indexing selected folders</p>",
-      "css": ".ds-readiness { display: flex; align-items: center; max-width: 480px; margin: 0; color: #f0e3c8; font-family: Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif; font-size: 16px; line-height: 1.35; } .ds-readiness i { width: 11px; height: 11px; flex: 0 0 auto; margin-right: 11px; border: 1px solid currentColor; background: #ed6b2c; transform: rotate(45deg); animation: ds-cue-pulse 1.5s ease-in-out infinite; } .ds-readiness:hover { color: #ff8a45; } .ds-readiness:focus-visible { outline: 2px solid #ff8a45; outline-offset: 4px; } @keyframes ds-cue-pulse { 0%, 100% { opacity: .55; transform: rotate(45deg) scale(.82); } 50% { opacity: 1; transform: rotate(45deg) scale(1); } } @media (prefers-reduced-motion: reduce) { .ds-readiness i { animation-duration: .01ms; animation-iteration-count: 1; } }"
-    }
+    { "name": "Admin Frame", "kind": "nav", "refersTo": "AppShell Layout SideNav MobileNav", "description": "One responsive Astryx frame for Requests, Devices, Sources, and Settings.", "html": "<nav class=\"ds-admin-frame\"><strong>Cloudframe</strong><span>Household admin</span><button>Requests</button><button class=\"is-selected\">Devices</button><button>Sources</button><button>Settings</button></nav>", "css": ".ds-admin-frame{display:grid;gap:12px;width:240px;padding:20px;background:var(--color-background-surface);color:var(--color-text-primary);border-right:1px solid var(--color-border);font-family:var(--font-family-body)}.ds-admin-frame span{color:var(--color-text-secondary)}.ds-admin-frame button{min-height:40px;padding:0 12px;border:0;border-radius:var(--radius-element);background:transparent;color:inherit;text-align:left}.ds-admin-frame button:hover,.ds-admin-frame button.is-selected{background:var(--color-background-selected)}.ds-admin-frame button:focus-visible{outline:var(--focus-outline-width) solid var(--focus-outline-color);outline-offset:var(--focus-outline-offset)}" },
+    { "name": "Dense Record", "kind": "custom", "refersTo": "List ListItem", "description": "Requests, devices, sources, provider folders, and household folders render as rows.", "html": "<section class=\"ds-record\"><span><strong>Family Trips</strong><small>Google Drive · household folder</small></span><button>Review</button></section>", "css": ".ds-record{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 8px;border-bottom:1px solid var(--color-border);color:var(--color-text-primary);font-family:var(--font-family-body)}.ds-record span{display:grid;gap:4px}.ds-record small{color:var(--color-text-secondary)}.ds-record button{min-height:40px;padding:0 16px;border:1px solid var(--color-border-emphasized);border-radius:var(--radius-element);background:transparent;color:inherit}.ds-record button:hover{background:var(--color-overlay-hover)}.ds-record button:focus-visible{outline:var(--focus-outline-width) solid var(--focus-outline-color);outline-offset:var(--focus-outline-offset)}" },
+    { "name": "Operational Status", "kind": "chip", "refersTo": "StatusDot Token Banner ProgressBar", "description": "Semantic primitives communicate real source, access, and transcoder state.", "html": "<span class=\"ds-status\"><i></i>Connected</span>", "css": ".ds-status{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:9999px;background:var(--color-success-muted);color:var(--color-text-primary);font:600 14px var(--font-family-body)}.ds-status i{width:8px;height:8px;border-radius:9999px;background:var(--color-success)}" },
+    { "name": "TV Collection Card", "kind": "card", "refersTo": "native remote button with Cloudframe Night tokens", "description": "One native button owns focus and selection while Astryx structural primitives and tokens own presentation.", "html": "<button class=\"ds-tv-card\"><span class=\"ds-tv-art\"></span><strong>Family Trips</strong><small>24 items</small></button>", "css": ".ds-tv-card{display:grid;gap:8px;width:280px;padding:0 0 16px;overflow:hidden;border:1px solid var(--color-border);border-radius:var(--radius-container);background:var(--color-background-card);color:var(--color-text-primary);text-align:left;font-family:var(--font-family-body);box-shadow:var(--shadow-low);transition:transform 175ms ease,box-shadow 175ms ease}.ds-tv-art{display:block;height:150px;background:var(--color-accent-muted)}.ds-tv-card strong,.ds-tv-card small{margin:0 16px}.ds-tv-card small{color:var(--color-text-secondary)}.ds-tv-card:hover,.ds-tv-card:focus-visible{transform:scale(1.03);box-shadow:var(--shadow-high)}.ds-tv-card:focus-visible{outline:var(--focus-outline-width) solid var(--focus-outline-color);outline-offset:var(--focus-outline-offset)}" },
+    { "name": "TV Collection Drawer", "kind": "custom", "refersTo": "explicit modal focus manager", "description": "Full-height collection chooser with deterministic remote focus and Back restoration.", "html": "<aside class=\"ds-drawer\"><strong>Collections</strong><button class=\"is-selected\">Family Trips</button><button>Archive</button><button>Close</button></aside>", "css": ".ds-drawer{display:grid;align-content:start;gap:10px;width:320px;min-height:360px;padding:24px;background:var(--color-background-popover);color:var(--color-text-primary);border-left:1px solid var(--color-border);font-family:var(--font-family-body);box-shadow:var(--shadow-high)}.ds-drawer button{min-height:44px;padding:0 14px;border:1px solid transparent;border-radius:var(--radius-element);background:transparent;color:inherit;text-align:left}.ds-drawer button:hover,.ds-drawer button.is-selected{background:var(--color-background-selected)}.ds-drawer button:focus-visible{outline:var(--focus-outline-width) solid var(--focus-outline-color);outline-offset:var(--focus-outline-offset)}" },
+    { "name": "Media Viewer", "kind": "custom", "refersTo": "product viewer reducer and media engine", "description": "Cloudframe Night presentation around direct media, Video.js, HLS, and capture-phase remote controls.", "html": "<section class=\"ds-viewer\"><header><small>Item 1 / 3</small><strong>Sunset.jpg</strong><small>Back: collection</small></header><figure></figure></section>", "css": ".ds-viewer{display:grid;gap:28px;width:720px;padding:24px;background:var(--color-background-body);color:var(--color-text-primary);font-family:var(--font-family-body)}.ds-viewer header{display:flex;justify-content:space-between;align-items:center}.ds-viewer header small{color:var(--color-text-secondary)}.ds-viewer figure{height:360px;margin:0;background:var(--color-accent-muted);border:1px solid var(--color-border)}" }
   ],
   "narrative": {
-    "northStar": "Screening Room Ledger.",
-    "overview": "Cloudframe programs household media like a private screening, not a generic SaaS dashboard. Projection black carries the room; warm program stock carries the household's approved selection; a single cue orange marks action, motion, and attention. The result should feel like a precise projection-booth cue sheet that still makes source, indexing, and access truth easy to read.\n\nThe admin surface keeps the visible source truth above quiet navigation, then places the live provider stage beside the household program so a folder's move into the program remains legible. The TV surface enlarges the same hierarchy for a remote and viewing distance: collection first, program status attached, chrome only when it serves the moment. The locally generated program-stock raster supplies paper fiber, registration marks, perforation dots, and sparse cue geometry without becoming a decorative background.",
+    "northStar": "Cloudframe Night",
+    "overview": "A calm, high-contrast household media interface built on Astryx Neutral. Graphite surfaces recede, warm-white content leads, and cloud blue marks focus and committed action.",
     "keyCharacteristics": [
-      "Projection black and warm stock create the two dominant planes.",
-      "Cue orange is reserved for a decision, active state, progress, or focus.",
-      "Hairline seams and ledger type describe state before another container does.",
-      "Truth stays attached to its source, program entry, collection, or recovery path.",
-      "Admin and television use one world at their own scale rather than mimicking each other."
+      "One coherent dark system across administrator and television.",
+      "Rows for dense administrative records; cards only for standalone widgets and media tiles.",
+      "Live provider browsing and approved-root truth without indexing or quota fiction.",
+      "Unmistakable television focus without changing remote navigation order.",
+      "Product-specific media and focus engines remain authoritative."
     ],
     "rules": [
-      { "name": "The Single Cue Rule", "body": "Cue orange carries a reason to act or orient; it is not a general decoration or a competing surface color.", "section": "colors" },
-      { "name": "The Stock Means Selected Rule", "body": "Warm stock signals the household program, a recovery panel, or a deliberate reading surface—not an arbitrary card fill.", "section": "colors" },
-      { "name": "The Ledger Read Rule", "body": "Use the condensed face for what the room is screening; use the sans for what the household needs to understand and act on.", "section": "typography" },
-      { "name": "The Plane Before Panel Rule", "body": "Establish hierarchy with brightness, material, and depth before introducing another boxed container.", "section": "elevation" }
+      { "name": "Truth before decoration", "body": "Source, device, storage, and transcoder state remain distinct and adjacent to the affected object.", "section": "principles" },
+      { "name": "One focus authority", "body": "TV grids, drawers, and viewers keep their explicit remote focus managers.", "section": "interaction" },
+      { "name": "Tokens own appearance", "body": "Component props and semantic Astryx tokens replace local palette overrides.", "section": "styling" }
     ],
     "dos": [
-      "Do keep provider, index, quota, and recovery truth adjacent to the source or household program entry it describes.",
-      "Do use the real program-stock material only as a purposeful selected or reading plane, with its cue geometry quiet enough for the information to lead.",
-      "Do preserve the admin relationship of visible source truth, live provider stage, and household program.",
-      "Do preserve television-scale type, safe insets, and an unmistakable focused card for remote operation.",
-      "Do use reduced-motion fallbacks for all cue, focus, drawer, and status movement."
+      "Use household, collection, folder, source, television, local storage, playback, and transcoder language.",
+      "Keep every operational state distinct.",
+      "Preserve visible focus and complete reduced-motion behavior."
     ],
     "donts": [
-      "Don't collapse incomplete indexing, provider-empty, quota-exhausted, blocked, and healthy states into one generic empty presentation.",
-      "Don't spend cue orange on inactive decoration, broad backgrounds, or multiple competing actions.",
-      "Don't replace the program relationship with generic SaaS metrics, floating dashboard cards, or an unrelated streaming clone.",
-      "Don't allow manual-only TV controls to take initial or automatic remote focus."
+      "Do not expose credentials, provider URLs, sealed handles, internal IDs, or raw infrastructure errors.",
+      "Do not add popover-dependent controls to the Chromium 108 television path.",
+      "Do not turn dense records into card stacks or badges into status labels."
     ]
   }
 }

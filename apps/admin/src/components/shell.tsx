@@ -64,14 +64,14 @@ export function Shell({ section, onSection, pendingCount, onRefresh, refreshing,
     </HStack>
   </LayoutHeader>;
 
-  return <AppShell sideNav={navigation} mobileNav={{ breakpoint: "md" }} contentPadding={0} height="auto" variant="section">
+  return <AppShell sideNav={navigation} mobileNav={{ breakpoint: "lg" }} contentPadding={0} height="fill" variant="section">
     <Layout
-      height="auto"
+      height="fill"
       header={top}
       contentWidth={contentMode === "sources" ? undefined : section === "settings" ? "60rem" : "90rem"}
       padding={4}
-      content={<LayoutContent isScrollable={false} padding={0} data-testid={end ? "source-workbench-layout" : undefined}>{children}</LayoutContent>}
-      end={end ? <LayoutPanel width="24rem" hasDivider isScrollable={false} label="Household folders" role="complementary" data-testid={endTestId}>{end}</LayoutPanel> : undefined}
+      content={<LayoutContent isScrollable padding={0} data-testid={end ? "source-workbench-layout" : undefined}>{children}</LayoutContent>}
+      end={end ? <LayoutPanel width="24rem" hasDivider isScrollable label="Household folders" role="complementary" data-testid={endTestId}>{end}</LayoutPanel> : undefined}
     />
   </AppShell>;
 }

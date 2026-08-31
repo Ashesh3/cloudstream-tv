@@ -50,7 +50,7 @@ describe("Admin Astryx structure", () => {
     const overview = await readFile("apps/admin/src/components/admin-overview.tsx", "utf8");
     expect(shell).toContain("AppShell");
     expect(shell).toContain("SideNav");
-    expect(shell).toContain('mobileNav={{ breakpoint: "md" }}');
+    expect(shell).toContain('mobileNav={{ breakpoint: "lg" }}');
     expect(shell).toContain("Badge");
     expect(overview).toContain("StatusDot");
     expect(overview).not.toContain("Badge");

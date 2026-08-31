@@ -25,6 +25,7 @@ test("admin approves, edits, and revokes a TV without mutating TV cookies", asyn
   await expect(page.getByText(/was approved/i)).toBeVisible();
   const cookies = await page.context().cookies();
   expect(cookies.some(cookie => ["device_session", "device_request", "cf_device", "cf_device_request"].includes(cookie.name))).toBe(false);
+  if (testInfo.project.name === "admin-mobile") await page.getByRole("button", { name: "Open navigation" }).click();
   await page.getByRole("button", { name: /devices/i }).click();
   await page.getByRole("button", { name: /edit/i }).click();
   await page.getByLabel(/device name/i).fill("Den TV");
@@ -34,7 +35,7 @@ test("admin approves, edits, and revokes a TV without mutating TV cookies", asyn
   await page.getByRole("button", { name: /revoke den tv/i }).click();
   await page.getByRole("button", { name: /revoke permanently/i }).click();
   await expect(page.getByText(/was revoked/i)).toBeVisible();
-  await expect(page).toHaveScreenshot(`admin-${testInfo.project.name}.png`, { animations: "disabled", fullPage: true });
+  await expect(page).toHaveScreenshot(`admin-${testInfo.project.name}.png`, { animations: "disabled" });
 });
 
 test("coordinated TV request becomes ready after approval and revoked after admin removal", async ({ page, context }, testInfo) => {

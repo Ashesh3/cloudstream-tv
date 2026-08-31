@@ -15,8 +15,7 @@ import { useMediaQuery } from "@astryxdesign/core/hooks";
 import { CloudIcon, FolderCogIcon, RotateCwIcon, Trash2Icon } from "lucide-react";
 import type { AdminApi, AdminImpact } from "../api/client";
 import { AdminApiError } from "../api/client";
-import { FolderPicker } from "./folder-picker";
-import type { RootRemovalRequest } from "./source-workbench";
+import { SourceWorkbench, type RootRemovalRequest } from "./source-workbench";
 import { Empty, PageHeader } from "./requests";
 
 export function Sources({ sources, roots, devices, api, onRootAdded, onRootRemoved, onRemoveSource, onAuthorize, onUnauthorized = () => undefined, onWorkbenchOpen, onWorkbenchClose, onWorkbenchChange, workbenchRemovalRequest }: {
@@ -122,7 +121,7 @@ export function Sources({ sources, roots, devices, api, onRootAdded, onRootRemov
   };
 
   const pickerSource = pickerId ? sources.find(source => source.id === pickerId) : undefined;
-  if (pickerSource) return <FolderPicker source={pickerSource} roots={roots.filter(root => root.sourceId === pickerSource.id)} devices={devices} api={api} onRootAdded={handleWorkbenchRootAdded} onRootRemoved={handleWorkbenchRootRemoved} onUnauthorized={onUnauthorized} renderHouseholdProgram={isNarrowWorkbench} removalRequest={workbenchRemovalRequest} onProgramChange={updateWorkbenchProgram} onClose={() => { onWorkbenchClose?.(); onWorkbenchChange?.(null); setPicker(null); }} />;
+  if (pickerSource) return <SourceWorkbench source={pickerSource} roots={roots.filter(root => root.sourceId === pickerSource.id)} devices={devices} api={api} onRootAdded={handleWorkbenchRootAdded} onRootRemoved={handleWorkbenchRootRemoved} onUnauthorized={onUnauthorized} renderHouseholdProgram={isNarrowWorkbench} removalRequest={workbenchRemovalRequest} onProgramChange={updateWorkbenchProgram} onClose={() => { onWorkbenchClose?.(); onWorkbenchChange?.(null); setPicker(null); }} />;
 
   return <VStack as="section" gap={5}>
     <PageHeader context="Cloud library" title="Sources" description="Connect accounts, browse folders live, and expose only the folders you approve." action={<HStack gap={2} wrap="wrap"><Button label="Connect Google Drive" variant="secondary" icon={<Icon icon={CloudIcon} />} onClick={() => void onAuthorize("google")} /><Button label="Connect OneDrive" variant="primary" icon={<Icon icon={CloudIcon} />} onClick={() => void onAuthorize("onedrive")} /></HStack>} />

@@ -1,47 +1,22 @@
 @font-face {
-  font-family: "Cloudframe Sans";
+  font-family: "Instrument Sans Variable";
   src: url("../../../../node_modules/@fontsource-variable/instrument-sans/files/instrument-sans-latin-wght-normal.woff2") format("woff2");
   font-weight: 400 700;
   font-style: normal;
   font-display: swap;
 }
 
-@font-face {
-  font-family: "Cloudframe Condensed";
-  src: url("../../../../node_modules/@fontsource-variable/archivo-narrow/files/archivo-narrow-latin-wght-normal.woff2") format("woff2");
-  font-weight: 400 700;
-  font-style: normal;
-  font-display: swap;
-}
-
 :root {
-  font-family: "Cloudframe Sans", "Segoe UI", sans-serif;
-  --projection: #070705;
-  --projection-deep: #030302;
-  --stock: #d9ccb2;
-  --stock-bright: #f0e3c8;
-  --stock-dim: #988d79;
-  --ink: #f2eadc;
-  --ink-dark: #211c15;
-  --ash: #aaa396;
-  --metal: #45423b;
-  --metal-soft: #292823;
-  --hairline: rgba(224, 211, 185, .22);
-  --cue: #ed6b2c;
-  --cue-bright: #ff8a45;
-  --cue-soft: rgba(237, 107, 44, .22);
-  --danger: #f08b72;
-  --safe-x: 54px;
-  --safe-y: 36px;
-  --radius-card: 13px;
-  --focus-ring: 4px solid var(--cue-bright);
-  background: var(--projection);
-  color: var(--ink);
+  font-family: var(--font-family-body);
+  --safe-x: var(--spacing-10);
+  --safe-y: var(--spacing-8);
+  background: var(--color-background-body);
+  color: var(--color-text-primary);
 }
 
 * { box-sizing: border-box; }
 html, body, #app { min-width: 100%; min-height: 100%; margin: 0; }
-body { overflow: hidden; background: var(--projection); color: var(--ink); }
-body::selection { background: var(--cue); color: var(--projection); }
+body { overflow: hidden; background: var(--color-background-body); color: var(--color-text-primary); }
+::selection { background: var(--color-accent); color: var(--color-on-accent); }
 button, input { font: inherit; }
 button { color: inherit; }

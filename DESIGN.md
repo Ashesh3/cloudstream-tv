@@ -1,216 +1,198 @@
 ---
-name: Cloudframe Screening Room Ledger
-description: A private household media system staged as a projection-booth program and ledger.
+name: Cloudframe Night
+description: A quiet, dark Astryx interface for private household media administration and television browsing.
 colors:
-  admin-projection: "#101112"
-  tv-projection: "#070705"
-  projection-deep: "#030302"
-  program-stock: "#d9ccb2"
-  program-stock-bright: "#f0e3c8"
-  program-stock-dim: "#988d79"
-  cue: "#ed6b2c"
-  cue-bright: "#ff8a45"
-  metal: "#45423b"
-  metal-soft: "#292823"
-  hairline: "rgba(224, 211, 185, .22)"
-  danger: "#f08b72"
+  body: "#0F1217"
+  surface: "#181C22"
+  card: "#171B21"
+  muted: "#13171D"
+  accent: "#62AFFF"
+  accent-muted: "#17324F"
+  text-primary: "#F4F1EA"
+  text-secondary: "#AAB4C2"
+  focus: "#8BC4FF"
 typography:
-  display:
-    fontFamily: "Cloudframe Condensed, Archivo Narrow Variable, Arial Narrow, sans-serif"
-    fontSize: "clamp(3.5rem, 7vw, 6rem)"
-    fontWeight: 650
-    lineHeight: 0.86
-    letterSpacing: "-0.035em"
   body:
-    fontFamily: "Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif"
-    fontSize: "1rem"
-    fontWeight: 400
-    lineHeight: 1.5
-    letterSpacing: "normal"
-  label:
-    fontFamily: "Cloudframe Sans, Instrument Sans Variable, Segoe UI, sans-serif"
-    fontSize: "0.75rem"
-    fontWeight: 700
-    lineHeight: 1.2
-    letterSpacing: "0.08em"
+    fontFamily: "Instrument Sans Variable, Segoe UI Variable, Segoe UI, sans-serif"
+    fontSize: "0.9375rem"
+  heading:
+    fontFamily: "Instrument Sans Variable, Segoe UI Variable, Segoe UI, sans-serif"
+    fontSize: "1.125rem"
+  scale:
+    supporting: "0.75rem"
+    body: "0.9375rem"
+    heading: "1.125rem"
+    title: "1.625rem"
+    display: "3.625rem"
 rounded:
-  square: "0"
-  admin-control: "0.125rem"
-  admin-panel: "0.25rem"
-  tv-card: "13px"
-spacing:
-  admin-control-height: "44px"
-  tv-control-height: "58px"
-  admin-gutter: "1rem"
-  tv-safe-x: "54px"
-  tv-safe-y: "36px"
-  tv-grid-gap: "20px"
-components:
-  button-primary:
-    backgroundColor: "{colors.cue}"
-    textColor: "{colors.projection-deep}"
-    rounded: "{rounded.square}"
-    padding: "0 30px"
-    height: "{spacing.tv-control-height}"
-  button-secondary:
-    backgroundColor: "{colors.tv-projection}"
-    textColor: "{colors.program-stock}"
-    rounded: "{rounded.square}"
-    padding: "0 14px"
-    height: "42px"
-  input-program:
-    backgroundColor: "{colors.program-stock-bright}"
-    textColor: "{colors.projection-deep}"
-    rounded: "{rounded.square}"
-    padding: "0 18px"
-    height: "{spacing.tv-control-height}"
-  card-tv:
-    backgroundColor: "{colors.metal-soft}"
-    textColor: "{colors.program-stock}"
-    rounded: "{rounded.tv-card}"
-    padding: "0"
-    height: "178px"
+  inner: "4px"
+  element: "8px"
+  container: "12px"
+  page: "28px"
+  full: "9999px"
 ---
+
+# Cloudframe Night
+
+Cloudframe uses one Astryx-based visual system across the household administrator and television applications. Graphite planes keep attention on private household media; warm-white content maintains long-distance legibility; cloud blue is reserved for focus, selection, and committed action. Success, warning, and error colors communicate real operational state only.
 
 ## Overview
 
-**Creative North Star: "Screening Room Ledger."** Cloudframe programs household media like a private screening, not a generic SaaS dashboard. Projection black carries the room; warm program stock carries the household's approved selection; a single cue orange marks action, motion, and attention. The result should feel like a precise projection-booth cue sheet that still makes live-source, access, local-storage, and transcoder truth easy to read.
+**Creative North Star: "Cloudframe Night"**
 
-The visual story follows the runtime truth: encrypted local SQLite under `/data` is the household control ledger, live read-only Google Drive and OneDrive metadata supplies the program, browser-side authenticated direct delivery handles compatible media, and FFmpeg demand-paged HLS handles incompatible video for one active TV transcode. Local TV watch history never appears as a server-side admin fact. The interface must distinguish direct delivery, local transcode cache use, busy state, and explicit backup truth without exposing provider credentials or internal capabilities.
-
-The admin surface keeps the visible source truth above quiet navigation, then places the live provider stage beside the household program so a folder's move into the program remains legible. The TV surface enlarges the same hierarchy for a remote and viewing distance: collection first, program status attached, chrome only when it serves the moment. The locally generated program-stock raster supplies paper fiber, registration marks, perforation dots, and sparse cue geometry without becoming a decorative background.
+Cloudframe is a calm, high-contrast household media interface. Graphite planes recede, warm-white content leads, and cloud blue marks focus, selection, and committed action without competing with the media.
 
 **Key Characteristics:**
 
-- Projection black and warm stock create the two dominant planes.
-- Cue orange is reserved for a decision, active state, progress, or focus.
-- Hairline seams and ledger type describe state before another container does.
-- Truth stays attached to its source, program entry, collection, local-storage record, or transcoder path.
-- Admin and television use one world at their own scale rather than mimicking each other.
+- One coherent dark system across administrator and television.
+- Rows for dense administrative records; cards only for standalone widgets and media tiles.
+- Live provider browsing and approved-root truth without indexing or quota fiction.
+- Unmistakable television focus without changing remote navigation order.
+- Product-specific media and focus engines remain authoritative.
+
+### Product truth
+
+- Cloudframe is a private, single-household cloud-media browser.
+- Google Drive and OneDrive folders are browsed live; there is no crawl or indexing workflow.
+- Only administrator-approved roots reach approved televisions.
+- Control state is encrypted local SQLite under `/data` with explicit backup responsibility.
+- Compatible media uses browser-side authenticated direct delivery; incompatible video may use demand-paged FFmpeg HLS with one active TV transcode.
+- Local watch history stays browser-only.
 
 ## Colors
 
-The palette is a restrained projection booth: almost-black room, tactile stock, ash and metal neutrals, and one warm cue signal.
+The shared `cloudframe-night` theme owns the palette. Application CSS consumes semantic Astryx tokens and never redefines `--color-*` values.
 
-### Primary
+### Neutral planes
 
-- **Cue Orange:** Marks primary action, selected movement into the household program, provider loading, progress, and the few structural registration details that need attention.
+- **Graphite Body** (#0F1217): the page and television canvas.
+- **Graphite Surface** (#181C22): primary working planes and state surfaces.
+- **Media Card** (#171B21): standalone widgets and media tiles.
+- **Warm White** (#F4F1EA): primary content.
+- **Cool Secondary** (#AAB4C2): supporting content and metadata.
 
-### Secondary
+### Cloud accent
 
-- **Program Stock:** Carries the selected household program, enrollment panels, source-workbench planes, and other moments where household material should come forward from the dark room.
-- **Bright Stock:** Keeps display type and focused media legible against the projection field.
-
-### Tertiary
-
-- **Metal and Ash:** Separate inactive media, structural tracks, and secondary facts without competing with the cue.
-- **Danger Coral:** Identifies blocked, exhausted, failed, and destructive states truthfully.
-
-### Neutral
-
-- **Admin Projection and TV Projection:** Ground the respective operating and living-room surfaces in near black.
-- **Projection Deep:** Holds fullscreen viewing and the deepest receding plane.
-- **Hairline:** Divides ledger rows, frames, and panels with an optical seam instead of heavy boxing.
-
-### Named Rules
-
-**The Single Cue Rule.** Cue orange carries a reason to act or orient; it is not a general decoration or a competing surface color.
-
-**The Stock Means Selected Rule.** Warm stock signals the household program, a local-storage or backup panel, or a deliberate reading surface—not an arbitrary card fill.
+- **Cloud Blue** (#62AFFF): selection and committed action.
+- **Cloud Blue Muted** (#17324F): selected or informative surfaces.
+- **Focus Blue** (#8BC4FF): the visible focus outline.
 
 ## Typography
 
-**Display Font:** Cloudframe Condensed / Archivo Narrow Variable (with Arial Narrow fallback)
+**Body Font:** Instrument Sans Variable (with Segoe UI Variable, Segoe UI, and system sans-serif fallbacks)
 
-**Body Font:** Cloudframe Sans / Instrument Sans Variable (with Segoe UI fallback)
+**Display Font:** Instrument Sans Variable (with Segoe UI Variable, Segoe UI, and system sans-serif fallbacks)
 
-**Character:** Condensed all-caps headings give the program its printed, cinematic authority; the sans remains calm and direct for source names, backup and transcoder language, and long-running household administration. Counts, timestamps, and status measures use tabular figures.
+**Character:** Neutral and highly legible at phone, desktop, and living-room distances. Hierarchy comes from weight and spacing rather than decorative type.
 
 ### Hierarchy
 
-- **Display:** Uppercase, tightly led ledger titles, projection titles, state panels, and collection names.
-- **Headline:** Large condensed program language that can hold the screen without adding visual noise.
-- **Title:** Condensed section labels for rows, drawers, and cards where the item name is the primary read.
-- **Body:** Plain sans explanation for provider state, root access, backup direction, transcoder state, and form help.
-- **Label:** Compact uppercase sans with tracking for rails, counts, and structural annotations.
-
-### Named Rules
-
-**The Ledger Read Rule.** Use the condensed face for what the room is screening; use the sans for what the household needs to understand and act on.
+- **Display** (Instrument Sans Variable, semibold): television state and collection headings.
+- **Heading** (Instrument Sans Variable, semibold): page and section leads.
+- **Body** (Instrument Sans Variable, regular): instructions and operational content.
+- **Supporting** (Instrument Sans Variable, regular): metadata and secondary guidance.
 
 ## Layout
 
-Admin is a two-plane operating composition. Source connection, encrypted local-storage, and transcoder truth stay visible at the top; the source workbench then gives roughly two-thirds of its stage to live provider folders and one-third to the household program. The program is the consequence of browsing, not a disconnected settings list. Hairline seams, shared edges, and a short taskbar create the ledger without a stack of floating cards.
+One outer frame owns every surface. Admin uses `AppShell` and one page `Layout`; television views keep explicit remote-navigation geometry inside Astryx structural primitives. Interior rhythm uses the Astryx spacing scale, while only frame and device geometry may use structural dimensions.
 
-At narrower admin widths, the truth strip, figures, source planes, device ledger, and settings grid collapse to one readable sequence. The active source-health strip remains near the work without obscuring its contents. Standard admin controls maintain the touch-ready control height.
+- Wide Admin uses persistent `SideNav`; phone and narrow-tablet Admin use `MobileNav`.
+- Requests, devices, sources, provider folders, and selected household folders render as row collections.
+- The source workbench is a two-plane desktop layout and sequential full-width mobile flow.
+- TV collections and media use spacious fixed navigation geometry without changing deterministic IDs or order.
 
-TV is laid out for the living room: safe inset gutters frame an oversized program projection, collection rows use generous gaps and remote-scale cards, and focus lifts one item without rearranging the row. The projection favors a broad visual field with a smaller program ledger alongside it; short screens reduce the stage and type together, while the largest displays expand safe insets and program scale.
+## Elevation
 
-## Elevation & Depth
+Elevation communicates focus or a temporary layer, never decoration. Resting interfaces remain predominantly flat.
 
-Depth comes primarily from tonal planes, stock-versus-projection contrast, image opacity, and hairline registration frames. The admin ledger stays largely flat; its one deliberate lift is the cue-backed primary action. Television cards and drawers use deeper shadows because focus, remote movement, and fullscreen overlays need a clear foreground plane. Motion is short and one-axis: selected program rows cue in from the side, focused cards scale slightly, and video controls rise into view. Reduced-motion mode resolves these state changes immediately.
-
-### Shadow Vocabulary
-
-- **Cue action lift:** A restrained warm shadow under the primary admin action.
-- **Focused TV card:** A deep black lift plus cue-colored focus halo makes the remote target unmistakable.
-- **Drawer and modal lift:** Dense projection shadow separates temporary access, backup, and diagnostic surfaces from the current program.
-
-### Named Rules
-
-**The Plane Before Panel Rule.** Establish hierarchy with brightness, material, and depth before introducing another boxed container.
+- **Low shadow** (`0 1px 1px rgba(0, 0, 0, 0.20), 0 2px 8px rgba(0, 0, 0, 0.20)`): standalone widgets and media tiles.
+- **High shadow** (`0 2px 2px rgba(0, 0, 0, 0.20), 0 8px 24px rgba(0, 0, 0, 0.30)`): focused TV cards and temporary layers.
 
 ## Shapes
 
-The system is square by default: ledger entries, inputs, controls, badges where practical, cue frames, and program rails rely on straight edges and hairlines. Admin panels may use only the small control and panel rounding already in the system; TV media cards are the intentional exception, with a restrained soft corner that helps remote focus read as a discrete target. Recurring geometry is functional—corner crops, crosshairs, registration frames, and rotated cue diamonds—never free-floating ornament.
+Use moderate Astryx radii. Containers use the container radius, controls use the element radius, and pills are reserved for count, token, or progress affordances. The four-pixel focus outline remains outside component geometry so focus never reflows a grid.
 
 ## Components
 
-### Buttons
+### Admin Frame
 
-- **Character:** Direct cue marks for committed actions; quiet outlined controls for navigation and secondary tasks.
-- **Primary:** Cue orange fills the action while deep projection text keeps it crisp. TV enrollment and recovery-from-error actions use the taller remote-scale version; admin controls retain the compact touch-ready version.
-- **Secondary / Ghost:** Projection or transparent backgrounds, stock text, and hairline borders let the primary cue remain rare.
-- **Hover / Focus:** Keep the silhouette stable; visible focus uses the bright cue ring and a clear offset. Disabled actions dim without hiding their label.
+`AppShell`, `Layout`, `SideNav`, and generated `MobileNav` provide one responsive frame for Requests, Devices, Sources, and Settings.
 
-### Cards / Containers
+### Dense Record
 
-- **Character:** Shared-edge ledger rows in administration; discrete metal cards for television collections.
-- **Admin:** Use hairline seams, flat dark panels, and zero-to-small rounding. The source workbench is a framed live stage rather than a conventional dashboard card.
-- **TV:** Use the TV-card shape, subdued opacity at rest, and a bright cue focus treatment that adds depth without changing navigation order.
+`List` and `ListItem` render administrative records and live provider folders as rows with dividers. Do not wrap each row in a Card.
 
-### Inputs / Fields
+### Operational Status
 
-- **Character:** Warm stock reading surfaces on television, dark projection fields in administration.
-- **Focus:** Bright cue focus remains exterior to the field, preserving the field's simple rectangular form.
-- **Error / Disabled:** Failure copy and blocked state use the danger role; disabled controls recede but remain readable.
-
-### Navigation
-
-- **Admin:** Navigation is quiet and structural so source truth, live browsing, and the household program lead the page.
-- **TV:** The compact header carries brand, breadcrumb, and source access; the source drawer switches to stock for a readable alternate plane. Remote focus, rather than persistent controls, signals the current action.
+`StatusDot`, `Token`, `Banner`, and `ProgressBar` communicate real source, access, mutation, and transcoder state. `Badge` communicates counts only.
 
 ### Source Workbench
 
-**Character:** A live provider stage and a fixed household program on one continuous ledger. Provider folders are browsed live on the dark stage; selected roots enter the stock program plane with their access state and television impact still attached. The header's horizontal rule, rotated cue diamond, and program count make the movement directional without simulating a dashboard job system.
+The live provider browser stays in layout rather than becoming a dialog. It preserves abort-on-navigation, stale-result rejection, optimistic add/remove, impact confirmation, Escape close, and trigger-focus restoration.
 
-### Program Projection
+### TV Collection Card
 
-**Character:** The TV's oversized first read. Collection imagery or stock art fills the projection field while the adjacent program ledger names availability, count, and playback status. Ready, loading, provider-failed, storage-disabled, and revoked states remain visibly distinct; loading uses a pulsing cue, while blocked uses danger rather than a falsely empty collection.
+One native button remains the remote-navigation authority while Cloudframe Night tokens and Astryx structural primitives own presentation.
+
+### TV Collection Drawer
+
+The full-height chooser keeps deterministic first focus, directional movement, Back dismissal, modal background blocking, and exact focus restoration.
+
+### Media Viewer
+
+Cloudframe Night presentation surrounds the existing viewer reducer, direct-media bridge, HLS lifecycle, Video.js/native fallback hierarchy, and capture-phase remote controls.
 
 ## Do's and Don'ts
 
-### Do:
+### Do
 
-- **Do** keep provider, root-access, local-storage, and transcoder truth adjacent to the source or household program entry it describes.
-- **Do** use the real program-stock material only as a purposeful selected or reading plane, with its cue geometry quiet enough for the information to lead.
-- **Do** preserve the admin relationship of visible source truth, live provider stage, and household program.
-- **Do** preserve television-scale type, safe insets, and an unmistakable focused card for remote operation.
-- **Do** use reduced-motion fallbacks for all cue, focus, drawer, and status movement.
+- Use household, collection, folder, source, television, local storage, playback, and transcoder language.
+- Keep every operational state distinct and adjacent to the object it affects.
+- Use component props first and semantic Astryx tokens second.
+- Preserve visible focus, complete reduced-motion behavior, and one focus authority per TV surface.
+- Keep provider credentials, URLs, sealed handles, tokens, internal IDs, and raw infrastructure errors private.
 
-### Don't:
+### Don't
 
-- **Don't** collapse provider-loading, provider-empty, provider-failed, storage-disabled, revoked, and healthy states into one generic empty presentation.
-- **Don't** spend cue orange on inactive decoration, broad backgrounds, or multiple competing actions.
-- **Don't** replace the program relationship with generic SaaS metrics, floating dashboard cards, or an unrelated streaming clone.
-- **Don't** allow manual-only TV controls to take initial or automatic remote focus.
+- Do not use projection-booth, screening-room, program-stock, quota, or fabricated readiness language, and do not imply an indexing workflow exists.
+- Do not add popover-dependent controls to the Chromium 108 television path.
+- Do not turn dense records into card stacks or badges into status labels.
+- Do not redefine the application palette outside the shared theme.
+- Do not replace the product-specific media or remote-focus engines with decorative abstractions.
+
+## Implementation notes
+
+- Theme: `cloudframe-night`, extending Astryx Neutral.
+- Typography: Instrument Sans Variable for body and headings, with system fallbacks.
+- Geometry: moderate Astryx radii; cards are reserved for standalone widgets and media tiles.
+- Focus: a high-contrast blue outline and lift that never changes navigation order.
+- Motion: short, purposeful transitions with reduced-motion alternatives.
+- Styling: component props first, semantic Astryx tokens second; no application-owned palette overrides.
+
+### Administrator
+
+- `AppShell`, `SideNav`, `MobileNav`, and one page `Layout` own the frame.
+- Requests, devices, sources, provider folders, and selected household folders are dense row collections, not card stacks.
+- Badge communicates counts only. Status uses StatusDot, Token, Banner, Field status, and ProgressBar.
+- Settings is one ordered scroll surface: defaults, current household truth, transcoder diagnostics, passphrase rotation, and sign-out.
+- Committed mutations update local state immediately, close task UI, and perform one background refresh. A failed refresh produces a recovery warning without undoing the mutation.
+
+### Television
+
+- The target is webOS TV 24 with Chromium 108 and a dark-only compatibility stylesheet.
+- State screens are calm, centered household surfaces with remote-scale controls.
+- Collection and media tiles keep one native button as the remote-navigation authority while using Cloudframe Night tokens and Astryx structural primitives.
+- The source chooser remains an explicit modal drawer with deterministic first focus, directional movement, Back dismissal, and exact focus restoration.
+- The viewer preserves the product-specific reducer, direct-media bridge, HLS lifecycle, capture-phase remote keys, and Video.js/native fallback hierarchy.
+- Loading, provider failure, no roots, empty folder, pagination failure, viewer failure, and transcode-busy remain distinct.
+
+### Language
+
+Use household, collection, folder, source, television, local storage, playback, and transcoder. Do not use projection-booth, screening-room, program-stock, quota, or fabricated readiness language, and do not imply an indexing workflow exists.
+
+### Accessibility and privacy
+
+- Every interactive control has an accessible name and visible focus.
+- Remote-only manual controls do not take automatic grid focus.
+- Dialogs and drawers trap or explicitly manage focus and restore the opener.
+- Provider credentials, URLs, sealed handles, tokens, internal IDs, and raw infrastructure errors never appear in user-facing copy.

@@ -48,6 +48,7 @@ export function SourceWorkbench({ source, roots, devices = [], api, onRootAdded,
   const impactRequest = useRef<{ generation: number; rootId: string | null }>({ generation: 0, rootId: null });
   const handledRemovalGeneration = useRef<number | null>(null);
   const removalTrigger = useRef<HTMLElement | null>(null);
+  const removalCancel = useRef<HTMLButtonElement | null>(null);
   const reviewRemoval = useCallback(async (root: ProgramRoot) => {
     const generation = impactRequest.current.generation + 1;
     impactRequest.current = { generation, rootId: root.id };
@@ -71,6 +72,11 @@ export function SourceWorkbench({ source, roots, devices = [], api, onRootAdded,
   }, [removalRequest, reviewRemoval]);
   useEffect(() => () => { impactRequest.current = { generation: impactRequest.current.generation + 1, rootId: null }; }, []);
   useEffect(() => { const timer = window.setTimeout(() => workbenchRef.current?.querySelector<HTMLElement>("[data-autofocus]")?.focus()); return () => window.clearTimeout(timer); }, []);
+  useEffect(() => {
+    if (!removeOpen || !impact) return;
+    const timer = window.setTimeout(() => removalCancel.current?.focus());
+    return () => window.clearTimeout(timer);
+  }, [impact, removeOpen]);
 
   const invalidateImpactRequest = () => { impactRequest.current = { generation: impactRequest.current.generation + 1, rootId: null }; };
   const closeRemoval = () => { if (pending) return; invalidateImpactRequest(); setRemoveOpen(false); };
@@ -149,7 +155,7 @@ export function SourceWorkbench({ source, roots, devices = [], api, onRootAdded,
             {error && <Banner status="error" title="Removal impact unavailable" description={error} container="section" />}
           </VStack>
         </LayoutContent>}
-        footer={<LayoutFooter hasDivider><HStack gap={2} justify="end" wrap="wrap"><Button label="Cancel" variant="secondary" isDisabled={pending} onClick={closeRemoval} /><Button label={`Remove ${removeRoot.displayName}`} variant="destructive" isDisabled={!impact || pending} isLoading={pending} onClick={() => void remove()} /></HStack></LayoutFooter>}
+        footer={<LayoutFooter hasDivider><HStack gap={2} justify="end" wrap="wrap"><Button ref={removalCancel} label="Cancel" variant="secondary" isDisabled={pending} onClick={closeRemoval} /><Button label={`Remove ${removeRoot.displayName}`} variant="destructive" isDisabled={!impact || pending} isLoading={pending} onClick={() => void remove()} /></HStack></LayoutFooter>}
       />
     </Dialog>}
   </>;
