@@ -92,7 +92,7 @@ export function VideoPlayer(props: VideoPlayerProps) {
   }, [props.videoRef]);
 
   return (
-    <div className="video-stage">
+    <section className="video-stage">
       <video-player className="cloudframe-video-player">
         <video-skin className="cloudframe-video-skin">
           {readyUrl ? (
@@ -119,11 +119,11 @@ export function VideoPlayer(props: VideoPlayerProps) {
               onEnded={event => props.onEnded(event.currentTarget)}
               onError={event => { if (!hlsOwnsElementErrors.current) props.onError(event.currentTarget); }}
             />
-          ) : <div className="viewer-loading" role="status">Preparing video…</div>}
+          ) : <section className="viewer-loading cloudframe-viewer-loading" role="status">Preparing video…</section>}
         </video-skin>
       </video-player>
       {videoJsReady !== true ? (
-        <div className={`video-controls${props.controlsVisible ? " is-visible" : ""}`} aria-hidden={!props.controlsVisible}>
+        <section className={`video-controls cloudframe-video-controls${props.controlsVisible ? " is-visible" : ""}`} aria-hidden={!props.controlsVisible}>
           <span>{props.buffering ? "Buffering…" : "Play / Pause"}</span>
           <span>−10s</span>
           <time>{formatTime(props.currentSeconds)} / {formatTime(props.durationSeconds)}</time>
@@ -131,9 +131,9 @@ export function VideoPlayer(props: VideoPlayerProps) {
           <span className="buffered-track" role="progressbar" aria-label="Buffered" aria-valuemin={0} aria-valuemax={100} aria-valuenow={props.bufferedPercent}>
             <i style={{ width: `${props.bufferedPercent}%` }} />
           </span>
-        </div>
+        </section>
       ) : null}
-    </div>
+    </section>
   );
 }
 

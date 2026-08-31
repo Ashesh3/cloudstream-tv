@@ -45,4 +45,17 @@ describe("TV Astryx structure", () => {
     expect(migrated).not.toMatch(/program-stock|screening program|program projection|projection-(?:stock|cue|vignette|image)/i);
     expect(migrated).not.toMatch(/#[\da-f]{3,8}\b/i);
   });
+
+  it("keeps the viewer on the layer-free TV media engine with Cloudframe Night presentation", async () => {
+    const viewer = await readFile("apps/tv/src/components/viewer.tsx", "utf8");
+    const overlay = await readFile("apps/tv/src/components/viewer-overlay.tsx", "utf8");
+    const player = await readFile("apps/tv/src/components/video-player.tsx", "utf8");
+    const source = [viewer, overlay, player].join("\n");
+    expect(viewer).toContain("cloudframe-viewer-shell");
+    expect(viewer).toContain("Item {state.index + 1}");
+    expect(overlay).toContain("Now viewing");
+    expect(player).toContain("video-player");
+    expect(player).toContain("video-skin");
+    expect(source).not.toMatch(/Lightbox|ButtonGroup|Popover|Tooltip|Now screening|Program \{state\.index/i);
+  });
 });

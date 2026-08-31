@@ -7,6 +7,6 @@ export function ImageViewer({ item, url, previewUrl, onError }: {
   onError: () => void;
 }) {
   const source = url?.status === "ready" ? url.url : previewUrl;
-  if (!source) return <div className="viewer-loading" role="status">Preparing image…</div>;
+  if (!source) return <section className="viewer-loading cloudframe-viewer-loading" role="status">Preparing image…</section>;
   return <img className="viewer-image" src={source} alt={item.name} onError={onError} referrerPolicy="no-referrer" />;
 }

@@ -43,6 +43,39 @@ describe("unified TV viewer", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    ["image" as const, "item_image_1", "Preparing image…"],
+    ["video" as const, "item_video_1", "Preparing video…"],
+  ])("presents the %s loading state with Cloudframe Night status styling", async (_kind, selectedItemId, copy) => {
+    const api = viewerApi();
+    const pending = deferred<DirectMediaUrlResponse>();
+    vi.mocked(api.mediaUrl).mockImplementation(handle => handle === `sealed-${selectedItemId}`
+      ? pending.promise
+      : Promise.resolve(mediaResponse(handle)));
+
+    const { container } = render(<TestViewer history={viewerHistory()} api={api}
+      items={items} selectedItemId={selectedItemId} slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent(copy);
+    expect(status).toHaveClass("cloudframe-viewer-loading");
+    expect(container.querySelector(".cloudframe-viewer-shell")).toBeInTheDocument();
+  });
+
+  it("presents Cloudframe Night top-line copy without the retired screening-room voice", async () => {
+    const { container } = render(<TestViewer history={viewerHistory()} api={viewerApi()}
+      items={items} selectedItemId="item_image_1" slideshowSeconds={8}
+      previews={{}} onClose={() => undefined} />);
+
+    await screen.findByRole("img", { name: "First.jpg" });
+    const topLine = container.querySelector(".cloudframe-viewer-topline");
+    expect(topLine).toHaveTextContent("Item 1 / 3");
+    expect(topLine).toHaveTextContent("First.jpg");
+    expect(topLine).toHaveTextContent("Up: details · Back: collection");
+    expect(topLine).not.toHaveTextContent(/program|screening|projection|booth/i);
+  });
+
   it("prepares Google video before assigning the raw Drive URL", async () => {
     const bridge = fakeGoogleMediaBridge();
     const api = viewerApi();
@@ -93,6 +126,7 @@ describe("unified TV viewer", () => {
       previews={{}} onClose={() => undefined} />);
 
     expect(await screen.findByRole("heading", { name: "Direct Google playback is unavailable on this browser" })).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveClass("cloudframe-viewer-error");
     expect(document.body.innerHTML).not.toContain("ya29.test-token");
     expect(screen.queryByRole("button", { name: "Try fresh URL" })).not.toBeInTheDocument();
   });
@@ -116,6 +150,7 @@ describe("unified TV viewer", () => {
     fireEvent.error(video);
 
     expect(await screen.findByRole("heading", { name: title })).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveClass("cloudframe-viewer-error");
     expect(screen.queryByRole("button", { name: "Try fresh URL" })).not.toBeInTheDocument();
   });
 
@@ -152,6 +187,7 @@ describe("unified TV viewer", () => {
     fireEvent.error(video);
 
     expect(await screen.findByRole("heading", { name: title })).toBeVisible();
+    expect(screen.getByRole("alert")).toHaveClass("cloudframe-viewer-error");
     expect(screen.queryByRole("button", { name: "Try fresh URL" })).not.toBeInTheDocument();
   });
 
@@ -445,8 +481,8 @@ describe("unified TV viewer", () => {
     const details = screen.getByRole("dialog", { name: "Media details" });
     expect(details).toBeVisible();
     const title = screen.getByRole("heading", { name: "First.jpg" });
-    const screening = screen.getByText("Now screening · Still");
-    expect(title.compareDocumentPosition(screening) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const viewing = screen.getByText("Now viewing · Photo");
+    expect(title.compareDocumentPosition(viewing) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     fireEvent.keyDown(window, { key: "Escape" });
     expect(screen.queryByRole("dialog", { name: "Media details" })).not.toBeInTheDocument();
     expect(closed).not.toHaveBeenCalled();

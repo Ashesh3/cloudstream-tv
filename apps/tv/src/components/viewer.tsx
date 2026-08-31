@@ -534,16 +534,15 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
   const historyEntry = history.get(active.id);
   const historyResume = historyEntry?.completed ? 0 : historyEntry?.positionSeconds ?? 0;
   return (
-    <section className="viewer-shell" aria-label="Media viewer" data-media-kind={active.kind}>
-      <span className="viewer-frame-corners" aria-hidden="true"><i /><i /><b /><b /></span>
-      <div className="viewer-topline">
-        <span>Program {state.index + 1} / {state.items.length}</span>
+    <section className="viewer-shell cloudframe-viewer-shell" aria-label="Media viewer" data-media-kind={active.kind}>
+      <header className="viewer-topline cloudframe-viewer-topline">
+        <span>Item {state.index + 1} / {state.items.length}</span>
         <strong>{active.name}</strong>
         <span>Up: details · Back: collection</span>
-      </div>
+      </header>
       {!historyAvailable ? <p className="viewer-history-status" role="status">Watch progress is unavailable on this TV, but playback will continue.</p> : null}
       {resumeOverrides[active.id] ? <span className="viewer-resume-note">Resuming at {formatResume(resumeOverrides[active.id]!)}</span> : null}
-      <div className="viewer-stage">
+      <section className="viewer-stage">
         {state.mediaError?.kind === "bridge" ? (
           <ViewerError title="Direct Google playback is unavailable on this browser" item={active} body="This TV could not start the direct Google media bridge." />
         ) : state.mediaError?.kind === "transport" ? (
@@ -626,21 +625,21 @@ export function Viewer({ api, googleMedia, history, items, selectedItemId, slide
             }}
           />
         )}
-      </div>
-      <div className="viewer-prefetches" aria-hidden="true">
+      </section>
+      <section className="viewer-prefetches" aria-hidden="true">
         {state.items.map((item, index) => {
           if (item.kind !== "image" || index === state.index || Math.abs(index - state.index) > 1) return null;
           const entry = state.urls[item.id];
           return entry?.status === "ready" && entry.url ? <img className="viewer-prefetch" key={item.id} src={entry.url} alt="" referrerPolicy="no-referrer" /> : null;
         })}
-      </div>
+      </section>
       {state.overlayOpen && <ViewerOverlay items={state.items} activeIndex={state.index} />}
     </section>
   );
 }
 
 function ViewerError({ title, item, body, onRetry }: { title: string; item: ViewerMediaItem; body: string; onRetry?: () => void }) {
-  return <div className="viewer-error" role="alert"><h2>{title}</h2><strong>{item.name}</strong><span>{item.mimeType ?? "Unknown format"}</span><p>{body}</p>{onRetry ? <button type="button" onClick={onRetry}>Try fresh URL</button> : null}</div>;
+  return <section className="viewer-error cloudframe-viewer-error" role="alert"><h2>{title}</h2><strong>{item.name}</strong><span>{item.mimeType ?? "Unknown format"}</span><p>{body}</p>{onRetry ? <button type="button" onClick={onRetry}>Try fresh URL</button> : null}</section>;
 }
 
 function toViewerItem(item: TvBrowseItemDto): ViewerMediaItem {

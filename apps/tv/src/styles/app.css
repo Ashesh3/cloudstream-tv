@@ -268,3 +268,22 @@
 .cloudframe-empty-folder h2 { color: var(--color-text-primary); font-family: var(--font-family-heading); text-transform: none; }
 .cloudframe-empty-folder p { color: var(--color-text-secondary); }
 .cloudframe-projection-skeleton span, .skeleton-grid span { border-radius: var(--radius-container); background: var(--color-skeleton); }
+.cloudframe-viewer-shell { background: var(--color-background-body); color: var(--color-text-primary); }
+.cloudframe-viewer-shell::before, .cloudframe-viewer-shell .viewer-frame-corners { display: none; }
+.cloudframe-viewer-topline { background: linear-gradient(180deg, var(--color-background-body), transparent); color: var(--color-text-secondary); }
+.cloudframe-viewer-topline strong { color: var(--color-text-primary); font-family: var(--font-family-heading); letter-spacing: normal; text-transform: none; }
+.cloudframe-viewer-loading { border-color: var(--color-border); border-radius: var(--radius-element); background: var(--color-background-surface); color: var(--color-text-primary); font-family: var(--font-family-heading); letter-spacing: normal; text-transform: none; }
+.cloudframe-video-controls { border-color: var(--color-border); border-radius: var(--radius-container); background: var(--color-background-surface); color: var(--color-text-primary); box-shadow: var(--shadow-high); }
+.cloudframe-video-controls .buffered-track { background: var(--color-track); }
+.cloudframe-video-controls .buffered-track i { background: var(--color-accent); }
+.cloudframe-viewer-overlay { background: linear-gradient(0deg, var(--color-background-body) 0%, var(--color-background-body) 68%, transparent 100%); }
+.cloudframe-viewer-overlay .viewer-details h2 { color: var(--color-text-primary); font-family: var(--font-family-heading); text-transform: none; }
+.cloudframe-viewer-overlay .viewer-details p { color: var(--color-text-accent); letter-spacing: normal; text-transform: none; }
+.cloudframe-viewer-overlay .viewer-details > span { color: var(--color-text-secondary); }
+.cloudframe-viewer-overlay .viewer-filmstrip > span { border-color: var(--color-border); border-radius: var(--radius-element); background: var(--color-background-surface); }
+.cloudframe-viewer-overlay .viewer-filmstrip > span.is-active { border-color: var(--color-accent); background: var(--color-accent-muted); }
+.cloudframe-viewer-error { border-color: var(--color-border-emphasized); border-radius: var(--radius-container); background: var(--color-background-surface); color: var(--color-text-primary); box-shadow: var(--shadow-high); }
+.cloudframe-viewer-error h2 { color: var(--color-text-primary); font-family: var(--font-family-heading); text-transform: none; }
+.cloudframe-viewer-error > span, .cloudframe-viewer-error p { color: var(--color-text-secondary); }
+.cloudframe-viewer-error button { border-radius: var(--radius-element); background: var(--color-accent); color: var(--color-on-accent); }
+.cloudframe-viewer-error button:focus { outline: var(--focus-outline-width) solid var(--focus-outline-color); outline-offset: var(--focus-outline-offset); }
