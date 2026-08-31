@@ -9,6 +9,7 @@
       "import": "./dist/cloudframe-night.js"
     },
     "./cloudframe-night.css": "./dist/cloudframe-night.css",
+    "./cloudframe-night.tv.css": "./dist/cloudframe-night.tv.css",
     "./source": "./src/cloudframe-night.ts"
   },
   "files": [

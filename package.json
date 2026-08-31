@@ -9,8 +9,8 @@
   ],
   "scripts": {
     "build": "npm run build:theme && npm run build -w @cloudframe/tv && npm run build -w @cloudframe/admin && node scripts/build-site.mjs",
-    "build:theme": "astryx theme build packages/theme/src/cloudframe-night.ts --out packages/theme/dist/cloudframe-night.css",
-    "check:theme": "astryx theme build packages/theme/src/cloudframe-night.ts --out packages/theme/dist/cloudframe-night.css --check",
+    "build:theme": "astryx theme build packages/theme/src/cloudframe-night.ts --out packages/theme/dist/cloudframe-night.css && node scripts/build-tv-astryx-css.mjs",
+    "check:theme": "astryx theme build packages/theme/src/cloudframe-night.ts --out packages/theme/dist/cloudframe-night.css --check && node scripts/build-tv-astryx-css.mjs --check",
     "build:e2e": "cross-env CLOUDFRAME_E2E_BUILD=1 npm run build",
     "build:server": "npm run build && node scripts/build-server.mjs",
     "docker:build": "docker build --platform linux/amd64 -t cloudframe:local .",
@@ -45,6 +45,7 @@
     "esbuild": "^0.28.2",
     "eslint": "^9.39.1",
     "jsdom": "^29.0.0",
+    "postcss": "8.5.26",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.46.4",
     "vitest": "^4.1.11",
