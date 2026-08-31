@@ -208,3 +208,36 @@
 @media (max-height: 760px) { :root { --safe-x: 38px; --safe-y: 27px; } .tv-header { height: 72px; } .program-projection { height: 360px; } .projection-copy { padding: 35px 22px 35px 40px; } .projection-copy h1 { font-size: 52px; margin: 12px 0 16px; } .program-card { height: 146px; } .browse-heading { min-height: 88px; padding: 14px 0 11px; } .browse-heading h1 { font-size: 38px; } .card-copy { min-height: 58px; } .state-panel { padding: 49px 58px 42px; } .state-panel h1 { font-size: 44px; } .state-panel > p:not(.state-detail):not(.request-identity), .state-panel section > p { font-size: 17px; } .viewer-overlay { padding-top: 34px; } .viewer-filmstrip { margin-top: 15px; } .viewer-filmstrip > span { width: 125px; min-width: 125px; padding: 9px; } }
 @media (max-width: 900px) { .sources-action kbd, .brand > span:last-child small { display: none; } .tv-header { column-gap: 16px; } .source-drawer { width: 70vw; } .program-projection { grid-template-columns: 56% 44%; } .projection-copy { padding-left: 32px; } }
 @media (max-width: 800px) { .enrollment-steps { display: block; } .enrollment-steps li { width: 100%; padding: 10px 0; } .enrollment-steps li + li { padding-left: 0; border-left: 0; border-top: 1px solid rgba(33, 28, 21, .17); } .enrollment-steps span { display: inline-block; width: 35px; margin: 0; } .enrollment-steps strong { display: inline; } .enrollment-steps small { margin-left: 39px; } }
+
+/* Cloudframe Night migration: state, header, and collection drawer. */
+.cloudframe-state-panel { border-color: var(--color-border-emphasized); border-radius: var(--radius-container); background: var(--color-background-surface); color: var(--color-text-primary); box-shadow: var(--shadow-high); }
+.cloudframe-state-panel::before, .cloudframe-state-panel::after, .cloudframe-state-panel .state-mark { display: none; }
+.cloudframe-state-panel h1 { color: var(--color-text-primary); font-family: var(--font-family-heading); letter-spacing: normal; text-transform: none; }
+.cloudframe-state-panel > p { color: var(--color-text-secondary); }
+.state-context { color: var(--color-text-accent); font-weight: var(--font-weight-semibold); }
+.cloudframe-state-panel .enrollment-steps { border-color: var(--color-border); }
+.cloudframe-state-panel .enrollment-steps li + li { border-color: var(--color-border); }
+.cloudframe-state-panel .enrollment-steps strong { color: var(--color-text-primary); font-family: var(--font-family-heading); text-transform: none; }
+.cloudframe-state-panel .enrollment-steps small { color: var(--color-text-secondary); }
+.cloudframe-state-panel .device-form input { border-color: var(--color-border-emphasized); border-radius: var(--radius-element); background: var(--color-background-muted); color: var(--color-text-primary); }
+.cloudframe-state-panel .device-form label { color: var(--color-text-primary); }
+.cloudframe-state-panel .primary-action { border-radius: var(--radius-element); background: var(--color-accent); color: var(--color-on-accent); }
+.cloudframe-state-panel .primary-action:focus { outline: var(--focus-outline-width) solid var(--focus-outline-color); outline-offset: var(--focus-outline-offset); }
+.waiting-status { padding: var(--spacing-4); border: 1px solid var(--color-border); border-radius: var(--radius-element); background: var(--color-accent-muted); }
+.waiting-status strong { color: var(--color-text-primary); }
+.waiting-status p { color: var(--color-text-secondary); }
+.waiting-indicator { display: block; width: 100%; height: var(--spacing-1); margin-top: var(--spacing-3); border-radius: var(--radius-full); background: var(--color-accent); animation: pulse var(--duration-slow) ease-in-out infinite; }
+.cloudframe-tv-header { border-color: var(--color-border); background: var(--color-background-body); }
+.cloudframe-tv-header .brand, .cloudframe-tv-header .sources-action { border-color: var(--color-border); border-radius: var(--radius-element); background: var(--color-background-surface); color: var(--color-text-primary); font-family: var(--font-family-body); text-transform: none; }
+.cloudframe-tv-header .tv-location { min-width: 0; text-align: center; }
+.cloudframe-tv-header .tv-location strong, .cloudframe-tv-header .tv-location small { display: block; }
+.cloudframe-tv-header .tv-location strong { color: var(--color-text-primary); }
+.cloudframe-tv-header .tv-location small { color: var(--color-text-secondary); }
+.cloudframe-source-drawer { border-color: var(--color-border); background: var(--color-background-surface); color: var(--color-text-primary); box-shadow: var(--shadow-high); }
+.cloudframe-source-drawer header { border-color: var(--color-border); }
+.cloudframe-source-drawer header h2, .cloudframe-source-drawer .drawer-list strong { color: var(--color-text-primary); font-family: var(--font-family-heading); text-transform: none; }
+.cloudframe-source-drawer header p, .cloudframe-source-drawer .drawer-list small { color: var(--color-text-secondary); }
+.cloudframe-source-drawer button { border-radius: var(--radius-element); color: var(--color-text-primary); }
+.cloudframe-source-drawer .drawer-home { border-color: var(--color-border-emphasized); background: var(--color-background-muted); }
+.cloudframe-source-drawer button:focus { outline: var(--focus-outline-width) solid var(--focus-outline-color); outline-offset: var(--focus-outline-offset); background: var(--color-accent-muted); }
+.cloudframe-source-drawer .drawer-list { margin: 0; padding: 0; list-style: none; }

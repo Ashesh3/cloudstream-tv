@@ -39,6 +39,17 @@ describe("source drawer remote focus", () => {
     expect(bubbled).not.toHaveBeenCalled();
   });
 
+  it("keeps Tab movement inside the explicit drawer focus order", async () => {
+    render(<SourceDrawer open roots={roots} onClose={vi.fn()} onHome={vi.fn()} onSelect={vi.fn()} />);
+    const dialog = screen.getByRole("dialog", { name: "Sources" });
+    const buttons = screen.getAllByRole("button");
+    await waitFor(() => expect(buttons[0]).toHaveFocus());
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(buttons[1]).toHaveFocus();
+    fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+    expect(buttons[0]).toHaveFocus();
+  });
+
   it("keeps every returned root selectable and shows only provider account metadata", async () => {
     const select = vi.fn();
     render(<SourceDrawer open roots={roots} onClose={vi.fn()} onHome={vi.fn()} onSelect={select} />);

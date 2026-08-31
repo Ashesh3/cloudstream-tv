@@ -40,13 +40,13 @@ describe("TV enrollment and browse states", () => {
     render(<TvApp api={client} browserSupported />);
     const heading = await screen.findByRole("heading", { name: "Name this TV" });
     expect(heading).toBeVisible();
-    expect(heading.closest(".state-panel")).toHaveAttribute("data-material", "program-stock");
+    expect(heading.closest(".state-panel")).toHaveAttribute("data-material", "cloudframe-night");
     expect(screen.queryByText("Connect this television")).not.toBeInTheDocument();
     expect(screen.queryByText("Cloudframe", { exact: true })).not.toBeInTheDocument();
     expect(document.querySelector(".eyebrow")).not.toBeInTheDocument();
-    expect(screen.getByText("1", { selector: "span" })).toBeVisible();
-    expect(screen.getByText("2", { selector: "span" })).toBeVisible();
-    expect(screen.getByText("3", { selector: "span" })).toBeVisible();
+    expect(screen.getByRole("list", { name: "Connection steps" })).toHaveTextContent("Name the television");
+    expect(screen.getByRole("list", { name: "Connection steps" })).toHaveTextContent("Send the request");
+    expect(screen.getByRole("list", { name: "Connection steps" })).toHaveTextContent("Approve collections");
     expect(screen.getByRole("button", { name: "Request access" })).toBeVisible();
   });
 
@@ -264,8 +264,7 @@ describe("TV enrollment and browse states", () => {
     await flushFakeTimersUntil(() => vi.mocked(client.folder).mock.calls.length === 2);
 
     expect(screen.getByRole("button", { name: /Node 0/ })).toBeVisible();
-    const status = screen.getByRole("status");
-    expect(status).toHaveTextContent("The provider is busy. Try again shortly.");
+    expect(screen.getByText("The provider is busy. Try again shortly.")).toBeVisible();
     const retry = screen.getByRole("button", { name: "Retry loading more items" });
 
     vi.mocked(client.folder).mockResolvedValueOnce(folderPage("root-1", 10, 2, null));
@@ -333,12 +332,12 @@ describe("TV enrollment and browse states", () => {
     const grid = await screen.findByRole("grid", { name: "Parent" });
     await requestNextPage(grid, client, 2);
     await waitFor(() => expect(screen.getByRole("button", { name: /Node 6/ })).toHaveFocus());
-    expect(screen.getByRole("status")).toHaveTextContent("More items could not be loaded. Refresh this collection to try again.");
+    expect(screen.getByText("More items could not be loaded. Refresh this collection to try again.")).toBeVisible();
 
     fireEvent.keyDown(grid, { key: "ArrowDown" });
 
     expect(client.folder).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole("status")).toHaveTextContent("More items could not be loaded. Refresh this collection to try again.");
+    expect(screen.getByText("More items could not be loaded. Refresh this collection to try again.")).toBeVisible();
   });
 
   it("stops an A to B to A cursor cycle without another provider request", async () => {
@@ -356,7 +355,7 @@ describe("TV enrollment and browse states", () => {
     fireEvent.keyDown(grid, { key: "ArrowDown" });
 
     expect(client.folder).toHaveBeenCalledTimes(3);
-    expect(screen.getByRole("status")).toHaveTextContent("More items could not be loaded.");
+    expect(screen.getByText("More items could not be loaded. Refresh this collection to try again.")).toBeVisible();
   });
 
   it("terminates a duplicate-only page while adopting renewed DTOs and preserving focus", async () => {
@@ -377,7 +376,7 @@ describe("TV enrollment and browse states", () => {
     expect(screen.getByRole("button", { name: /Renewed Node 9/ })).toHaveFocus();
     fireEvent.keyDown(grid, { key: "ArrowDown" });
     expect(client.folder).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole("status")).toHaveTextContent("No additional items were returned. Refresh this collection to check again.");
+    expect(screen.getByText("No additional items were returned. Refresh this collection to check again.")).toBeVisible();
   });
 
   it("refreshes home and clears local navigation when a folder handle expires", async () => {

@@ -4,7 +4,7 @@ import { normalizeTvKey, shouldHandleTvKey } from "@cloudframe/tv-core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { tvApi, type TvApi, type TvHomeResponse } from "./api/client";
-import { DeviceRequest, StatePanel } from "./components/device-request";
+import { DeviceRequest, StateAction, StatePanel } from "./components/device-request";
 import { FolderCard } from "./components/folder-card";
 import { MediaCard } from "./components/media-card";
 import { SourceDrawer } from "./components/source-drawer";
@@ -53,14 +53,14 @@ export function TvApp({ api = tvApi, browserSupported = detectBrowserSupport(), 
 }) {
   const session = useTvSession(api, browserSupported);
   if (session.state.status === "unsupported") return <Unsupported />;
-  if (session.state.status === "loading") return <StatePanel title="Opening Cloudframe" body="Preparing your folders…"><div className="skeleton-line" /></StatePanel>;
-  if (session.state.status === "requests-disabled") return <StatePanel title="Device requests are turned off" body="Ask the household administrator to enable new TV requests."><button className="primary-action" onClick={session.refresh}>Try again</button></StatePanel>;
+  if (session.state.status === "loading") return <StatePanel title="Opening Cloudframe" body="Preparing your household collections…" />;
+  if (session.state.status === "requests-disabled") return <StatePanel title="Device requests are turned off" body="Ask the household administrator to enable new TV requests."><StateAction label="Try again" onClick={session.refresh} /></StatePanel>;
   if (session.state.status === "unenrolled") return <DeviceRequest busy={session.requestBusy} error={session.requestError} onSubmit={session.requestAccess} />;
   if (session.state.status === "pending") return <WaitingScreen name={session.state.request.requestedName} expiresAt={session.state.request.expiresAt} />;
   if (session.state.status === "denied") return <TerminalState state="denied" title="Request denied" body="This TV was not approved. You can ask the administrator and try again." onRetry={session.refresh} />;
   if (session.state.status === "expired") return <TerminalState state="expired" title="Request expired" body="The approval window ended. Start a fresh request when you are ready." onRetry={session.refresh} />;
   if (session.state.status === "revoked") return <TerminalState state="revoked" title="TV access removed" body="This device has been disabled or revoked by the administrator." onRetry={session.refresh} />;
-  if (session.state.status === "offline") return <StatePanel title="Cloudframe is offline" body="Check the TV network connection, then retry."><button className="primary-action" onClick={session.refresh}>Retry</button></StatePanel>;
+  if (session.state.status === "offline") return <StatePanel title="Cloudframe is offline" body="Check the TV network connection, then retry."><StateAction label="Retry" onClick={session.refresh} /></StatePanel>;
   if (session.state.status !== "ready") return null;
   const mediaOrder = session.state.device.mediaOrder ?? session.state.household.defaultMediaOrder;
   const slideshowSeconds = session.state.device.slideshowSeconds ?? session.state.household.defaultSlideshowSeconds;
@@ -654,11 +654,11 @@ function ProgramProjection({ program }: { program: TvRootDto }) {
 }
 
 function TerminalState({ state, title, body, onRetry }: { state: string; title: string; body: string; onRetry: () => void }) {
-  return <StatePanel testId={`state-${state}`} title={title} body={body}><button className="primary-action" onClick={onRetry}>Start again</button></StatePanel>;
+  return <StatePanel testId={`state-${state}`} title={title} body={body}><StateAction label="Start again" onClick={onRetry} /></StatePanel>;
 }
 
 function Unsupported() {
-  return <StatePanel title="This TV browser is not supported" body="Cloudframe is configured for webOS TV 24 with Chromium 108."><p className="state-detail">Use the configured household television.</p></StatePanel>;
+  return <StatePanel title="This TV browser is not supported" body="Cloudframe is configured for webOS TV 24 with Chromium 108.">Use the configured household television.</StatePanel>;
 }
 
 function BrowseSkeleton() {
