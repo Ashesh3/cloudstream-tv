@@ -271,11 +271,18 @@ describe("admin snapshot workflows", () => {
   });
 
   it("keeps the live provider workbench in layout with exact immediate-access copy", async () => {
+    expect(window.matchMedia("(max-width: 64rem)").matches).toBe(false);
     await login(api()); go("Sources");
     const trigger = screen.getByRole("button", { name: "Browse & choose folders" }); fireEvent.click(trigger);
     const workbench = await screen.findByRole("region", { name: "Choose source folders" });
     expect(workbench).toHaveTextContent("Browse the provider live. Folders added to the household program are available to assigned televisions immediately.");
     expect(screen.queryByRole("dialog", { name: "Choose source folders" })).not.toBeInTheDocument();
+    const layout = await screen.findByTestId("source-workbench-layout");
+    expect(layout).toBeInTheDocument();
+    expect(screen.getAllByTestId("source-workbench-layout")).toHaveLength(1);
+    expect(layout).toContainElement(workbench);
+    expect(screen.getByTestId("household-program-plane")).toHaveAttribute("role", "complementary");
+    expect(within(screen.getByTestId("household-program-plane")).getByRole("heading", { name: "Household folders" })).toBeVisible();
     fireEvent.keyDown(workbench, { key: "Escape" });
     await waitFor(() => expect(screen.getByRole("button", { name: "Browse & choose folders" })).toHaveFocus());
   });
@@ -294,11 +301,11 @@ describe("admin snapshot workflows", () => {
     const client = api();
     await login(client); go("Sources");
     fireEvent.click(screen.getByRole("button", { name: "Remove Home Drive" }));
-    const dialog = await screen.findByRole("dialog", { name: "Remove source" });
+    const dialog = await screen.findByRole("alertdialog", { name: "Remove source" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove source permanently" }));
     await waitFor(() => expect(client.removeSource).toHaveBeenCalledWith(source.id));
     expect(client.snapshot).toHaveBeenCalledTimes(2);
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove source" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "Remove source" })).not.toBeInTheDocument());
   });
 
   it("preserves source removal and closes confirmation when its snapshot refresh fails", async () => {
@@ -306,9 +313,9 @@ describe("admin snapshot workflows", () => {
     vi.mocked(client.snapshot).mockResolvedValueOnce(snapshot).mockRejectedValueOnce(refreshFailure);
     await login(client); go("Sources");
     fireEvent.click(screen.getByRole("button", { name: "Remove Home Drive" }));
-    fireEvent.click(within(await screen.findByRole("dialog", { name: "Remove source" })).getByRole("button", { name: "Remove source permanently" }));
+    fireEvent.click(within(await screen.findByRole("alertdialog", { name: "Remove source" })).getByRole("button", { name: "Remove source permanently" }));
 
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Remove source" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("alertdialog", { name: "Remove source" })).not.toBeInTheDocument());
     expect(screen.getByText("No cloud sources")).toBeVisible();
     expect(screen.getByText("Source removed. Television access was removed immediately.")).toBeVisible();
     expect(screen.getByText(/Change saved, but household data could not be refreshed/)).toBeVisible();
@@ -337,12 +344,34 @@ describe("admin snapshot workflows", () => {
     expect(await screen.findByRole("heading", { name: "Household admin" })).toBeVisible();
   });
 
+  it("clears an open source workbench when its provider session expires", async () => {
+    const client = api();
+    const expired = new AdminApiError(401, "ADMIN_UNAUTHORIZED", "Your admin session expired. Sign in again.");
+    vi.mocked(client.providerFolders).mockRejectedValueOnce(expired);
+    await login(client); go("Sources");
+    fireEvent.click(screen.getByRole("button", { name: "Browse & choose folders" }));
+    expect(await screen.findByRole("heading", { name: "Household admin" })).toBeVisible();
+    expect(screen.queryByTestId("household-program-plane")).not.toBeInTheDocument();
+  });
+
   it("keeps the four accessible navigation targets and a single main landmark", async () => {
     await login(api());
     expect(within(screen.getByRole("navigation", { name: "Side navigation" })).getAllByRole("button", { hidden: true })).toHaveLength(4);
     expect(screen.getAllByRole("main")).toHaveLength(1);
     expect(screen.getByTestId("skip-to-content")).toBeInTheDocument();
     for (const button of screen.getAllByRole("button")) expect(button).toHaveAccessibleName();
+  });
+
+  it("surfaces authorization failure and never navigates", async () => {
+    const client = api(); const navigate = vi.fn();
+    vi.mocked(client.authorizeSource).mockRejectedValueOnce(refreshFailure);
+    render(<AdminApp api={client} navigate={navigate} checkSession={false} />);
+    fireEvent.change(screen.getByLabelText("Admin passphrase"), { target: { value: "a very long household passphrase" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await screen.findByRole("heading", { name: "Device requests" }); go("Sources");
+    fireEvent.click(screen.getByRole("button", { name: "Connect OneDrive" }));
+    expect(await screen.findByText("Cloudframe is temporarily unavailable. Try again.")).toBeVisible();
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("cancels revocation with Escape and never calls the destructive action", async () => {

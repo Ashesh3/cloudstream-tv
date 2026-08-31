@@ -3,7 +3,7 @@ import { AppShell } from "@astryxdesign/core/AppShell";
 import { Badge } from "@astryxdesign/core/Badge";
 import { Button } from "@astryxdesign/core/Button";
 import { Icon } from "@astryxdesign/core/Icon";
-import { Layout, LayoutHeader } from "@astryxdesign/core/Layout";
+import { Layout, LayoutContent, LayoutHeader, LayoutPanel } from "@astryxdesign/core/Layout";
 import { SideNav, SideNavHeading, SideNavItem, SideNavSection } from "@astryxdesign/core/SideNav";
 import { Text } from "@astryxdesign/core/Text";
 import { HStack } from "@astryxdesign/core/HStack";
@@ -18,7 +18,7 @@ const sections = [
   { id: "settings" as const, label: "Settings", icon: SettingsIcon },
 ];
 
-export function Shell({ section, onSection, pendingCount, onRefresh, refreshing, contentMode = "standard", children }: {
+export function Shell({ section, onSection, pendingCount, onRefresh, refreshing, contentMode = "standard", children, end, endTestId }: {
   section: AdminSection;
   onSection(value: AdminSection): void;
   pendingCount: number;
@@ -26,6 +26,8 @@ export function Shell({ section, onSection, pendingCount, onRefresh, refreshing,
   refreshing: boolean;
   contentMode?: "standard" | "sources";
   children: ReactNode;
+  end?: ReactNode;
+  endTestId?: string;
 }) {
   const navigation = <SideNav
     header={<SideNavHeading heading="Cloudframe" subheading="Household admin" icon={<Icon icon="wrench" color="accent" />} />}
@@ -68,8 +70,8 @@ export function Shell({ section, onSection, pendingCount, onRefresh, refreshing,
       header={top}
       contentWidth={contentMode === "sources" ? undefined : "90rem"}
       padding={4}
-    >
-      {children}
-    </Layout>
+      content={<LayoutContent isScrollable={false} padding={0} data-testid={end ? "source-workbench-layout" : undefined}>{children}</LayoutContent>}
+      end={end ? <LayoutPanel width="24rem" hasDivider isScrollable={false} label="Household folders" role="complementary" data-testid={endTestId}>{end}</LayoutPanel> : undefined}
+    />
   </AppShell>;
 }

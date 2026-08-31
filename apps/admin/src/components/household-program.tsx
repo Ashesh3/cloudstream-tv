@@ -1,8 +1,18 @@
 import type { ControlDeviceDto, ControlRootDto, ControlSourceDto } from "@cloudframe/shared";
-import { AlertTriangleIcon, MonitorIcon, Trash2Icon } from "lucide-react";
-import { providerName } from "../design/ledger";
-import { Badge } from "./ui/badge";
-import { Button } from "./ui/button";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Button } from "@astryxdesign/core/Button";
+import { EmptyState } from "@astryxdesign/core/EmptyState";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Icon } from "@astryxdesign/core/Icon";
+import { List, ListItem } from "@astryxdesign/core/List";
+import { Section } from "@astryxdesign/core/Section";
+import { StatusDot } from "@astryxdesign/core/StatusDot";
+import { Text } from "@astryxdesign/core/Text";
+import { Token } from "@astryxdesign/core/Token";
+import { VStack } from "@astryxdesign/core/VStack";
+import { AlertTriangleIcon, FolderOpenIcon, MonitorIcon, Trash2Icon } from "lucide-react";
+import { providerName } from "../lib/provider-name";
 
 export type ProgramRoot = ControlRootDto & { providerNodeId?: string };
 
@@ -12,28 +22,41 @@ export function HouseholdProgram({ source, roots, devices, onRemove }: {
   devices: ControlDeviceDto[];
   onRemove(root: ProgramRoot): void;
 }) {
-  return <aside className="household-program flex min-h-0 flex-col gap-4" aria-labelledby="household-program-title" data-workbench-region="program">
-    <div className="program-header">
-      <h2 id="household-program-title" className="font-heading text-lg font-medium">Household program ledger</h2>
-      <p className="mt-1 text-sm text-muted-foreground">Approved folders are available to assigned televisions immediately.</p>
-    </div>
-    {!roots.length ? <div className="program-empty grid min-h-40 place-items-center border border-dashed p-5 text-center">
-      <div><p className="font-medium">No folders in the household program</p><p className="mt-1 text-sm text-muted-foreground">Choose a provider folder to make it available for television assignments.</p></div>
-    </div> : <ul className="program-root-list min-h-0 space-y-3 overflow-y-auto" aria-label="Selected household folders">
-      {roots.map(root => {
-        const inactive = !root.enabled;
-        const assignedDevices = devices.filter(device => device.revokedAt === null && device.assignedRootIds.includes(root.id));
-        return <li className="program-root border p-3" key={root.id} data-legacy-root={inactive || undefined} data-root-status={inactive ? "inactive" : "approved"}>
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0"><p className="truncate font-medium">{root.displayName}</p><p className="mt-1 text-xs text-muted-foreground">{providerName(source.provider)} · {source.accountLabel}</p></div>
-            <Button className="workbench-touch-target" size="icon-sm" variant="destructive" aria-label={`Review removal impact for ${root.displayName}`} onClick={() => onRemove(root)}><Trash2Icon /><span className="sr-only">Review removal impact</span></Button>
-          </div>
-          {inactive && <div className="mt-3 flex gap-2 bg-destructive/10 p-2.5 text-xs text-destructive"><AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" /><div><p className="font-medium">Inactive legacy selection</p><p className="mt-1 text-destructive/80">This migration record grants no television access and can be removed safely after review.</p></div></div>}
-          <div className="mt-3 flex flex-wrap gap-1.5" aria-label={`Televisions assigned to ${root.displayName}`}>
-            {assignedDevices.length ? assignedDevices.map(device => <Badge variant="outline" key={device.id}><MonitorIcon data-icon="inline-start" />{device.name}</Badge>) : <span className="text-xs text-muted-foreground">No televisions assigned</span>}
-          </div>
-        </li>;
-      })}
-    </ul>}
-  </aside>;
+  return <VStack as="aside" height="100%" gap={0} aria-labelledby="household-program-title" data-workbench-region="program">
+    <Section padding={4} variant="muted" dividers={["bottom"]}>
+      <VStack gap={2}>
+        <Heading id="household-program-title" level={2}>Household folders</Heading>
+        <Text type="supporting" as="p">Approved folders are available to assigned televisions immediately.</Text>
+      </VStack>
+    </Section>
+    <Section padding={0} variant="transparent">
+      {!roots.length ? <EmptyState
+        title="No folders in the household program"
+        description="Choose a provider folder to make it available for television assignments."
+        icon={<Icon icon={FolderOpenIcon} size="lg" />}
+        headingLevel={3}
+        isCompact
+      /> : <List density="spacious" hasDividers aria-label="Selected household folders">
+        {roots.map(root => {
+          const inactive = !root.enabled;
+          const assignedDevices = devices.filter(device => device.revokedAt === null && device.assignedRootIds.includes(root.id));
+          return <ListItem
+            key={root.id}
+            data-legacy-root={inactive || undefined}
+            data-root-status={inactive ? "inactive" : "approved"}
+            startContent={<StatusDot variant={inactive ? "warning" : "success"} label={inactive ? "Inactive legacy selection" : "Approved folder"} />}
+            label={<HStack gap={2} align="center" wrap="wrap"><Text weight="semibold">{root.displayName}</Text>{inactive && <Token label="Legacy record" size="sm" color="gray" />}</HStack>}
+            description={<VStack gap={3}>
+              <Text type="supporting">{providerName(source.provider)} · {source.accountLabel}</Text>
+              {inactive && <Banner status="warning" title="Inactive legacy selection" description="This migration record grants no television access and can be removed safely after review." icon={<Icon icon={AlertTriangleIcon} />} container="section" />}
+              <HStack gap={2} wrap="wrap" aria-label={`Televisions assigned to ${root.displayName}`}>
+                {assignedDevices.length ? assignedDevices.map(device => <Token key={device.id} label={device.name} size="sm" color="blue" icon={<Icon icon={MonitorIcon} size="xsm" />} />) : <Text type="supporting">No televisions assigned</Text>}
+              </HStack>
+            </VStack>}
+            endContent={<Button label={`Review removal impact for ${root.displayName}`} variant="destructive" size="lg" icon={<Icon icon={Trash2Icon} />} isIconOnly onClick={() => onRemove(root)} />}
+          />;
+        })}
+      </List>}
+    </Section>
+  </VStack>;
 }

@@ -10,6 +10,10 @@ const migrated = [
   "apps/admin/src/components/requests.tsx",
   "apps/admin/src/components/approval-sheet.tsx",
   "apps/admin/src/components/devices.tsx",
+  "apps/admin/src/components/sources.tsx",
+  "apps/admin/src/components/source-workbench.tsx",
+  "apps/admin/src/components/provider-folder-stage.tsx",
+  "apps/admin/src/components/household-program.tsx",
 ] as const;
 
 describe("Admin Astryx structure", () => {
@@ -27,7 +31,7 @@ describe("Admin Astryx structure", () => {
   });
 
   it("keeps request and device records in rows instead of Cards", async () => {
-    for (const path of ["apps/admin/src/components/requests.tsx", "apps/admin/src/components/devices.tsx"]) {
+    for (const path of ["apps/admin/src/components/requests.tsx", "apps/admin/src/components/devices.tsx", "apps/admin/src/components/sources.tsx"]) {
       const source = await readFile(path, "utf8");
       expect(source, path).toContain("ListItem");
       expect(source, path).not.toContain("<Card");
@@ -48,5 +52,14 @@ describe("Admin Astryx structure", () => {
     expect(shell).toContain("Badge");
     expect(overview).toContain("StatusDot");
     expect(overview).not.toContain("Badge");
+  });
+
+  it("keeps the source workbench inside the shell-owned Layout", async () => {
+    const shell = await readFile("apps/admin/src/components/shell.tsx", "utf8");
+    const workbench = await readFile("apps/admin/src/components/source-workbench.tsx", "utf8");
+    expect(shell).toContain('data-testid={end ? "source-workbench-layout"');
+    expect(shell).toContain("LayoutPanel");
+    expect(workbench.match(/<Layout\b/g) ?? []).toHaveLength(1);
+    expect(workbench).toContain("<Dialog");
   });
 });

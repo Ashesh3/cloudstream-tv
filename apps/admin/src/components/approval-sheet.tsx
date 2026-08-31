@@ -11,7 +11,7 @@ import { Text } from "@astryxdesign/core/Text";
 import { TextInput } from "@astryxdesign/core/TextInput";
 import { VStack } from "@astryxdesign/core/VStack";
 import { AdminApiError } from "../api/client";
-import { providerName } from "../design/ledger";
+import { providerName } from "../lib/provider-name";
 
 export function ApprovalSheet({ request, roots, sources, onApprove, onClose }: {
   request: ControlRequestDto;

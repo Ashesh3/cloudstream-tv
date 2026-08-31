@@ -49,11 +49,47 @@ describe("provider folder stage", () => {
     expect(screen.getByRole("button", { name: "Trips is in the household program" })).toBeDisabled();
   });
 
+  it("preserves loaded rows and retries the failed pagination cursor", async () => {
+    const providerFolders = vi.fn()
+      .mockResolvedValueOnce(page({ folders: [trips], nextCursor: "page-2" }))
+      .mockRejectedValueOnce(new AdminApiError(503, "PROVIDER_UNAVAILABLE", "Provider temporarily unavailable. Try again."))
+      .mockResolvedValueOnce(page({ folders: [{ ...trips, providerNodeId: "archive", name: "Archive" }] }));
+    render(<ProviderFolderStage api={apiWithProviderFolders(providerFolders)} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Load more folders" }));
+    expect(await screen.findByRole("alert")).toBeVisible();
+    expect(screen.getByText("Trips")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    await waitFor(() => expect(providerFolders).toHaveBeenLastCalledWith(source.id, expect.objectContaining({ cursor: "page-2" })));
+    expect(await screen.findByText("Archive")).toBeVisible();
+    expect(screen.getByText("Trips")).toBeVisible();
+  });
+
   it("does not update after unmount", async () => {
     let resolve!: (value: AdminProviderFolderPage) => void;
     const api = apiWithProviderFolders(vi.fn().mockReturnValue(new Promise(value => { resolve = value; })));
     const view = render(<ProviderFolderStage api={api} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} />);
     view.unmount();
     await act(async () => { resolve(page()); await Promise.resolve(); });
+  });
+
+  it("routes a provider-folders 401 through onUnauthorized without a generic error", async () => {
+    const onUnauthorized = vi.fn();
+    const providerFolders = vi.fn().mockRejectedValue(new AdminApiError(401, "ADMIN_UNAUTHORIZED", "Session expired."));
+    render(<ProviderFolderStage api={apiWithProviderFolders(providerFolders)} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} onUnauthorized={onUnauthorized} />);
+
+    await waitFor(() => expect(onUnauthorized).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("routes a create-root 401 through onUnauthorized without a generic error", async () => {
+    const onUnauthorized = vi.fn();
+    const api = apiWithProviderFolders(vi.fn().mockResolvedValue(page({ folders: [trips] })));
+    vi.mocked(api.createRoot).mockRejectedValue(new AdminApiError(401, "ADMIN_UNAUTHORIZED", "Session expired."));
+    render(<ProviderFolderStage api={api} source={source} selectedProviderNodeIds={new Set()} onRootAdded={vi.fn().mockResolvedValue(undefined)} onClose={vi.fn()} onUnauthorized={onUnauthorized} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Add Trips to household program" }));
+
+    await waitFor(() => expect(onUnauthorized).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
