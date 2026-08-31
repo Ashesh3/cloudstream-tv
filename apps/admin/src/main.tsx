@@ -1,5 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import "@astryxdesign/core/reset.css";
+import "@astryxdesign/core/astryx.css";
 import "@fontsource-variable/instrument-sans";
 import "@fontsource-variable/archivo-narrow";
 import { AdminApp } from "./app";

@@ -1,4 +1,6 @@
 import { render } from "preact";
+import "@astryxdesign/core/reset.css";
+import "@astryxdesign/core/astryx.css";
 import { TvApp } from "./app";
 import type { TvApi } from "./api/client";
 import { createGoogleMediaBridge } from "./media/google-media-bridge";

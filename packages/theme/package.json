@@ -1,0 +1,27 @@
+{
+  "name": "@cloudframe/theme",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/cloudframe-night.d.ts",
+      "import": "./dist/cloudframe-night.js"
+    },
+    "./cloudframe-night.css": "./dist/cloudframe-night.css",
+    "./source": "./src/cloudframe-night.ts"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "dependencies": {
+    "@astryxdesign/core": "0.5.1",
+    "@astryxdesign/theme-neutral": "0.5.1",
+    "@stylexjs/stylex": "0.19.0"
+  },
+  "peerDependencies": {
+    "react": ">=19.0.0",
+    "react-dom": ">=19.0.0"
+  }
+}
