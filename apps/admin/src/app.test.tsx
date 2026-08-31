@@ -270,6 +270,51 @@ describe("admin snapshot workflows", () => {
     expect(screen.getByLabelText("Allow new device requests")).not.toBeChecked();
   });
 
+  it("rotates the admin passphrase and signs out every admin session", async () => {
+    const client = api();
+    await login(client); go("Settings");
+    fireEvent.change(screen.getByLabelText("Current passphrase"), { target: { value: "current passphrase" } });
+    fireEvent.change(screen.getByLabelText("New passphrase"), { target: { value: "replacement passphrase" } });
+    fireEvent.click(screen.getByRole("button", { name: "Change passphrase" }));
+    expect(await screen.findByRole("heading", { name: "Household admin" })).toBeVisible();
+    expect(client.rotatePassphrase).toHaveBeenCalledWith("current passphrase", "replacement passphrase");
+  });
+
+  it("signs out this admin browser without changing television access", async () => {
+    const client = api();
+    await login(client); go("Settings");
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(await screen.findByRole("heading", { name: "Household admin" })).toBeVisible();
+    expect(client.logout).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps settings open and exposes a safe passphrase rotation failure", async () => {
+    const client = api();
+    vi.mocked(client.rotatePassphrase).mockRejectedValueOnce(refreshFailure);
+    await login(client); go("Settings");
+    fireEvent.change(screen.getByLabelText("Current passphrase"), { target: { value: "current passphrase" } });
+    fireEvent.change(screen.getByLabelText("New passphrase"), { target: { value: "replacement passphrase" } });
+    fireEvent.click(screen.getByRole("button", { name: "Change passphrase" }));
+    expect(await screen.findByText("Cloudframe is temporarily unavailable. Try again.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Settings" })).toBeVisible();
+  });
+
+  it("keeps settings open and exposes a safe sign-out failure", async () => {
+    const client = api();
+    vi.mocked(client.logout).mockRejectedValueOnce(refreshFailure);
+    await login(client); go("Settings");
+    fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+    expect(await screen.findByText("Cloudframe is temporarily unavailable. Try again.")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "Settings" })).toBeVisible();
+  });
+
+  it("returns to login when diagnostic polling reports an expired session", async () => {
+    const client = api();
+    vi.mocked(client.transcodeStatus).mockRejectedValueOnce(new AdminApiError(401, "ADMIN_UNAUTHORIZED", "Your admin session expired. Sign in again."));
+    await login(client); go("Settings");
+    expect(await screen.findByRole("heading", { name: "Household admin" })).toBeVisible();
+  });
+
   it("keeps the live provider workbench in layout with exact immediate-access copy", async () => {
     expect(window.matchMedia("(max-width: 64rem)").matches).toBe(false);
     await login(api()); go("Sources");

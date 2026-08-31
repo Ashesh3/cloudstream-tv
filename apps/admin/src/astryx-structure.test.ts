@@ -14,6 +14,8 @@ const migrated = [
   "apps/admin/src/components/source-workbench.tsx",
   "apps/admin/src/components/provider-folder-stage.tsx",
   "apps/admin/src/components/household-program.tsx",
+  "apps/admin/src/components/settings.tsx",
+  "apps/admin/src/components/transcode-diagnostics.tsx",
 ] as const;
 
 describe("Admin Astryx structure", () => {

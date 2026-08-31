@@ -6,10 +6,8 @@ import "@astryxdesign/core/reset.css";
 import "@astryxdesign/core/astryx.css";
 import "@cloudframe/theme/cloudframe-night.css";
 import "@fontsource-variable/instrument-sans";
-import "@fontsource-variable/archivo-narrow";
 import { AdminApp } from "./app";
 import { createAdminApi, type AdminApi } from "./api/client";
-import "./styles/app.css";
 
 const testApi = __CLOUDFRAME_E2E__
   ? (window as Window & { __CLOUDFRAME_TEST_ADMIN_API__?: AdminApi }).__CLOUDFRAME_TEST_ADMIN_API__

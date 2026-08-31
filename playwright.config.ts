@@ -30,12 +30,12 @@ export default defineConfig({
     {
       name: "admin-mobile",
       use: { ...devices["Pixel 7"] },
-      testMatch: /(?:enrollment|source-workbench)\.spec\.ts/
+      testMatch: /(?:enrollment|source-workbench|admin-settings)\.spec\.ts/
     },
     {
       name: "admin-wide",
       use: { ...devices["Desktop Chrome"], viewport: { width: 1440, height: 960 } },
-      testMatch: /(?:enrollment|source-workbench)\.spec\.ts/
+      testMatch: /(?:enrollment|source-workbench|admin-settings)\.spec\.ts/
     }
   ]
 });

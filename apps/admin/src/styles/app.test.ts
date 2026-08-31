@@ -3,25 +3,12 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-describe("admin reduced motion", () => {
-  it("scopes alternatives to the animated admin elements", () => {
-    const styles = readFileSync(resolve(process.cwd(), "apps/admin/src/styles/app.css"), "utf8");
-    const block = styles.match(/@media \(prefers-reduced-motion: reduce\) \{([\s\S]*?)\n\}/)?.[1] ?? "";
-    expect(block).not.toContain("*, *::before, *::after");
-    expect(block).toContain(".program-root");
-    expect(block).toContain(".provider-folder-list > li");
-    expect(block).toContain(".animate-spin");
-    expect(block).toContain(".animate-pulse");
-    expect(block).toContain('[data-slot="dialog-content"] .animate-spin');
-    expect(block).toContain('[data-slot="alert-dialog-content"] .animate-spin');
-  });
-});
-
-describe("settings layout", () => {
-  it("provides card spacing to form-based settings panels", () => {
-    const styles = readFileSync(resolve(process.cwd(), "apps/admin/src/styles/app.css"), "utf8");
-    const rule = styles.match(/\.settings-card\s*\{([^}]*)\}/)?.[1] ?? "";
-    expect(rule).toContain("--card-spacing: 1rem");
-    expect(rule).toContain("padding-top: var(--card-spacing)");
+describe("admin styling entry", () => {
+  it("ships the Astryx theme without loading the superseded Admin stylesheet or display font", () => {
+    const entry = readFileSync(resolve(process.cwd(), "apps/admin/src/main.tsx"), "utf8");
+    expect(entry).toContain("@astryxdesign/core/astryx.css");
+    expect(entry).toContain("@cloudframe/theme/cloudframe-night.css");
+    expect(entry).not.toContain("./styles/app.css");
+    expect(entry).not.toContain("archivo-narrow");
   });
 });

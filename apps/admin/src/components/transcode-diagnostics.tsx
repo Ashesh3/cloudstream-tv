@@ -1,29 +1,44 @@
 import type { TranscodeDiagnosticResponse } from "@cloudframe/shared";
+import { Banner } from "@astryxdesign/core/Banner";
+import { Heading } from "@astryxdesign/core/Heading";
+import { HStack } from "@astryxdesign/core/HStack";
+import { Icon } from "@astryxdesign/core/Icon";
+import { MetadataList, MetadataListItem } from "@astryxdesign/core/MetadataList";
+import { ProgressBar } from "@astryxdesign/core/ProgressBar";
+import { Section } from "@astryxdesign/core/Section";
+import { Skeleton } from "@astryxdesign/core/Skeleton";
+import { StatusDot } from "@astryxdesign/core/StatusDot";
+import { Text } from "@astryxdesign/core/Text";
+import { VStack } from "@astryxdesign/core/VStack";
 import { ActivityIcon } from "lucide-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
 export function TranscodeDiagnostics({ diagnostic, error = "" }: { diagnostic: TranscodeDiagnosticResponse | null; error?: string }) {
-  return <Card className="transcode-diagnostics" role="region" aria-label="Transcoder status">
-    <CardHeader><CardTitle className="flex items-center gap-2"><ActivityIcon className="size-4" />Transcoder status</CardTitle><CardDescription>Live, secret-safe playback and cache health from this server.</CardDescription></CardHeader>
-    <CardContent>
-      {error ? <p className="transcode-diagnostics-error" role="status">{error}</p> : diagnostic ? <>
-        <div className="transcode-diagnostics-primary">
-          <strong>{diagnostic.active ? diagnostic.active.itemName : "Transcoder ready"}</strong>
-          <span>{activeDescription(diagnostic)}</span>
-        </div>
-        <dl className="transcode-diagnostics-grid">
-          <Metric label="Queued windows" value={String(diagnostic.queuedDemandedWindows)} />
-          <Metric label="Busy rejections" value={String(diagnostic.busyRejections)} />
-          <Metric label="Cache" value={formatCache(diagnostic.cacheBytes, diagnostic.cacheMaxBytes)} />
-          <Metric label="Last error" value={errorLabel(diagnostic.lastErrorCode)} />
-        </dl>
-        {diagnostic.busyRejections > 0 ? <p className="transcode-diagnostics-note">{diagnostic.busyRejections} busy {diagnostic.busyRejections === 1 ? "request was" : "requests were"} rejected. Another television currently owns the transcoder.</p> : null}
-      </> : <p className="transcode-diagnostics-error" role="status">Loading transcoder status…</p>}
-    </CardContent>
-  </Card>;
+  return <Section role="region" aria-label="Transcoder status" dividers={["bottom"]}>
+    <VStack gap={4}>
+      <VStack gap={1}>
+        <HStack gap={2} align="center"><Icon icon={ActivityIcon} color="accent" /><Heading level={2}>Transcoder status</Heading></HStack>
+        <Text type="supporting">Live, secret-safe playback and cache health from this server.</Text>
+      </VStack>
+      {error ? <Banner status="warning" title="Transcoder status unavailable" description={error} container="section" /> : diagnostic ? <DiagnosticBody diagnostic={diagnostic} /> : <VStack gap={2} role="status" aria-label="Loading transcoder status"><Skeleton width="40%" height="var(--spacing-5)" radius={1} /><Skeleton height="var(--spacing-4)" radius={1} /></VStack>}
+    </VStack>
+  </Section>;
 }
 
-function Metric({ label, value }: { label: string; value: string }) { return <div><dt>{label}</dt><dd>{value}</dd></div>; }
+function DiagnosticBody({ diagnostic }: { diagnostic: TranscodeDiagnosticResponse }) {
+  const active = diagnostic.active;
+  return <VStack gap={4}>
+    <HStack gap={2} align="center" wrap="wrap"><StatusDot variant={active ? "accent" : "success"} label={active ? "Transcoding" : "Ready"} isPulsing={active ? true : undefined} /><Text weight="semibold" wordBreak="break-word">{active ? active.itemName : "Transcoder ready"}</Text><Text type="supporting">{active ? activeDescription(diagnostic) : "No active playback."}</Text></HStack>
+    {active?.stage === "encoding" && active.progressPercent !== null ? <ProgressBar value={active.progressPercent} label="Encoding progress" hasValueLabel /> : null}
+    <MetadataList columns="multi" label={{ position: "top" }}>
+      <MetadataListItem label="Queued windows">{diagnostic.queuedDemandedWindows}</MetadataListItem>
+      <MetadataListItem label="Busy rejections">{diagnostic.busyRejections}</MetadataListItem>
+      <MetadataListItem label="Cache"><VStack gap={1}><Text>{formatCache(diagnostic.cacheBytes, diagnostic.cacheMaxBytes)}</Text>{diagnostic.cacheMaxBytes > 0 && <ProgressBar value={Math.min(diagnostic.cacheBytes, diagnostic.cacheMaxBytes)} max={diagnostic.cacheMaxBytes} label="Transcode cache use" isLabelHidden data-testid="transcode-cache-progress" />}</VStack></MetadataListItem>
+      <MetadataListItem label="Last error">{errorLabel(diagnostic.lastErrorCode)}</MetadataListItem>
+    </MetadataList>
+    {diagnostic.busyRejections > 0 && <Banner status="warning" title="Transcoder was busy" description={`${diagnostic.busyRejections} busy ${diagnostic.busyRejections === 1 ? "request was" : "requests were"} rejected. Another television currently owns the transcoder.`} container="section" />}
+  </VStack>;
+}
+
 function activeDescription(value: TranscodeDiagnosticResponse): string {
   const active = value.active;
   if (!active) return "No active playback.";
@@ -53,5 +68,5 @@ function errorLabel(code: string | null): string {
     TRANSCODER_UNSUPPORTED: "The media format is unsupported",
     TRANSCODER_FAILED: "The last transcode failed",
   };
-  return labels[code] ?? code;
+  return labels[code] ?? "The last transcode failed";
 }

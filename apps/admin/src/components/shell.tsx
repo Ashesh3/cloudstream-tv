@@ -68,7 +68,7 @@ export function Shell({ section, onSection, pendingCount, onRefresh, refreshing,
     <Layout
       height="auto"
       header={top}
-      contentWidth={contentMode === "sources" ? undefined : "90rem"}
+      contentWidth={contentMode === "sources" ? undefined : section === "settings" ? "60rem" : "90rem"}
       padding={4}
       content={<LayoutContent isScrollable={false} padding={0} data-testid={end ? "source-workbench-layout" : undefined}>{children}</LayoutContent>}
       end={end ? <LayoutPanel width="24rem" hasDivider isScrollable={false} label="Household folders" role="complementary" data-testid={endTestId}>{end}</LayoutPanel> : undefined}
