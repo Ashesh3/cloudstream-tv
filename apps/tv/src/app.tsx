@@ -561,8 +561,8 @@ function BrowserShell({ api, googleMedia, history, mediaOrder, onUnauthorized, s
   }, [api, applyHome, clearThumbnailLifecycle]);
 
   if (browse.loading && browse.items.length === 0) return <BrowseSkeleton />;
-  if (browse.error && browse.items.length === 0) return <StatePanel title="Source temporarily unavailable" body={browse.error}><button className="primary-action" onClick={() => browse.parent ? loadFolder(browse.parent.handle, { expectedParentId: browse.parent.id, breadcrumbs: browse.breadcrumbs }) : loadHome()}>Retry</button></StatePanel>;
-  if (!browse.parent && browse.items.length === 0) return <StatePanel title="No folders assigned" body="Ask the household administrator to assign at least one folder to this TV."><button className="primary-action" onClick={loadHome}>Refresh</button></StatePanel>;
+  if (browse.error && browse.items.length === 0) return <StatePanel title="Source temporarily unavailable" body={browse.error}><StateAction label="Retry" onClick={() => { void (browse.parent ? loadFolder(browse.parent.handle, { expectedParentId: browse.parent.id, breadcrumbs: browse.breadcrumbs }) : loadHome()); }} /></StatePanel>;
+  if (!browse.parent && browse.items.length === 0) return <StatePanel title="No folders assigned" body="Ask the household administrator to assign at least one folder to this TV."><StateAction label="Refresh" onClick={() => void loadHome()} /></StatePanel>;
   if (viewer) return <Viewer api={api} googleMedia={googleMedia} history={history} items={viewer.items} selectedItemId={viewer.selectedItemId} slideshowSeconds={slideshowSeconds} previews={thumbnails} onClose={closeViewer} onUnauthorized={onUnauthorized} onNavigationExpired={refreshExpiredNavigation} />;
 
   const title = browse.parent?.name ?? "Home";
@@ -573,13 +573,13 @@ function BrowserShell({ api, googleMedia, history, mediaOrder, onUnauthorized, s
     <main className="browser-shell">
       <TvHeader title={title} breadcrumbs={browse.breadcrumbs} onHome={loadHome} onSources={() => setDrawerOpen(true)} />
       {currentProgram ? <ProgramProjection program={currentProgram} /> : (
-        <section className="browse-heading"><div><h1>{title}</h1><p>Household collection</p></div></section>
+        <section className="browse-heading cloudframe-browse-heading"><h1>{title}</h1><p>Household collection</p></section>
       )}
       {browse.items.length === 0 ? (
-        <section className="empty-folder"><span className="empty-folder-icon"><i /></span><h2>This folder is empty</h2><p>This collection contains no supported folders, photos, or videos.</p></section>
+        <section className="empty-folder cloudframe-empty-folder"><h2>This folder is empty</h2><p>This collection contains no supported folders, photos, or videos.</p></section>
       ) : (
-        <section className={browse.parent ? "collection-grid" : "program-row"}>
-          {!browse.parent && <header><h2>Household program</h2><p>Use the remote to choose a collection</p></header>}
+        <section className={browse.parent ? "collection-grid" : "program-row cloudframe-program-row"}>
+          {!browse.parent && <header><h2>Household collections</h2><p>Use the remote to choose a collection</p></header>}
           <VirtualGrid
             ariaLabel={title}
             items={browse.items}
@@ -639,16 +639,9 @@ function BrowserShell({ api, googleMedia, history, mediaOrder, onUnauthorized, s
 
 function ProgramProjection({ program }: { program: TvRootDto }) {
   return (
-    <section className="program-projection">
-      <div className="projection-image">
-        <div className="projection-stock" aria-hidden="true"><span>{program.displayName.charAt(0)}</span><i /><b>Cloudframe household program</b></div>
-        <span className="projection-vignette" />
-      </div>
-      <div className="projection-copy">
-        <h1>{program.displayName}</h1>
-        <span className={`provider-slate ${program.provider}`}>{providerLabel(program.provider)} · {program.accountLabel}</span>
-      </div>
-      <span className="projection-cue" aria-hidden="true"><i /><i /></span>
+    <section className="program-projection cloudframe-program-projection">
+      <span className="projection-monogram" aria-hidden="true">{program.displayName.charAt(0)}</span>
+      <div className="projection-copy"><p>Selected household collection</p><h1>{program.displayName}</h1><span className={`provider-slate ${program.provider}`}>{providerLabel(program.provider)} · {program.accountLabel}</span></div>
     </section>
   );
 }
@@ -662,7 +655,7 @@ function Unsupported() {
 }
 
 function BrowseSkeleton() {
-  return <main className="browser-shell"><TvHeader title="Home" onHome={() => undefined} onSources={() => undefined} /><section className="projection-skeleton"><div /><span /><span /><span /></section><div className="skeleton-grid">{Array.from({ length: 5 }, (_, index) => <span key={index} />)}</div></main>;
+  return <main className="browser-shell"><TvHeader title="Home" onHome={() => undefined} onSources={() => undefined} /><section className="projection-skeleton cloudframe-projection-skeleton" aria-label="Loading collections"><span /><span /><span /></section><section className="skeleton-grid">{Array.from({ length: 5 }, (_, index) => <span key={index} />)}</section></main>;
 }
 
 function emptyBrowseState(): BrowseState {

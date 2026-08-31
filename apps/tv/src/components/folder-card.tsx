@@ -17,16 +17,15 @@ export function FolderCard({ name, subtitle, thumbnailUrl, focused, program = fa
   return (
     <button
       type="button"
-      className={`tv-card folder-card${program ? " program-card" : ""}${hero ? " is-hero" : ""}${focused ? " is-focused" : ""}`}
-      aria-label={`${name}, ${program ? "program" : "folder"}`}
+      className={`tv-card cloudframe-card folder-card${program ? " program-card" : ""}${hero ? " is-hero" : ""}${focused ? " is-focused" : ""}`}
+      aria-label={`${name}, ${program ? "collection" : "folder"}`}
       data-testid={program ? "program-card" : undefined}
       onClick={onSelect}
       tabIndex={focused ? 0 : -1}
     >
       <span className="card-visual folder-art" aria-hidden="true">
         {previewReady ? <img src={thumbnailUrl} alt="" referrerPolicy="no-referrer" onError={() => { setFailedUrl(thumbnailUrl); onThumbnailError?.(); }} /> : null}
-        <ProgramStockArt program={program} name={name} />
-        {program && <span className="program-frame-mark"><i /><i /></span>}
+        <CollectionArt program={program} name={name} />
       </span>
       <span className="card-copy">
         <strong>{name}</strong>
@@ -36,12 +35,11 @@ export function FolderCard({ name, subtitle, thumbnailUrl, focused, program = fa
   );
 }
 
-function ProgramStockArt({ program, name }: { program: boolean; name: string }) {
+function CollectionArt({ program, name }: { program: boolean; name: string }) {
   return (
-    <span className={`program-stock-art${program ? " is-program" : ""}`}>
-      <span className="stock-rule" />
+    <span className={`collection-art cloudframe-collection-art${program ? " is-program" : ""}`}>
       <b>{program ? initials(name) : "Folder"}</b>
-      <span className="stock-copy">{program ? "Household screening program" : "Cloudframe collection"}</span>
+      <span className="stock-copy">{program ? "Household collection" : "Cloudframe folder"}</span>
     </span>
   );
 }

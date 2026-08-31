@@ -17,14 +17,14 @@ export function MediaCard({ name, kind, thumbnailUrl, focused, resumeProgress = 
   return (
     <button
       type="button"
-      className={`tv-card media-card${focused ? " is-focused" : ""}`}
+      className={`tv-card cloudframe-card media-card${focused ? " is-focused" : ""}`}
       aria-label={`${name}, ${kind}`}
       onClick={onSelect}
       tabIndex={focused ? 0 : -1}
     >
       <span className="card-visual media-preview" data-preview={unavailable ? "unavailable" : "ready"}>
         {thumbnailUrl && failedUrl !== thumbnailUrl && <img src={thumbnailUrl} alt="" referrerPolicy="no-referrer" onError={() => { setFailedUrl(thumbnailUrl); onThumbnailError?.(); }} />}
-        {unavailable ? <span className="media-stock"><i />{kind === "video" ? "Motion" : "Still"}</span> : null}
+        {unavailable ? <span className="media-stock cloudframe-media-fallback">{kind === "video" ? "Video" : "Photo"}</span> : null}
         {kind === "video" && <span className="video-badge">Video</span>}
         {kind === "video" && percent > 0 && (
           <span className="resume-track" role="progressbar" aria-label="Watched" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
@@ -32,7 +32,7 @@ export function MediaCard({ name, kind, thumbnailUrl, focused, resumeProgress = 
           </span>
         )}
       </span>
-      <span className="card-copy"><strong>{name}</strong><small>{kind === "video" ? "Original video" : "Original photograph"}</small></span>
+      <span className="card-copy"><strong>{name}</strong><small>{kind === "video" ? "Motion" : "Photo"}</small></span>
     </button>
   );
 }

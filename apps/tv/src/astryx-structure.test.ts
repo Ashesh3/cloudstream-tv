@@ -28,4 +28,21 @@ describe("TV Astryx structure", () => {
     expect(source).toContain('role="dialog"');
     expect(source).not.toMatch(/@astryxdesign\/core\/(?:Dialog|MobileNav|ButtonGroup)/);
   });
+
+  it("uses Cloudframe Night browse structure without obsolete screening-room language", async () => {
+    const app = await readFile("apps/tv/src/app.tsx", "utf8");
+    const folder = await readFile("apps/tv/src/components/folder-card.tsx", "utf8");
+    const media = await readFile("apps/tv/src/components/media-card.tsx", "utf8");
+    const grid = await readFile("apps/tv/src/components/virtual-grid.tsx", "utf8");
+    const migrated = [app, folder, media, grid].join("\n");
+
+    expect(app).toContain("StatePanel");
+    expect(app).toContain("StateAction");
+    expect(folder).toContain("cloudframe-card");
+    expect(media).toContain("cloudframe-card");
+    expect(grid).toContain("data-grid-focused");
+    expect(grid).toContain('role="grid"');
+    expect(migrated).not.toMatch(/program-stock|screening program|program projection|projection-(?:stock|cue|vignette|image)/i);
+    expect(migrated).not.toMatch(/#[\da-f]{3,8}\b/i);
+  });
 });

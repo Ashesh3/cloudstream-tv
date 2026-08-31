@@ -6,8 +6,8 @@ test("folder browse opens a unified image and video viewer", async ({ page }) =>
   page.on("request", request => requests.push(request.url()));
   await installTvFixture(page, "ready");
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "Family Trips, program" })).toBeVisible();
-  await page.getByRole("button", { name: "Family Trips, program" }).click();
+  await expect(page.getByRole("button", { name: "Family Trips, collection" })).toBeVisible();
+  await page.getByRole("button", { name: "Family Trips, collection" }).click();
   await expect(page.getByRole("heading", { name: "Family Trips" })).toBeVisible();
   await expect.poll(async () => (await tvApiCalls(page)).thumbnails.flat().length).toBe(3);
   const beforeScroll = await tvApiCalls(page);
@@ -47,7 +47,7 @@ test("folder browse opens a unified image and video viewer", async ({ page }) =>
 test("folder browse preloads thumbnails beyond the virtual window before scrolling", async ({ page }) => {
   await installTvFixture(page, "ready", { longFolder: true });
   await page.goto("/");
-  await page.getByRole("button", { name: "Family Trips, program" }).click();
+  await page.getByRole("button", { name: "Family Trips, collection" }).click();
   const grid = page.getByRole("grid", { name: "Family Trips" });
   await expect(grid).toBeVisible();
   await expect(page.getByRole("button", { name: "Extra 29.jpg, image" })).toHaveCount(0);
@@ -76,7 +76,7 @@ test("legacy MPEG attaches through HLS, seeks into a later segment, and releases
   });
   await installTvFixture(page, "ready");
   await page.goto("/");
-  await page.getByRole("button", { name: "Family Trips, program" }).click();
+  await page.getByRole("button", { name: "Family Trips, collection" }).click();
   await page.getByText("Archive.mpg").click();
 
   const video = page.getByLabel("Playing Archive.mpg");
@@ -95,7 +95,7 @@ test("legacy MPEG attaches through HLS, seeks into a later segment, and releases
 test("viewer saves and restores a nonzero video position", async ({ page }) => {
   await installTvFixture(page, "ready");
   await page.goto("/");
-  await page.getByRole("button", { name: "Family Trips, program" }).click();
+  await page.getByRole("button", { name: "Family Trips, collection" }).click();
   await page.getByText("Lake.mp4").click();
   const video = page.getByLabel("Playing Lake.mp4");
   await expect(video).toBeVisible();
@@ -171,7 +171,7 @@ test("explicit local resume seed restores without persisting navigation secrets"
   })));
   await installTvFixture(page, "ready");
   await page.goto("/");
-  await page.getByRole("button", { name: "Family Trips, program" }).click();
+  await page.getByRole("button", { name: "Family Trips, collection" }).click();
   await page.getByText("Lake.mp4").click();
   const video = page.getByLabel("Playing Lake.mp4");
   await expect(video).toBeVisible();

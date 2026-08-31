@@ -241,3 +241,30 @@
 .cloudframe-source-drawer .drawer-home { border-color: var(--color-border-emphasized); background: var(--color-background-muted); }
 .cloudframe-source-drawer button:focus { outline: var(--focus-outline-width) solid var(--focus-outline-color); outline-offset: var(--focus-outline-offset); background: var(--color-accent-muted); }
 .cloudframe-source-drawer .drawer-list { margin: 0; padding: 0; list-style: none; }
+.cloudframe-program-projection { display: grid; grid-template-columns: minmax(0, 2fr) minmax(20rem, 1fr); border-color: var(--color-border); background: var(--color-background-muted); }
+.cloudframe-program-projection .projection-monogram { display: flex; align-items: center; padding: var(--spacing-10); overflow: hidden; background: linear-gradient(135deg, var(--color-accent-muted), var(--color-background-surface)); color: var(--color-text-accent); font-family: var(--font-family-heading); font-size: 12rem; font-weight: var(--font-weight-semibold); }
+.cloudframe-program-projection .projection-copy { padding: var(--spacing-10); background: var(--color-background-body); }
+.cloudframe-program-projection .projection-copy p { margin: 0; color: var(--color-text-accent); }
+.cloudframe-program-projection .projection-copy h1 { color: var(--color-text-primary); font-family: var(--font-family-heading); letter-spacing: normal; text-transform: none; }
+.cloudframe-program-projection .provider-slate { color: var(--color-text-secondary); letter-spacing: normal; text-transform: none; }
+.cloudframe-program-row > header h2 { color: var(--color-text-primary); font-family: var(--font-family-heading); letter-spacing: normal; text-transform: none; }
+.cloudframe-program-row > header p, .cloudframe-browse-heading p { color: var(--color-text-secondary); }
+.cloudframe-browse-heading { border-color: var(--color-border); }
+.cloudframe-browse-heading h1 { color: var(--color-text-primary); font-family: var(--font-family-heading); letter-spacing: normal; text-transform: none; }
+.cloudframe-card { border-color: var(--color-border); border-radius: var(--radius-container); background: var(--color-background-card); color: var(--color-text-primary); opacity: .78; box-shadow: var(--shadow-low); }
+.cloudframe-card.is-focused, .cloudframe-card:focus { border-color: var(--focus-outline-color); opacity: 1; box-shadow: var(--shadow-high), 0 0 0 var(--focus-outline-width) var(--color-accent-muted); }
+.cloudframe-card .card-copy strong { color: var(--color-text-primary); font-family: var(--font-family-heading); letter-spacing: normal; text-transform: none; }
+.cloudframe-card .card-copy small { color: var(--color-text-secondary); }
+.cloudframe-collection-art { background: linear-gradient(135deg, var(--color-accent-muted), var(--color-background-muted)); color: var(--color-text-primary); }
+.collection-art { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: flex-end; padding: var(--spacing-5); }
+.collection-art b, .collection-art .stock-copy { display: block; }
+.collection-art b { font-size: var(--font-size-4xl); }
+.collection-art .stock-copy { margin-top: var(--spacing-2); }
+.cloudframe-collection-art b { font-family: var(--font-family-heading); text-transform: none; }
+.cloudframe-collection-art .stock-copy { color: var(--color-text-secondary); letter-spacing: normal; text-transform: none; }
+.cloudframe-media-fallback { background: linear-gradient(135deg, var(--color-background-muted), var(--color-background-surface)); color: var(--color-text-secondary); font-family: var(--font-family-heading); letter-spacing: normal; text-transform: none; }
+.cloudframe-card .video-badge { border-color: var(--color-border-emphasized); border-radius: var(--radius-element); background: var(--color-background-body); color: var(--color-text-primary); letter-spacing: normal; text-transform: none; }
+.cloudframe-card .resume-track > span { background: var(--color-accent); }
+.cloudframe-empty-folder h2 { color: var(--color-text-primary); font-family: var(--font-family-heading); text-transform: none; }
+.cloudframe-empty-folder p { color: var(--color-text-secondary); }
+.cloudframe-projection-skeleton span, .skeleton-grid span { border-radius: var(--radius-container); background: var(--color-skeleton); }

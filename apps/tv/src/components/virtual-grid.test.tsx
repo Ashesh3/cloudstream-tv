@@ -84,6 +84,29 @@ describe("virtualized TV grid", () => {
     expect(screen.getByTestId("item-20")).toBeInTheDocument();
   });
 
+  it("keeps deterministic grid cells and exactly one roving focus target", () => {
+    render(
+      <VirtualGrid
+        ariaLabel="Media"
+        items={items.slice(0, 4)}
+        focusedIndex={2}
+        columns={4}
+        rowHeight={200}
+        viewportHeight={400}
+        onFocusedIndexChange={vi.fn()}
+        renderItem={(item, state) => (
+          <button aria-label={item.label} tabIndex={state.focused ? 0 : -1}>{item.label}</button>
+        )}
+      />
+    );
+
+    const grid = screen.getByRole("grid", { name: "Media" });
+    expect(grid.querySelectorAll("[role='gridcell']")).toHaveLength(4);
+    expect(grid.querySelectorAll("[data-grid-focused='true']")).toHaveLength(1);
+    expect(grid.querySelectorAll("button[tabindex='0']")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Item 2" })).toHaveAttribute("tabindex", "0");
+  });
+
   it("requests a page when Down has no loaded destination in an incomplete final row", () => {
     const focus = vi.fn();
     render(
@@ -105,6 +128,21 @@ describe("virtualized TV grid", () => {
 });
 
 describe("folder artwork and media cards", () => {
+  it("keeps the native one-button remote focus contract on collection cards", () => {
+    const view = render(<FolderCard name="Trips" subtitle="Google Drive · Home" focused />);
+    const card = screen.getByRole("button", { name: "Trips, folder" });
+
+    expect(card).toHaveAttribute("tabindex", "0");
+    expect(card).toHaveClass("is-focused");
+    expect(card).toHaveClass("cloudframe-card");
+    expect(card.querySelectorAll("button")).toHaveLength(0);
+    expect(screen.getByText("Google Drive · Home")).toBeVisible();
+
+    view.rerender(<FolderCard name="Trips" subtitle="Google Drive · Home" focused={false} />);
+    expect(card).toHaveAttribute("tabindex", "-1");
+    expect(card).not.toHaveClass("is-focused");
+  });
+
   it("uses stable static collection artwork without preview mosaics", () => {
     render(<FolderCard name="Trips" focused={false} />);
     const card = screen.getByRole("button", { name: /Trips/ });
@@ -127,7 +165,7 @@ describe("folder artwork and media cards", () => {
 
     fireEvent.error(oldImage);
     expect(document.querySelector(".folder-art img")).not.toBeInTheDocument();
-    expect(screen.getByText("Cloudframe collection")).toBeVisible();
+    expect(screen.getByText("Cloudframe folder")).toBeVisible();
 
     view.rerender(
       <FolderCard
@@ -153,7 +191,32 @@ describe("folder artwork and media cards", () => {
       />
     );
     expect(screen.getByText("Video")).toBeVisible();
-    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "35");
+    expect(screen.getByRole("progressbar", { name: "Watched" })).toHaveAttribute("aria-valuemin", "0");
+    expect(screen.getByRole("progressbar", { name: "Watched" })).toHaveAttribute("aria-valuemax", "100");
+    expect(screen.getByRole("progressbar", { name: "Watched" })).toHaveAttribute("aria-valuenow", "35");
+  });
+
+  it("clamps resume progress and omits the indicator at zero", () => {
+    const view = render(<MediaCard name="Sunset clip" kind="video" focused resumeProgress={2} />);
+    expect(screen.getByRole("progressbar", { name: "Watched" })).toHaveAttribute("aria-valuenow", "100");
+
+    view.rerender(<MediaCard name="Sunset clip" kind="video" focused resumeProgress={-1} />);
+    expect(screen.queryByRole("progressbar", { name: "Watched" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the native one-button remote focus contract on media cards", () => {
+    const view = render(<MediaCard name="Lake" kind="image" focused />);
+    const card = screen.getByRole("button", { name: "Lake, image" });
+
+    expect(card).toHaveAttribute("tabindex", "0");
+    expect(card).toHaveClass("is-focused");
+    expect(card).toHaveClass("cloudframe-card");
+    expect(card.querySelectorAll("button")).toHaveLength(0);
+    expect(screen.getAllByText("Photo").length).toBeGreaterThan(0);
+
+    view.rerender(<MediaCard name="Lake" kind="image" focused={false} />);
+    expect(card).toHaveAttribute("tabindex", "-1");
+    expect(card).not.toHaveClass("is-focused");
   });
 
   it("uses no-referrer thumbnails and recovers when a fresh URL replaces a failed one", () => {

@@ -264,8 +264,11 @@ describe("TV enrollment and browse states", () => {
     await flushFakeTimersUntil(() => vi.mocked(client.folder).mock.calls.length === 2);
 
     expect(screen.getByRole("button", { name: /Node 0/ })).toBeVisible();
-    expect(screen.getByText("The provider is busy. Try again shortly.")).toBeVisible();
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("The provider is busy. Try again shortly.");
+    expect(status.closest("[role='grid']")).toBeNull();
     const retry = screen.getByRole("button", { name: "Retry loading more items" });
+    expect(retry.closest("[role='grid']")).toBeNull();
 
     vi.mocked(client.folder).mockResolvedValueOnce(folderPage("root-1", 10, 2, null));
     fireEvent.click(retry);
@@ -754,6 +757,19 @@ describe("TV enrollment and browse states", () => {
     const first = render(<TvApp api={noRoots} browserSupported />);
     expect(await screen.findByRole("heading", { name: "No folders assigned" })).toBeVisible();
     first.unmount();
+
+    const empty = api();
+    vi.mocked(empty.bootstrap).mockResolvedValue({ enrollment: { state: "ready", device: readyDevice, household } });
+    vi.mocked(empty.home).mockResolvedValue({ roots: [rootCards[0]!] });
+    vi.mocked(empty.folder).mockResolvedValue({
+      parent: node("root-1", "folder", "Family"), children: [], nextCursor: null
+    });
+    const second = render(<TvApp api={empty} browserSupported />);
+    fireEvent.click(await screen.findByRole("button", { name: /Family/ }));
+    expect(await screen.findByRole("heading", { name: "This folder is empty" })).toBeVisible();
+    expect(screen.getByText("This collection contains no supported folders, photos, or videos.")).toBeVisible();
+    expect(screen.queryByRole("grid")).not.toBeInTheDocument();
+    second.unmount();
 
     const offline = api();
     vi.mocked(offline.bootstrap).mockRejectedValue(new TypeError("Failed to fetch"));

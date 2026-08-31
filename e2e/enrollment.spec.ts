@@ -59,7 +59,7 @@ test("coordinated TV request becomes ready after approval and revoked after admi
   await expect(admin.getByText(/was approved/i)).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole("button", { name: "Family Trips, program" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Family Trips, collection" })).toBeVisible();
 
   await admin.getByRole("button", { name: /devices/i }).click();
   await admin.getByRole("button", { name: /revoke living room/i }).click();
