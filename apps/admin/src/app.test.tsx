@@ -89,6 +89,28 @@ describe("admin snapshot workflows", () => {
     expect(client.login).not.toHaveBeenCalled();
   });
 
+  it("treats an unauthorized configured-installation snapshot as the signed-out state", async () => {
+    const client = api();
+    vi.mocked(client.snapshot).mockRejectedValueOnce(
+      new AdminApiError(401, "ADMIN_UNAUTHORIZED", "Your admin session expired. Sign in again."),
+    );
+
+    render(<AdminApp api={client} />);
+
+    expect(await screen.findByRole("heading", { name: "Household admin" })).toBeVisible();
+    expect(screen.getByLabelText("Admin passphrase")).toBeVisible();
+    expect(screen.queryByText("Installation status unavailable")).not.toBeInTheDocument();
+  });
+
+  it("preserves installation status errors for non-authentication failures", async () => {
+    const client = api();
+    vi.mocked(client.snapshot).mockRejectedValueOnce(refreshFailure);
+
+    render(<AdminApp api={client} />);
+
+    expect(await screen.findByText("Installation status unavailable")).toBeVisible();
+  });
+
   it("keeps the single initial snapshot usable through StrictMode effect replay", async () => {
     const client = api();
     render(<StrictMode><AdminApp api={client} /></StrictMode>);

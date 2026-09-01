@@ -16,7 +16,13 @@ describe("self-hosted deployment configuration", () => {
   it("provides one bundled self-hosted server and static public tree", async () => {
     const npmCli = process.platform === "win32" ? process.env.npm_execpath ?? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js") : "npm";
     await exec(process.platform === "win32" ? process.execPath : npmCli, process.platform === "win32" ? [npmCli, "run", "build:server"] : ["run", "build:server"], { cwd: process.cwd(), env: process.env, maxBuffer: 30 * 1024 * 1024 });
-    await Promise.all([access("build/self-hosted/public/index.html"), access("build/self-hosted/public/admin/index.html"), access("build/self-hosted/server/index.js")]);
+    const linuxTargetArch = process.platform === "linux" ? process.arch : "x64";
+    await Promise.all([
+      access("build/self-hosted/public/index.html"),
+      access("build/self-hosted/public/admin/index.html"),
+      access("build/self-hosted/server/index.js"),
+      access(`build/self-hosted/node_modules/@node-rs/argon2-linux-${linuxTargetArch}-gnu/argon2.linux-${linuxTargetArch}-gnu.node`),
+    ]);
     const serverFiles = (await readdir("build/self-hosted/server", { recursive: true, withFileTypes: true })).filter(entry => entry.isFile());
     expect(serverFiles.map(entry => entry.name)).toEqual(["index.js"]);
     expect(await access("build/self-hosted/test-fixtures").then(() => true, () => false)).toBe(false);
@@ -28,8 +34,9 @@ describe("self-hosted deployment configuration", () => {
 
   it("declares Docker build and smoke commands", async () => {
     const root = JSON.parse(await readFile("package.json", "utf8")) as { scripts: Record<string, string> };
-    expect(root.scripts["docker:build"]).toBe("docker build --platform linux/amd64 -t cloudframe:local .");
+    expect(root.scripts["build:server"]).toBe("npm run build && node scripts/build-server.mjs");
+    expect(root.scripts["docker:build"]).toBe("node scripts/docker-build.mjs");
     expect(root.scripts["test:container"]).toBe("node scripts/container-smoke.mjs");
-    await Promise.all([access("Dockerfile"), access("compose.example.yaml"), access("scripts/container-smoke.mjs")]);
+    await Promise.all([access("Dockerfile"), access("compose.example.yaml"), access("scripts/docker-build.mjs"), access("scripts/container-smoke.mjs")]);
   });
 });

@@ -2009,11 +2009,14 @@ function normalizeHttpError(error: unknown): HttpError {
     );
   }
   if (error instanceof ControlOAuthServiceError) {
+    const providerNotConfigured = error.code === "OAUTH_PROVIDER_NOT_CONFIGURED";
     return new HttpError(
-      error.code === "SOURCE_NOT_FOUND" ? 404 : 400,
+      error.code === "SOURCE_NOT_FOUND" ? 404 : providerNotConfigured ? 503 : 400,
       error.code,
       error.code === "SOURCE_NOT_FOUND"
         ? "Source not found."
+        : providerNotConfigured
+          ? "This provider is not configured on the server."
         : "OAuth request could not be completed."
     );
   }

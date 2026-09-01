@@ -1,13 +1,14 @@
 FROM node:24.5.0-bookworm-slim AS build
 WORKDIR /src
-COPY package.json package-lock.json ./
+COPY package.json package-lock.json .npmrc ./
 COPY apps/admin/package.json apps/admin/package.json
 COPY apps/tv/package.json apps/tv/package.json
 COPY packages/providers/package.json packages/providers/package.json
 COPY packages/server/package.json packages/server/package.json
 COPY packages/shared/package.json packages/shared/package.json
+COPY packages/theme/package.json packages/theme/package.json
 COPY packages/tv-core/package.json packages/tv-core/package.json
-RUN npm ci
+RUN npm ci --registry=https://packagefeedproxy.microsoft.io/npm/
 COPY . .
 ARG CLOUDFRAME_CONTAINER_TEST=0
 RUN CLOUDFRAME_CONTAINER_TEST=$CLOUDFRAME_CONTAINER_TEST npm run build:server

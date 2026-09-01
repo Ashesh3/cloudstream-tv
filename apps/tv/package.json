@@ -8,13 +8,13 @@
     "build": "vite build && node ../../scripts/build-tv-media-worker.mjs"
   },
   "dependencies": {
-    "@astryxdesign/core": "0.5.1",
-    "@astryxdesign/theme-neutral": "0.5.1",
+    "@astryxdesign/core": "0.5.0",
+    "@astryxdesign/theme-neutral": "0.5.0",
     "@cloudframe/shared": "*",
     "@cloudframe/theme": "*",
     "@cloudframe/tv-core": "*",
     "@stylexjs/stylex": "0.19.0",
-    "@videojs/html": "10.0.0-beta.32",
+    "@videojs/html": "10.0.0-beta.31",
     "hls.js": "1.7.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"

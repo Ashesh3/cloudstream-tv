@@ -2,7 +2,7 @@
 
 ## 1. Prerequisites
 
-- Docker with Compose support on a host capable of running `linux/amd64` images.
+- Docker with Compose support on a Linux host.
 - An HTTPS reverse proxy. Cloudframe listens on one internal HTTP port; do not expose it directly to televisions or administrators.
 - Google and/or Microsoft OAuth applications for the read-only Google Drive and OneDrive source you enable.
 - Storage for a persistent `/data` volume and explicit backups.
@@ -12,8 +12,12 @@
 Build locally without prescribing a registry:
 
 ```sh
-docker build --platform linux/amd64 -t cloudframe:local .
+npm run docker:build
 ```
+
+The default build targets the Docker host's native Linux architecture. Set
+`CLOUDFRAME_DOCKER_PLATFORM` only when an explicit cross-platform image is
+required, for example `CLOUDFRAME_DOCKER_PLATFORM=linux/amd64 npm run docker:build`.
 
 Alternatively set `CLOUDFRAME_IMAGE` when using `compose.example.yaml` to an immutable image tag that you control.
 

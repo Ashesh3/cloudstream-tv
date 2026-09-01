@@ -73,6 +73,7 @@ export interface ControlApiHarness {
     oauthCookie: string;
   }>;
   failNextControlLoad(): void;
+  failOAuthBegin(error: unknown): void;
   failOAuthComplete(error: unknown): void;
 }
 
@@ -212,9 +213,15 @@ export async function createControlApiHarness(
     createId: () => "source-created",
     randomBytes: (size) => Buffer.alloc(size, 8)
   });
+  let oauthBeginFailure: unknown;
   let oauthCompleteFailure: unknown;
   const oauth = {
-    beginAuthorization: realOAuth.beginAuthorization,
+    async beginAuthorization(
+      input: Parameters<typeof realOAuth.beginAuthorization>[0]
+    ) {
+      if (oauthBeginFailure !== undefined) throw oauthBeginFailure;
+      return realOAuth.beginAuthorization(input);
+    },
     async completeAuthorization(
       input: Parameters<typeof realOAuth.completeAuthorization>[0]
     ) {
@@ -469,6 +476,9 @@ export async function createControlApiHarness(
     },
     failNextControlLoad() {
       failNextLoad = true;
+    },
+    failOAuthBegin(error) {
+      oauthBeginFailure = error;
     },
     failOAuthComplete(error) {
       oauthCompleteFailure = error;

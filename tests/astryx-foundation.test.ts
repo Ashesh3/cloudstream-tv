@@ -4,16 +4,16 @@ import { describe, expect, it } from "vitest";
 const readJson = async (path: string) => JSON.parse(await readFile(path, "utf8"));
 
 describe("Astryx foundation", () => {
-  it("pins one shared Astryx 0.5.1 theme foundation", async () => {
+  it("pins one shared Astryx 0.5.0 theme foundation", async () => {
     const root = await readJson("package.json");
     const admin = await readJson("apps/admin/package.json");
     const tv = await readJson("apps/tv/package.json");
     const theme = await readJson("packages/theme/package.json");
 
-    expect(root.devDependencies["@astryxdesign/cli"]).toBe("0.5.1");
+    expect(root.devDependencies["@astryxdesign/cli"]).toBe("0.5.0");
     expect(theme.dependencies).toMatchObject({
-      "@astryxdesign/core": "0.5.1",
-      "@astryxdesign/theme-neutral": "0.5.1",
+      "@astryxdesign/core": "0.5.0",
+      "@astryxdesign/theme-neutral": "0.5.0",
       "@stylexjs/stylex": "0.19.0"
     });
     expect(admin.dependencies["@cloudframe/theme"]).toBe("*");

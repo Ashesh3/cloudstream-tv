@@ -150,6 +150,19 @@ describe("admin API browser boundary", () => {
     await expect(createAdminApi(vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: false, error: { code: "PRIVATE", message: "token" } }), { status: 500 }))).snapshot()).rejects.toMatchObject({ code: "REQUEST_FAILED", message: "Cloudframe is temporarily unavailable. Try again." });
   });
 
+  it("shows the actionable administrator message for an unconfigured OAuth provider", async () => {
+    const response = new Response(JSON.stringify({
+      code: "OAUTH_PROVIDER_NOT_CONFIGURED",
+      message: "This provider is not configured on the server.",
+    }), { status: 503, headers: { "content-type": "application/json" } });
+
+    await expect(createAdminApi(vi.fn().mockResolvedValue(response)).authorizeSource("google")).rejects.toMatchObject({
+      status: 503,
+      code: "OAUTH_PROVIDER_NOT_CONFIGURED",
+      message: "This provider is not configured on the server. Add its OAuth client ID and secret, then restart Cloudframe.",
+    });
+  });
+
   it("rejects hostile successful response objects as INVALID_RESPONSE", async () => {
     const hostileValues: unknown[] = [];
     const inherited = Object.create({ revision: 7 });

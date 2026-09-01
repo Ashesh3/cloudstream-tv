@@ -9,6 +9,7 @@ import type {
   ProviderNode,
   ProviderRegistry
 } from "@cloudframe/providers";
+import { ProviderError } from "@cloudframe/providers";
 import {
   ControlOAuthServiceError,
   createSqliteOAuthReplayCache,
@@ -114,6 +115,7 @@ interface ProviderHarness {
   account: ProviderAccount;
   root: ProviderNode;
   completeError: Error | null;
+  registryError: Error | null;
 }
 
 function providerHarness(): ProviderHarness {
@@ -146,6 +148,7 @@ function providerHarness(): ProviderHarness {
       hasPreview: false
     },
     completeError: null,
+    registryError: null,
     adapter: undefined as unknown as ProviderAdapter
   };
   harness.adapter = {
@@ -195,7 +198,12 @@ function setup(options: { replaceFailures?: number } = {}) {
   document.pendingDeviceRequests = {};
   const control = controlStoreHarness(document, options);
   const provider = providerHarness();
-  const providers: ProviderRegistry = { get: () => provider.adapter };
+  const providers: ProviderRegistry = {
+    get: () => {
+      if (provider.registryError) throw provider.registryError;
+      return provider.adapter;
+    }
+  };
   const replayCache = new MemoryReplayCache();
   const codec = createSealedSessionCodec(testAeadKeyring(), () => TEST_NOW);
   const keyring = {
@@ -283,6 +291,41 @@ function setup(options: { replaceFailures?: number } = {}) {
 }
 
 describe("sealed control OAuth", () => {
+  it("preserves a dedicated application error when OAuth is not configured", async () => {
+    const harness = setup();
+    const providerError = new ProviderError(
+      "PROVIDER_NOT_CONFIGURED",
+      "private provider configuration detail",
+      { retryable: false },
+    );
+    harness.provider.adapter.beginAuthorization = async () => {
+      throw providerError;
+    };
+
+    const error = await harness.beginGoogle().catch((value: unknown) => value);
+
+    expect(error).toBeInstanceOf(ControlOAuthServiceError);
+    expect(error).toMatchObject({ code: "OAUTH_PROVIDER_NOT_CONFIGURED", cause: providerError });
+    expect(String(error)).not.toContain("private provider configuration detail");
+  });
+
+  it("preserves the dedicated code when configuration disappears before callback completion", async () => {
+    const harness = setup();
+    const started = await harness.beginGoogle();
+    harness.provider.registryError = new ProviderError(
+      "PROVIDER_NOT_CONFIGURED",
+      "private callback configuration detail",
+      { retryable: false },
+    );
+
+    const error = await harness.oauth
+      .completeAuthorization(harness.callback(started))
+      .catch((value: unknown) => value);
+
+    expect(error).toMatchObject({ code: "OAUTH_PROVIDER_NOT_CONFIGURED" });
+    expect(String(error)).not.toContain("private callback configuration detail");
+  });
+
   it("preserves safe provider error identity while normalizing OAuth completion", async () => {
     const harness = setup();
     harness.provider.adapter.beginAuthorization = async input => ({

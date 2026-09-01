@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { pathToFileURL } from "node:url";
+import { dockerBuildArguments } from "./docker-build.mjs";
 
 export async function runContainerSmoke(dependencies = {}) {
   const run = dependencies.run ?? runProcess;
@@ -20,12 +21,10 @@ export async function runContainerSmoke(dependencies = {}) {
   try {
     await mkdir(dataDirectory, { recursive: true });
     await chmod(dataDirectory, 0o777).catch(() => undefined);
-    await run("docker", ["build", "--platform", "linux/amd64", "--build-arg", "CLOUDFRAME_CONTAINER_TEST=1", "-t", image, "."]);
+    await run("docker", dockerBuildArguments({ image, containerTest: true }));
     await run("docker", ["run", "-d", "--name", container, "-p", "127.0.0.1::8080", "-v", `${resolve(dataDirectory)}:/data`, "-e", "APP_ORIGIN=https://127.0.0.1", "-e", "TRANSCODE_CACHE_MAX_BYTES=1GiB", "-e", "TRANSCODE_CACHE_MIN_FREE_BYTES=64MiB", "-e", "TRANSCODE_FIRST_SEGMENT_TIMEOUT_SECONDS=60", "-e", "TRANSCODE_THREADS=1", image]);
     running = true;
-    const portOutput = await run("docker", ["port", container, "8080/tcp"]);
-    const port = parsePort(portOutput.stdout) ?? 8080;
-    const baseUrl = `http://127.0.0.1:${port}`;
+    const baseUrl = await containerBaseUrl(run, container);
     await waitFor(http, baseUrl, "/healthz", wait);
     await waitFor(http, baseUrl, "/readyz", wait);
     const logs = await run("docker", ["logs", container]);
@@ -50,11 +49,17 @@ export async function runContainerSmoke(dependencies = {}) {
     await writeFile(segmentPath, segment.bytes ?? new Uint8Array());
     await run("docker", ["cp", segmentPath, `${container}:/tmp/cloudframe-smoke-segment.ts`]);
     await run("docker", ["exec", container, "ffprobe", "-v", "error", "/tmp/cloudframe-smoke-segment.ts"]);
-    await run("docker", ["restart", container]);
-    await waitFor(http, baseUrl, "/readyz", wait);
-    const status = await http({ baseUrl, path: "/api/setup/status" });
+    await run("docker", ["stop", "--time", "20", container]);
+    running = false;
+    const stopped = await run("docker", ["inspect", "--format", "{{.State.ExitCode}}", container]);
+    if (String(stopped.stdout).trim() !== "0") throw new Error(`Container exited with ${String(stopped.stdout).trim()}`);
+    await run("docker", ["start", container]);
+    running = true;
+    const restartedBaseUrl = await containerBaseUrl(run, container);
+    await waitFor(http, restartedBaseUrl, "/readyz", wait);
+    const status = await http({ baseUrl: restartedBaseUrl, path: "/api/setup/status" });
     if ((status.json?.data ?? status.json)?.state !== "configured") throw new Error("Configured installation did not persist");
-    await http({ baseUrl, path: "/api/admin/login", method: "POST", json: { passphrase } });
+    await http({ baseUrl: restartedBaseUrl, path: "/api/admin/login", method: "POST", json: { passphrase } });
     await run("docker", ["stop", "--time", "20", container]);
     running = false;
     const exit = await run("docker", ["inspect", "--format", "{{.State.ExitCode}}", container]);
@@ -70,6 +75,10 @@ export async function runContainerSmoke(dependencies = {}) {
 }
 
 function parsePort(value) { const match = /127\.0\.0\.1:(\d+)/u.exec(value); return match ? Number(match[1]) : null; }
+async function containerBaseUrl(run, container) {
+  const portOutput = await run("docker", ["port", container, "8080/tcp"]);
+  return `http://127.0.0.1:${parsePort(portOutput.stdout) ?? 8080}`;
+}
 async function waitFor(http, baseUrl, path, wait) { for (let attempt = 0; attempt < 120; attempt += 1) { try { if ((await http({ baseUrl, path })).status === 200) return; } catch {} await wait(250); } throw new Error(`${path} did not become ready`); }
 function header(headers, name) { if (headers instanceof Headers) return headers.get(name) ?? ""; return headers?.[name] ?? headers?.[name.toLowerCase()] ?? ""; }
 function cookieFrom(headers, name) { const cookie = header(headers, "set-cookie"); const match = new RegExp(`(?:^|,\\s*)${name}=([^;]+)`, "u").exec(cookie); if (!match) throw new Error(`Missing ${name} cookie`); return `${name}=${match[1]}`; }

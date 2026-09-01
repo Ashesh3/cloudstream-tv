@@ -199,6 +199,11 @@ export function AdminApp({ api, navigate = url => window.location.assign(url), c
       if (status.state === "configured") await refresh();
     }).catch((cause) => {
       if (!mounted.current) return;
+      if (isStatus(cause, 401)) {
+        setInstallationState("configured");
+        setError("");
+        return;
+      }
       setInstallationState("error");
       setError(messageFor(cause));
     }).finally(() => { if (mounted.current) setCheckingSession(false); });

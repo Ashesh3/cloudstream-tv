@@ -8,8 +8,13 @@ const root = resolve(import.meta.dirname, "..");
 const output = join(root, "build", "self-hosted");
 const serverDirectory = join(output, "server");
 const exec = promisify(execFile);
-const linuxX64 = { name: "@node-rs/argon2-linux-x64-gnu", version: "2.1.0" };
+const linuxTargetArch = process.platform === "linux" ? process.arch : "x64";
+const linuxGlibcRuntimePackage = { name: `@node-rs/argon2-linux-${linuxTargetArch}-gnu`, version: "2.1.0" };
 const containerTest = process.env.CLOUDFRAME_CONTAINER_TEST === "1";
+
+if (!["arm64", "x64"].includes(linuxTargetArch)) {
+  throw new Error("build:server supports Linux arm64 or x64 images");
+}
 
 await rm(output, { recursive: true, force: true });
 await mkdir(serverDirectory, { recursive: true });
@@ -27,7 +32,7 @@ await esbuild({
 });
 await writeFile(join(output, "package.json"), JSON.stringify({ type: "module" }, null, 2));
 await copyRuntimePackage("@node-rs/argon2");
-await copyOrFetchRuntimePackage(linuxX64);
+await copyOrFetchRuntimePackage(linuxGlibcRuntimePackage);
 if (containerTest) {
   const fixtures = join(output, "test-fixtures");
   await mkdir(fixtures, { recursive: true });
@@ -56,9 +61,10 @@ async function copyOrFetchRuntimePackage(pkg) {
     ? join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js")
     : "npm";
   const command = process.platform === "win32" ? process.execPath : npmCli;
+  const registry = "--registry=https://packagefeedproxy.microsoft.io/npm/";
   const args = process.platform === "win32"
-    ? [npmCli, "pack", `${pkg.name}@${pkg.version}`, "--silent"]
-    : ["pack", `${pkg.name}@${pkg.version}`, "--silent"];
+    ? [npmCli, "pack", `${pkg.name}@${pkg.version}`, "--silent", registry]
+    : ["pack", `${pkg.name}@${pkg.version}`, "--silent", registry];
   const { stdout } = await exec(command, args, { cwd: cache, windowsHide: true, maxBuffer: 1024 * 1024 });
   const archive = stdout.trim().split(/\r?\n/).at(-1);
   if (!archive) throw new Error(`npm pack produced no archive for ${pkg.name}`);

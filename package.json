@@ -16,7 +16,7 @@
     "check:theme": "astryx theme build packages/theme/src/cloudframe-night.ts --out packages/theme/dist/cloudframe-night.css --check && node scripts/build-tv-astryx-css.mjs --check",
     "build:e2e": "cross-env CLOUDFRAME_E2E_BUILD=1 npm run build",
     "build:server": "npm run build && node scripts/build-server.mjs",
-    "docker:build": "docker build --platform linux/amd64 -t cloudframe:local .",
+    "docker:build": "node scripts/docker-build.mjs",
     "check:chromium108": "node scripts/check-chromium108.mjs",
     "dev:tv": "npm run dev -w @cloudframe/tv",
     "dev:admin": "npm run dev -w @cloudframe/admin",
@@ -35,7 +35,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@astryxdesign/cli": "0.5.1",
+    "@astryxdesign/cli": "0.5.0",
     "@eslint/js": "^9.39.1",
     "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^6.9.1",
@@ -57,6 +57,10 @@
   "optionalDependencies": {
     "@node-rs/argon2-linux-arm64-gnu": "2.1.0",
     "@node-rs/argon2-linux-x64-gnu": "2.1.0"
+  },
+  "overrides": {
+    "@csstools/css-syntax-patches-for-csstree": "1.1.8",
+    "shaka-player": "5.2.7"
   },
   "engines": {
     "node": ">=24.5.0"

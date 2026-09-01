@@ -16,7 +16,7 @@ Cloudframe is a private, single-household media browser for televisions. It ship
 Requirements: Docker with Compose, an HTTPS reverse proxy, and OAuth applications for the providers you enable.
 
 ```powershell
-docker build --platform linux/amd64 -t cloudframe:local .
+npm run docker:build
 Copy-Item .env.example .env
 docker compose -f compose.example.yaml up -d
 docker compose -f compose.example.yaml logs cloudframe

@@ -46,8 +46,9 @@ async function shutdown() {
   try {
     await requests.drain(server, 15_000);
     await composition.close(AbortSignal.timeout(15_000));
+    process.exit(0);
   } catch {
-    process.exitCode = 1;
+    process.exit(1);
   }
 }
 

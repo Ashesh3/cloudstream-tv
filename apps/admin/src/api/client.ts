@@ -230,6 +230,7 @@ function safeMessage(code: string, status: number): string {
     DEVICE_REQUEST_RESOLVED: "That device request was already resolved.",
     SOURCE_NOT_FOUND: "That source is no longer available.",
     ROOT_NOT_FOUND: "That folder is no longer available.",
+    OAUTH_PROVIDER_NOT_CONFIGURED: "This provider is not configured on the server. Add its OAuth client ID and secret, then restart Cloudframe.",
     PROVIDER_REAUTH_REQUIRED: "Reauthorization required.",
     PROVIDER_UNAVAILABLE: "Provider temporarily unavailable. Try again.",
     PROVIDER_TIMEOUT: "Provider temporarily unavailable. Try again."

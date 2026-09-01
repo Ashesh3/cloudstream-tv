@@ -8,8 +8,8 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@astryxdesign/core": "0.5.1",
-    "@astryxdesign/theme-neutral": "0.5.1",
+    "@astryxdesign/core": "0.5.0",
+    "@astryxdesign/theme-neutral": "0.5.0",
     "@cloudframe/shared": "*",
     "@cloudframe/theme": "*",
     "@fontsource-variable/instrument-sans": "^5.3.0",

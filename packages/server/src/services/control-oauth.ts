@@ -6,11 +6,11 @@ import {
 
 import type {
   ProviderAccount,
-  ProviderAdapter,
   ProviderKind,
   ProviderNode,
   ProviderRegistry
 } from "@cloudframe/providers";
+import { ProviderError } from "@cloudframe/providers";
 import type {
   ControlPlaneDocumentV2,
   ControlPlaneSource,
@@ -102,6 +102,7 @@ export interface ControlOAuthServiceDependencies {
 export type ControlOAuthServiceErrorCode =
   | "OAUTH_ACCOUNT_MISMATCH"
   | "OAUTH_CANCELLED"
+  | "OAUTH_PROVIDER_NOT_CONFIGURED"
   | "OAUTH_PROVIDER_ERROR"
   | "OAUTH_STATE_INVALID"
   | "SOURCE_NOT_FOUND";
@@ -256,7 +257,11 @@ async function providerCall<T>(operation: () => Promise<T>): Promise<T> {
     return await operation();
   } catch (error) {
     if (error instanceof ControlOAuthServiceError) throw error;
-    const normalized = new ControlOAuthServiceError("OAUTH_PROVIDER_ERROR");
+    const normalized = new ControlOAuthServiceError(
+      error instanceof ProviderError && error.code === "PROVIDER_NOT_CONFIGURED"
+        ? "OAUTH_PROVIDER_NOT_CONFIGURED"
+        : "OAUTH_PROVIDER_ERROR"
+    );
     if (error instanceof Error) {
       normalized.cause = error;
     }
@@ -413,7 +418,9 @@ export function createControlOAuthService(
         stateInvalid();
       }
 
-      const adapter: ProviderAdapter = dependencies.providers.get(claims.provider);
+      const adapter = await providerCall(() =>
+        Promise.resolve(dependencies.providers.get(claims.provider))
+      );
       const account = await providerCall(() =>
         adapter.completeAuthorization({
           code: input.code!,

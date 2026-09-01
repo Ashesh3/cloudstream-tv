@@ -7,9 +7,30 @@ import {
   createControlApiHarness,
   jsonRequest
 } from "./helpers/api";
+import { ControlOAuthServiceError } from "@cloudframe/server";
 
 
 describe("final control HTTP API", () => {
+  it("returns a safe 503 when the OAuth provider is not configured", async () => {
+    const harness = await createControlApiHarness();
+    harness.failOAuthBegin(new ControlOAuthServiceError("OAUTH_PROVIDER_NOT_CONFIGURED"));
+
+    const response = await harness.app(
+      jsonRequest(
+        "/api/admin/sources/google/authorize",
+        "POST",
+        {},
+        harness.adminMutationHeaders(),
+      ),
+    );
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      code: "OAUTH_PROVIDER_NOT_CONFIGURED",
+      message: "This provider is not configured on the server.",
+    });
+  });
+
   it("serves the final route table with no sync or server-history endpoints", async () => {
     const harness = await createControlApiHarness();
 
