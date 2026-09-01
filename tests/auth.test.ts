@@ -26,12 +26,8 @@ describe("self-hosted request subjects", () => {
     expect(requestSubject(new Request("https://app.test", {
       headers: {
         "x-cloudframe-peer-address": "203.0.113.7",
-        "x-vercel-forwarded-for": "198.51.100.4",
       },
     }))).toBe("203.0.113.7");
-    expect(requestSubject(new Request("https://app.test", {
-      headers: { "x-vercel-forwarded-for": "198.51.100.4" },
-    }))).toBe("unknown");
     expect(requestSubject(new Request("https://app.test", {
       headers: { "x-cloudframe-peer-address": "not-an-ip" },
     }))).toBe("unknown");

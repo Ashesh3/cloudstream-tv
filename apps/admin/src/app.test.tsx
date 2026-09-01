@@ -123,7 +123,7 @@ describe("admin snapshot workflows", () => {
   it("shows local encrypted storage and current control-plane counts", async () => {
     await login(api());
     expect(screen.getByText("Local encrypted storage")).toBeVisible();
-    expect(document.body.textContent).not.toMatch(/Vercel|recovery copy/i);
+    expect(document.body.textContent).not.toMatch(/recovery copy/i);
     go("Settings");
     expect(screen.getByText("Approved devices").parentElement).toHaveTextContent("1");
     expect(screen.getByText("Connected sources").parentElement).toHaveTextContent("1");

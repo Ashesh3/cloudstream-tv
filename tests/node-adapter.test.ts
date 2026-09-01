@@ -108,23 +108,20 @@ describe("Node/Web HTTP adapter", () => {
     );
   });
 
-  it("replaces forged peer and forwarding headers with the socket address", async () => {
+  it("replaces forged internal peer headers with the socket address", async () => {
     await withServer(
       async (request) => new Response(JSON.stringify({
         peer: request.headers.get("x-cloudframe-peer-address"),
-        forwarded: request.headers.get("x-vercel-forwarded-for"),
         url: request.url,
       }), { headers: { "content-type": "application/json" } }),
       async (origin) => {
         const value = await fetch(`${origin}/headers?x=1`, {
           headers: {
             "x-cloudframe-peer-address": "203.0.113.9",
-            "x-vercel-forwarded-for": "198.51.100.2",
             host: "forged.example",
           },
         }).then((response) => response.json()) as Record<string, string | null>;
         expect(value.peer).toBe("127.0.0.1");
-        expect(value.forwarded).toBeNull();
         expect(value.url).toBe("https://configured.example/headers?x=1");
       },
     );

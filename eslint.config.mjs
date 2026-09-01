@@ -14,7 +14,6 @@ export default tseslint.config(
       ".impeccable/**",
       ".superpowers/**",
       ".worktrees/**",
-      ".vercel/**",
       ".next/**",
       "playwright-report/**",
       "test-results/**",

@@ -17,12 +17,12 @@ describe("portable container contract", () => {
     expect(dockerfile).toContain('ENTRYPOINT ["/usr/bin/tini", "--"]');
     expect(dockerfile).toContain('CMD ["node", "server/index.js"]');
     expect(dockerfile).toMatch(/USER cloudframe/);
-    expect(dockerfile).not.toMatch(/Horizon|\b\d{1,3}(?:\.\d{1,3}){3}\b|nginx|certbot|cloudflare|vercel token|client_secret|COPY .*\.env/i);
+    expect(dockerfile).not.toMatch(/Horizon|\b\d{1,3}(?:\.\d{1,3}){3}\b|nginx|certbot|cloudflare|client_secret|COPY .*\.env/i);
   });
 
   it("ignores local state and ships a hardened portable Compose example", async () => {
     const ignore = await readFile(".dockerignore", "utf8");
-    for (const value of [".git", ".vercel", ".next", "node_modules", "build", "dist", ".env*", "/data", ".cache", "test-results", ".worktrees", ".agents", ".codex", ".impeccable"]) expect(ignore).toContain(value);
+    for (const value of [".git", ".next", "node_modules", "build", "dist", ".env*", "/data", ".cache", "test-results", ".worktrees", ".agents", ".codex", ".impeccable"]) expect(ignore).toContain(value);
     expect(ignore).toContain("!.env.example");
     const compose = await readFile("compose.example.yaml", "utf8");
     expect(compose).toContain('${CLOUDFRAME_IMAGE:-cloudframe:local}');

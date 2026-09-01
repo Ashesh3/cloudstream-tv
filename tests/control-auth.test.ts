@@ -301,7 +301,7 @@ describe("sealed control authentication", () => {
     expect(harness.loadCount).toBe(0);
   });
 
-  it("logs in from one active Vercel snapshot and issues a one-year sealed cookie without a session mutation", async () => {
+  it("logs in from one active control snapshot and issues a one-year sealed cookie without a session mutation", async () => {
     const harness = await authHarness();
 
     const result = await harness.auth.login(PASSPHRASE, TEST_NOW);

@@ -117,7 +117,7 @@ describe("sealed control enrollment", () => {
     expect(harness.firestoreReads).toBe(0);
   });
 
-  it("polls pending request state from Vercel without Firestore reads", async () => {
+  it("polls pending request state from the control store without recovery-store reads", async () => {
     const harness = enrollmentHarness();
     const created = await harness.enrollment.createRequest(
       "Living Room",
@@ -132,7 +132,7 @@ describe("sealed control enrollment", () => {
     expect(harness.firestoreReads).toBe(0);
   });
 
-  it("uses a supplied request context without reloading Vercel state", async () => {
+  it("uses a supplied request context without reloading control state", async () => {
     const harness = enrollmentHarness();
     const created = await harness.enrollment.createRequest(
       "Living Room",

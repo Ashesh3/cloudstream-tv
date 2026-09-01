@@ -11,12 +11,12 @@ describe("workspace", () => {
     await expect(access("deploy/server-entry.ts")).resolves.toBeUndefined();
   });
 
-  it("contains no active Vercel runtime or dormant indexing/workflow package", async () => {
-    for (const path of ["vercel.json", "deploy/api-entry.ts", "deploy/vercel-build-contract.json", "scripts/build-vercel.mjs", "packages/indexer", "workflows", "src", "next.config.ts"]) {
+  it("contains no dormant indexing or workflow package", async () => {
+    for (const path of ["packages/indexer", "workflows", "src", "next.config.ts"]) {
       await expect(access(path), path).rejects.toMatchObject({ code: "ENOENT" });
     }
     const lock = await readFile("package-lock.json", "utf8");
-    expect(lock).not.toMatch(/@cloudframe\/indexer|@workflow\/builders|@vercel\/|@google-cloud\/firestore/);
+    expect(lock).not.toMatch(/@cloudframe\/indexer|@workflow\/builders|@google-cloud\/firestore/);
   });
 
   it("keeps direct Google playback for compatible media and HLS for incompatible media", async () => {

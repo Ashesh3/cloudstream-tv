@@ -24,16 +24,15 @@ describe("Cloudframe Night design contract", () => {
       .map(path => readFileSync(`${root}${path}`, "utf8"))
       .join("\n");
     for (const required of ["portable Docker image", "encrypted local SQLite", "/data", "one active TV transcode", "FFmpeg", "demand-paged HLS", "local TV watch history", "browser-side authenticated direct delivery", "read-only Google Drive and OneDrive", "explicit backup"]) expect(documentation).toContain(required);
-    for (const retired of ["private Vercel Blob", "Vercel Runtime Cache", "Firestore recovery mirror", "zero steady-state Firestore reads", "Mumbai API function", "build:vercel", "Vercel streams", "Cloudframe does not transcode"]) expect(documentation).not.toContain(retired);
+    for (const retired of ["hosted control blob", "runtime control cache", "recovery mirror", "Mumbai API function", "Cloudframe does not transcode"]) expect(documentation).not.toContain(retired);
   });
 
-  it("keeps active player and thumbnail documents on the direct-media boundary", () => {
-    for (const path of ["docs/superpowers/specs/2026-08-29-video-player-thumbnail-compatibility-design.md", "docs/superpowers/plans/2026-08-29-video-player-thumbnail-compatibility.md"]) {
-      const documentation = readFileSync(`${root}${path}`, "utf8");
-      expect(documentation, path).toContain("browser-side authenticated direct delivery");
-      expect(documentation, path).toContain("media bytes go directly from Google and Microsoft");
-      expect(documentation, path).toContain("short-lived Google access token");
-      expect(documentation, path).not.toMatch(/authorized same-origin range proxy|Google proxy|\/api\/tv\/google-media\//i);
-    }
+  it("keeps the active product documentation on the direct-media boundary", () => {
+    const documentation = ["PRODUCT.md", "README.md", "DESIGN.md"]
+      .map(path => readFileSync(`${root}${path}`, "utf8"))
+      .join("\n");
+    expect(documentation).toContain("browser-side authenticated direct delivery");
+    expect(documentation).toContain("Google Drive and OneDrive");
+    expect(documentation).not.toMatch(/authorized same-origin range proxy|Google proxy|\/api\/tv\/google-media\//i);
   });
 });

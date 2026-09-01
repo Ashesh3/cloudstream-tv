@@ -129,7 +129,3 @@ Admin Settings polls the protected transcoder status while visible. It reports a
 ## 15. Replacement and uninstall
 
 Replacing a container or image does not remove `/data`. A complete uninstall requires separately stopping/removing the container and intentionally deleting the exact persistent data directory after verifying its path and any required backup. Never use a broad Docker prune as Cloudframe cleanup.
-
-## 16. External platform cleanup
-
-This repository no longer contains an active Vercel, Blob, Firestore, Firebase, or GCP runtime. Deleting old external projects, data, DNS records, service identities, or credentials is manual and outside this repository run. Inventory and approve that cleanup separately; Cloudframe build, migration, or uninstall commands do not perform it.

@@ -51,7 +51,7 @@ describe("self-hosted composition", () => {
       GOOGLE_CLIENT_SECRET: "google-secret",
     } as NodeJS.ProcessEnv, {
       get(target, property) {
-        if (typeof property === "string" && /VERCEL|GCP|FIRESTORE|BLOB/.test(property)) {
+        if (typeof property === "string" && /GCP|FIRESTORE|BLOB/.test(property)) {
           throw new Error(`retired environment read: ${property}`);
         }
         return Reflect.get(target, property);

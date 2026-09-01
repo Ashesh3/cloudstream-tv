@@ -4,7 +4,6 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 
 const INTERNAL_PEER_HEADER = "x-cloudframe-peer-address";
 const INTERNAL_TARGET_HEADER = "x-cloudframe-request-target";
-const RETIRED_FORWARD_HEADER = "x-vercel-forwarded-for";
 
 export function createNodeRequest(
   request: IncomingMessage,
@@ -28,8 +27,7 @@ export function createNodeRequest(
     const lower = name.toLowerCase();
     if (
       lower === INTERNAL_PEER_HEADER ||
-      lower === INTERNAL_TARGET_HEADER ||
-      lower === RETIRED_FORWARD_HEADER
+      lower === INTERNAL_TARGET_HEADER
     ) continue;
     headers.append(name, value);
   }

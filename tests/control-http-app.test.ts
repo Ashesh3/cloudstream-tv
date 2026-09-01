@@ -81,7 +81,7 @@ describe("final control HTTP API", () => {
     expect(rejected.status).toBe(400);
   });
 
-  it("does not expose a Vercel Google media byte route", async () => {
+  it("does not expose a server-side Google media byte route", async () => {
     const harness = await createControlApiHarness();
     const response = await harness.app(new Request(
       `${harness.origin}/api/tv/google-media/retired-handle`,

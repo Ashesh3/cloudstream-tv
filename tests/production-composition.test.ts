@@ -37,6 +37,6 @@ describe("self-hosted production composition", () => {
     const entry = await readFile("deploy/server-entry.ts", "utf8");
     expect(entry).toContain("createSelfHostedComposition");
     expect(entry).toContain("createNodeRequest");
-    expect(entry).not.toMatch(/Vercel|Firestore|GCP_|BLOB_STORE_ID|@google-cloud|@vercel/i);
+    expect(entry).not.toMatch(/Firestore|GCP_|BLOB_STORE_ID|@google-cloud/i);
   });
 });

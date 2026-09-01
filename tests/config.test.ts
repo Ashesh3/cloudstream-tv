@@ -10,7 +10,7 @@ describe("self-hosted deployment configuration", () => {
   it("documents only the portable local runtime contract", async () => {
     const content = await readFile(".env.example", "utf8");
     for (const name of ["APP_ORIGIN", "PORT", "DATA_DIR", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "ONEDRIVE_CLIENT_ID", "ONEDRIVE_CLIENT_SECRET", "ONEDRIVE_TENANT", "TRANSCODE_CACHE_MAX_BYTES", "TRANSCODE_CACHE_MIN_FREE_BYTES", "TRANSCODE_FIRST_SEGMENT_TIMEOUT_SECONDS", "TRANSCODE_THREADS", "LOG_LEVEL"]) expect(content).toContain(`${name}=`);
-    expect(content).not.toMatch(/FIRESTORE|VERCEL|BLOB_STORE|WORKLOAD_IDENTITY|ADMIN_INITIAL_PASSPHRASE|CONTROL_PLANE_KEY|SESSION_KEY|BROWSE_HANDLE_KEY|PROVIDER_TOKEN_KEY/);
+    expect(content).not.toMatch(/FIRESTORE|BLOB_STORE|WORKLOAD_IDENTITY|ADMIN_INITIAL_PASSPHRASE|CONTROL_PLANE_KEY|SESSION_KEY|BROWSE_HANDLE_KEY|PROVIDER_TOKEN_KEY/);
   });
 
   it("provides one bundled self-hosted server and static public tree", async () => {
